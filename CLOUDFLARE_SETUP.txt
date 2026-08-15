@@ -1,0 +1,41 @@
+O-RA STORE - CLOUDFLARE FRESH SETUP
+===================================
+
+LOCAL TEST FIRST
+1. npm install
+2. npm run dev
+3. Test http://localhost:3000
+4. Test http://localhost:3000/system
+
+CLOUDFLARE-RUNTIME LOCAL TEST (later, after Supabase is connected)
+5. npm run cf:dev
+
+LIVE DEPLOY (only after local tests pass)
+- GitHub: push this clean project
+- Supabase: create fresh project and run supabase_schema.sql once
+- Cloudflare: connect GitHub to a Workers project
+- Build command: npm run build
+- Deploy command: npx wrangler@latest deploy
+
+Required live values
+Build-time browser vars:
+- VITE_SUPABASE_URL
+- VITE_SUPABASE_PUBLISHABLE_KEY
+
+Worker secrets:
+- SUPABASE_SECRET_KEY
+- ORA_SUPER_ADMIN_PASSWORD
+- ORA_DEFAULT_STAFF_PASSWORD
+- STAFF_SESSION_SECRET
+- ABUSE_HASH_SALT
+
+Optional later:
+- GEMINI_API_KEY
+- GROQ_API_KEY
+- FARDAR_* values
+
+IMPORTANT
+- Do not place secret values in GitHub files or wrangler.jsonc.
+- /system SPA fallback is configured in wrangler.jsonc.
+- /api/* is routed to the Worker backend.
+- Live persistent data is stored in Supabase, not Cloudflare temporary filesystem.

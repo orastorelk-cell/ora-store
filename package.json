@@ -1,0 +1,48 @@
+{
+  "name": "ora-store",
+  "private": true,
+  "version": "14.9.1",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server.ts",
+    "build": "vite build",
+    "build:server": "esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build:local-prod": "npm run build && npm run build:server",
+    "start": "node dist/server.cjs",
+    "lint": "tsc --noEmit",
+    "cf:dev": "npm run build && npx wrangler@latest dev",
+    "cf:dry-run": "npm run build && npx wrangler@latest deploy --dry-run",
+    "cf:deploy": "npm run build && npx wrangler@latest deploy"
+  },
+  "dependencies": {
+    "@google/genai": "^2.4.0",
+    "@supabase/supabase-js": "^2.112.2",
+    "@tailwindcss/vite": "^4.1.14",
+    "@types/canvas-confetti": "^1.9.0",
+    "@vitejs/plugin-react": "^5.0.4",
+    "@zxing/browser": "^0.2.1",
+    "canvas-confetti": "^1.9.4",
+    "canvg": "^3.0.11",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
+    "lucide-react": "^0.546.0",
+    "motion": "^12.23.24",
+    "qrcode.react": "^4.2.0",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "recharts": "^3.10.1",
+    "vite": "^6.2.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.14.0",
+    "autoprefixer": "^10.4.21",
+    "esbuild": "^0.25.0",
+    "tailwindcss": "^4.1.14",
+    "tsx": "^4.21.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.3"
+  }
+}

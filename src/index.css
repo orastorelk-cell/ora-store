@@ -1,0 +1,14 @@
+@import "tailwindcss";
+
+/* O-RA storefront readability tune: desktop text was visually too small at 100% browser zoom.
+   Keep Admin/System untouched and preserve mobile density. */
+@media (min-width: 768px) {
+  .ora-storefront [class~="text-[9px]"],
+  .ora-storefront [class~="text-[10px]"] { font-size: 11.5px !important; }
+  .ora-storefront [class~="text-[11px]"] { font-size: 12.5px !important; }
+  .ora-storefront [class~="text-[12px]"],
+  .ora-storefront [class~="text-xs"] { font-size: 13.5px !important; }
+  .ora-storefront [class~="text-sm"] { font-size: 15px !important; }
+  .ora-storefront [class~="text-base"] { font-size: 16.5px !important; }
+  .ora-storefront [class~="text-lg"] { font-size: 19px !important; }
+}

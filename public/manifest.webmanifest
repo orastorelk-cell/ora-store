@@ -1,0 +1,14 @@
+{
+  "name": "O-RA Online Store",
+  "short_name": "O-RA",
+  "description": "O-RA Online Store shopping app",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ea580c",
+  "icons": [
+    {"src":"/icons/ora-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
+    {"src":"/icons/ora-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+  ]
+}
