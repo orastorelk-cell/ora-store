@@ -7,7 +7,7 @@ This is the clean O-RA Store project for the new deployment stack:
 - **Supabase** — persistent database/auth-support data and public media storage
 
 ## Clean-up already done
-
+ 
 - Removed the previous host-specific deployment files and temporary fixes.
 - Removed temporary migration/fix files, old Git history, `dist`, `node_modules`, and backup folders from the deliverable.
 - Added one Cloudflare Worker entry: `worker/index.ts`.
