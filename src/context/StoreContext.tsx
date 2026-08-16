@@ -619,9 +619,7 @@ useEffect(() => {
     }
     if (Array.isArray(state.categories)) setCategories(state.categories as Category[]);
     if (state.settings && typeof state.settings === 'object' && !Array.isArray(state.settings)) {
-      setSettings((prev) => includePrivateSettings
-        ? ({ ...initialSettings, ...state.settings } as StoreSettings)
-        : ({ ...prev, ...state.settings } as StoreSettings));
+      setSettings((prev) => ({ ...prev, ...state.settings } as StoreSettings));
     }
     sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, Number(state.version || 0));
   };
