@@ -5,7 +5,9 @@
   "compatibility_date": "2026-08-15",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    "CLOUDFLARE_WORKERS": "1"
+    "CLOUDFLARE_WORKERS": "1",
+    "VITE_SUPABASE_URL": "https://xoipahpyxatdafhqkzcr.supabase.co",
+    "VITE_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_ytRHrbqljOuGSAvWWlWIeg_5ZRXJWBL"
   },
   "assets": {
     "directory": "./dist",
@@ -16,3 +18,4 @@
     "enabled": true
   }
 }
+
