@@ -356,20 +356,15 @@ function repairOraBlankOrderRows(){
   SpreadsheetApp.getActive().toast("Blank/ghost order rows cleaned. Future new orders will recreate their own controls automatically.","O-RA",6);
   return total;
 }
-function oraDeleteOrder_(ss,orderNo,source,reason){
-  // Admin "Delete Order" must NOT remove the row from the Sheet. It marks the
-  // same Order Action used by Call Center cancellations (CANCEL ENTIRE ORDER)
-  // plus the Cancel Reason, so the row stays visible with its status.
+function oraDeleteOrder_(ss,orderNo,source){
   var sh=oraEnsureSheet_(ss,oraOrderSheetName_(source||oraSourceFromOrder_(orderNo)),ORA_ORDER_HEADERS),rows=oraOrderRows_(sh,orderNo);
   if(!rows.length)return 0;
-  var actionCol=oraHeaderCol_("Order Action"),reasonCol=oraHeaderCol_("Cancel Reason");
-  for(var i=0;i<rows.length;i++){
-    sh.getRange(rows[i],actionCol).setValue("CANCEL ENTIRE ORDER");
-    sh.getRange(rows[i],reasonCol).setValue(String(reason||"Deleted by Admin"));
-  }
-  oraRecalcOrder_(sh,orderNo);
-  SpreadsheetApp.flush();
-  return rows.length;
+  var firstRow=rows[0],removed=rows.length;
+  for(var i=rows.length-1;i>=0;i--) sh.deleteRow(rows[i]);
+  // deleteRow() can pull a previously prepared blank row upward. Clean only the
+  // small area around the deletion so the Web App response stays fast.
+  oraCleanBlankOrderRows_(sh,Math.max(2,firstRow),Math.min(sh.getMaxRows(),Math.max(2,firstRow)+removed+4));
+  return removed;
 }
 function oraClearDataRows_(sheet){
   var maxRows=sheet.getMaxRows();
@@ -1100,7 +1095,7 @@ function doPost(e){
     if(type==="catalog_sync")return oraJson_({status:"catalog_synced",count:oraSyncCatalog_(ss,Array.isArray(data.products)?data.products:[],data.pricing)});
     if(type==="operational_clear"){for(var i=0;i<ORA_ORDER_SHEETS.length;i++)oraClearDataRows_(oraEnsureSheet_(ss,ORA_ORDER_SHEETS[i],ORA_ORDER_HEADERS));SpreadsheetApp.flush();return oraJson_({status:"operational_cleared"});}
     if(type==="live_start_clear"){for(var j=0;j<ORA_ORDER_SHEETS.length;j++)oraClearDataRows_(oraEnsureSheet_(ss,ORA_ORDER_SHEETS[j],ORA_ORDER_HEADERS));oraClearDataRows_(oraEnsureSheet_(ss,"PRODUCT CATALOG",ORA_CATALOG_HEADERS));SpreadsheetApp.flush();return oraJson_({status:"live_start_cleared"});}
-    if(type==="order_delete"){var removed=oraDeleteOrder_(ss,data.order_number||data.order_id,data.order_source,data.reason);return oraJson_({status:"order_deleted",removed:removed});}
+    if(type==="order_delete"){var removed=oraDeleteOrder_(ss,data.order_number||data.order_id,data.order_source);return oraJson_({status:"order_deleted",removed:removed});}
     if(type==="order_check")return oraJson_(oraCheckOrder_(ss,data.order_number||data.order_id,data.order_source));
     if(type==="order_batch_sync")return oraJson_(oraSyncOrderBatch_(ss,Array.isArray(data.orders)?data.orders:[]));
     if(type==="ui_style_chunk")return oraJson_(oraHydrateUiChunkRequest_(ss,data));
@@ -1108,16 +1103,7 @@ function doPost(e){
     return oraJson_({status:"error",message:"Unknown payload_type: "+type});
   }catch(err){return oraJson_({status:"error",message:String(err&&err.message||err)});}
 }
-function doGet(e){
-  try{
-    if(e && e.parameter && String(e.parameter.action||"").toLowerCase()==="catalog"){
-      var ss=SpreadsheetApp.getActiveSpreadsheet(), sh=ss.getSheetByName("PRODUCT CATALOG");
-      var rows=sh ? oraCatalogRows_(ss) : [];
-      return oraJson_({status:"catalog",rows:rows,updated_at:new Date().toISOString()});
-    }
-    return oraJson_({status:"ok",service:"O-RA Google Sheet Sync V14.9 Final"});
-  }catch(err){return oraJson_({status:"error",message:String(err&&err.message||err)});}
-}`;
+function doGet(){return oraJson_({status:"ok",service:"O-RA Google Sheet Sync V14.9 Final"});}`;
 
 const proxyPost = async (webhookUrl:string,payload:any) => {
   const response=await fetch('/api/google-sheets/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({webhookUrl,payload})});
