@@ -463,16 +463,18 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Load shared settings from the server so ALL visitors see admin changes
 useEffect(() => {
-  fetch('/api/settings')
+  fetch('/api/storefront/state')
     .then((r) => r.json())
     .then((data) => {
-      if (data && data.settings && typeof data.settings === 'object') {
-        setSettings((prev) => ({ ...prev, ...data.settings }));
-        try { localStorage.setItem('ora_settings', JSON.stringify({ ...initialSettings, ...data.settings })); } catch (e) {}
+      const serverSettings = data && data.state && data.state.settings;
+      if (serverSettings && typeof serverSettings === 'object') {
+        setSettings((prev) => ({ ...prev, ...serverSettings }));
+        try { localStorage.setItem('ora_settings', JSON.stringify({ ...initialSettings, ...serverSettings })); } catch (e) {}
       }
     })
     .catch(() => {});
 }, []);
+
 
   // Admin User & Staff Accounts
   const [adminUser, setAdminUser] = useState<AdminUser | null>(() => {
