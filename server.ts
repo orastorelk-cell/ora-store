@@ -1738,7 +1738,7 @@ app.get('/api/courier/fardar/search', async (req, res) => {
     if (q.length < 2) return res.json({ ok: true, cities: [] });
     const cities = await getFardarCities();
     const matches = cities
-      .filter((c: any) => String(c.city_name || '').toLowerCase().includes(q))
+      .filter((c: any) => String(c.city_name || c.name || c.city || '').toLowerCase().includes(q))
       .slice(0, limit)
       .map((c: any) => ({ city: String(c.city_name || c.name || c.city || '').trim(), district: String(c.district || c.code || '').trim() }));
     return res.json({ ok: true, cities: matches });
