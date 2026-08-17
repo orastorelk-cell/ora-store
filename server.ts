@@ -1740,7 +1740,7 @@ app.get('/api/courier/fardar/search', async (req, res) => {
     const matches = cities
       .filter((c: any) => String(c.city_name || '').toLowerCase().includes(q))
       .slice(0, limit)
-      .map((c: any) => ({ city: String(c.city_name || '').trim(), district: String(c.district || '').trim() }));
+      .map((c: any) => ({ city: String(c.city_name || c.name || c.city || '').trim(), district: String(c.district || c.code || '').trim() }));
     return res.json({ ok: true, cities: matches });
   } catch (e: any) {
     return res.status(500).json({ error: e?.message || 'City search failed.' });
