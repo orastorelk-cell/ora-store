@@ -1881,14 +1881,14 @@ useEffect(() => {
     const first = parse(lines[0]);
     const lower = first.map(v => v.toLowerCase());
     const nameAliases = ['city','city name','city_name','name','town','destination'];
-    const codeAliases = ['city code','city_code','code','id'];
+    const codeAliases = ['district', 'dist', 'district name', 'city code','city_code','code','id'];
     let nameIdx = lower.findIndex(v => nameAliases.includes(v));
     let codeIdx = lower.findIndex(v => codeAliases.includes(v));
     const hasHeader = nameIdx >= 0 || codeIdx >= 0;
     if (nameIdx < 0) nameIdx = 0;
     const rows = (hasHeader ? lines.slice(1) : lines).map(parse).map(cols => ({
       name: String(cols[nameIdx] || '').trim(),
-      code: codeIdx >= 0 ? String(cols[codeIdx] || '').trim() : undefined,
+      district: codeIdx >= 0 ? String(cols[codeIdx] || '').trim() : (cols[1] || '').trim(),
     })).filter(r => r.name);
     const data = await sharedStaffRequest('/api/courier/fardar/cities/import', { method: 'POST', body: JSON.stringify({ cities: rows }) });
     setFardarCities(Array.isArray(data?.cities) ? data.cities : rows);
