@@ -8,7 +8,6 @@ export const oraProfitForBuyingPrice = (value: number) => {
   if (cost <= 0) return 0;
   if (cost < 250) return 200;
   if (cost < 500) return 350;
-  if (cost === 500) return 500;
   if (cost < 1000) return 700;
   if (cost < 2000) return 900;
   if (cost < 3000) return 1100;
