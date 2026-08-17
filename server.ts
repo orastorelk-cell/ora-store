@@ -1730,6 +1730,22 @@ app.post('/api/courier/fardar/cities/import', requireAdminSession, async (req, r
   const saved = await replaceFardarCities(rows);
   res.json({ ok: true, count: saved.length, cities: saved });
 });
+// Public city search for checkout autocomplete (type 3+ letters)
+app.get('/api/courier/fardar/search', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim().toLowerCase();
+    const limit = Math.min(30, Math.max(1, Number(req.query.limit || 20)));
+    if (q.length < 2) return res.json({ ok: true, cities: [] });
+    const cities = await getFardarCities();
+    const matches = cities
+      .filter((c: any) => String(c.city_name || '').toLowerCase().includes(q))
+      .slice(0, limit)
+      .map((c: any) => ({ city: String(c.city_name || '').trim(), district: String(c.district || '').trim() }));
+    return res.json({ ok: true, cities: matches });
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message || 'City search failed.' });
+  }
+});
 app.post('/api/courier/fardar/city-mappings', requireAdminSession, async (req, res) => {
   try { const mapping = await saveFardarMapping(req.body?.input_city, req.body?.fardar_city); res.json({ ok: true, mapping }); }
   catch (e:any) { res.status(400).json({ error: e?.message || 'Could not save city mapping.' }); }
