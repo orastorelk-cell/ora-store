@@ -60,7 +60,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
             src={primaryImage}
             alt={product.name_en}
             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-            referrerPolicy="no-referrer"
+            referrerPolicy="no-referrer"                     loading="lazy"
           />
         ) : (
           <div className="h-full w-full flex flex-col items-center justify-center text-gray-300">
