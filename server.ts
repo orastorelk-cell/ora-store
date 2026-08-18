@@ -1671,7 +1671,7 @@ const getFardarCities = async (): Promise<FardarCityRow[]> => {
   const sb = getSupabaseAdmin();
   if (sb) {
     try {
-      const { data, error } = await sb.from('fardar_cities').select('name,code,district').order('name');
+      const { data, error } = await sb.from('fardar_cities').select('name,code,district').order('name').limit(20000);
       if (error) throw error;
       return (data || []).map((r:any) => ({ name: String(r.name), code: r.code ? String(r.code) : undefined, district: r.district ? String(r.district) : undefined }));
     } catch (e) { console.warn('Fardar city list Supabase unavailable; using local store:', (e as any)?.message || e); }
