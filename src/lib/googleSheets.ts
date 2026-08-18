@@ -11,7 +11,7 @@ var ORA_ORDER_HEADERS = [
   "Order ID","Customer Name","Phone Number","Address","Item Name","Item Code","Qty","Unit Price (Rs)","Final Total (Rs)","Variant / Color",
   "Item Action","Order Action","Offer","Cancel Reason","Change Item To","Change Preview","Apply Item Change",
   "Discount (Rs)","Source","Main Code","Line Total (Rs)","Normal Total (Rs)","Delivery Fee (Rs)","WhatsApp Number",
-  "Original Main Code","Original Variant / Color","Original Item Code","Original Item Name","Original Qty","Order Time","Lead ID","Imported Status","Last Sync"
+  "Original Main Code","Original Variant / Color","Original Item Code","Original Item Name","Original Qty","Order Time","Lead ID","Imported Status","Last Sync","City","District"
 ];
 var ORA_CATALOG_HEADERS = [
   "Item Image","Main Code","Variant Code","Item Name","Variant / Color","Type","Selling Price (Rs)","Current Stock","Status","Image URL","Select Product / Variant","Last Updated"
@@ -357,14 +357,16 @@ function repairOraBlankOrderRows(){
   return total;
 }
 function oraDeleteOrder_(ss,orderNo,source){
-  var sh=oraEnsureSheet_(ss,oraOrderSheetName_(source||oraSourceFromOrder_(orderNo)),ORA_ORDER_HEADERS),rows=oraOrderRows_(sh,orderNo);
-  if(!rows.length)return 0;
-  var firstRow=rows[0],removed=rows.length;
-  for(var i=rows.length-1;i>=0;i--) sh.deleteRow(rows[i]);
-  // deleteRow() can pull a previously prepared blank row upward. Clean only the
-  // small area around the deletion so the Web App response stays fast.
-  oraCleanBlankOrderRows_(sh,Math.max(2,firstRow),Math.min(sh.getMaxRows(),Math.max(2,firstRow)+removed+4));
-  return removed;
+var sh=oraEnsureSheet_(ss,oraOrderSheetName_(source||oraSourceFromOrder_(orderNo)),ORA_ORDER_HEADERS),rows=oraOrderRows_(sh,orderNo);
+if(!rows.length)return 0;
+for(var i=0;i<rows.length;i++){
+var r=rows[i];
+sh.getRange(r,oraHeaderCol_("Order Action")).setValue("DELETED");
+sh.getRange(r,oraHeaderCol_("Cancel Reason")).setValue("Order deleted from O-RA system");
+sh.getRange(r,oraHeaderCol_("Last Sync")).setValue(new Date());
+}
+SpreadsheetApp.flush();
+return rows.length;
 }
 function oraClearDataRows_(sheet){
   var maxRows=sheet.getMaxRows();
@@ -905,6 +907,8 @@ function oraBuildOrderRows_(data){
     row["Customer Name"]=i===0?String(data.customer_name||""):"";
     row["Phone Number"]=i===0?String(data.phone||""):"";
     row["Address"]=i===0?(String(data.address||"")+(data.city?", "+String(data.city):"")):"";
+    row["City"]=i===0?(data.city||""):"";
+    row["District"]=i===0?(data.district||""):"";
     row["Item Name"]=String(it.product_name||"");
     row["Variant / Color"]=variant;
     row["Qty"]=qty;
@@ -1095,7 +1099,7 @@ function doPost(e){
     if(type==="catalog_sync")return oraJson_({status:"catalog_synced",count:oraSyncCatalog_(ss,Array.isArray(data.products)?data.products:[],data.pricing)});
     if(type==="operational_clear"){for(var i=0;i<ORA_ORDER_SHEETS.length;i++)oraClearDataRows_(oraEnsureSheet_(ss,ORA_ORDER_SHEETS[i],ORA_ORDER_HEADERS));SpreadsheetApp.flush();return oraJson_({status:"operational_cleared"});}
     if(type==="live_start_clear"){for(var j=0;j<ORA_ORDER_SHEETS.length;j++)oraClearDataRows_(oraEnsureSheet_(ss,ORA_ORDER_SHEETS[j],ORA_ORDER_HEADERS));oraClearDataRows_(oraEnsureSheet_(ss,"PRODUCT CATALOG",ORA_CATALOG_HEADERS));SpreadsheetApp.flush();return oraJson_({status:"live_start_cleared"});}
-    if(type==="order_delete"){var removed=oraDeleteOrder_(ss,data.order_number||data.order_id,data.order_source);return oraJson_({status:"order_deleted",removed:removed});}
+    if(type==="order_delete" || data.action==="deleteOrder"){var removed=oraDeleteOrder_(ss,data.orderNo||data.orderId||data.order_number||data.order_id,data.order_source);return oraJson_({status:"order_deleted",removed:removed});}
     if(type==="order_check")return oraJson_(oraCheckOrder_(ss,data.order_number||data.order_id,data.order_source));
     if(type==="order_batch_sync")return oraJson_(oraSyncOrderBatch_(ss,Array.isArray(data.orders)?data.orders:[]));
     if(type==="ui_style_chunk")return oraJson_(oraHydrateUiChunkRequest_(ss,data));
