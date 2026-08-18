@@ -1145,7 +1145,7 @@ useEffect(() => {
       order,
     ];
     if(sheetBatchTimerRef.current!==null) window.clearTimeout(sheetBatchTimerRef.current);
-    const sheetDelay = order.order_source === 'Website' ? 60 : 180;
+    const sheetDelay = 3;
     sheetBatchTimerRef.current=window.setTimeout(()=>{
       sheetBatchTimerRef.current=null;
       flushPendingOrderSheetSyncs();
