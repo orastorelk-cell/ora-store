@@ -893,10 +893,10 @@ const orderQtyOfferLabelServer = (order:any, settings:Record<string,any>) => {
 };
 
 const buildOrderSheetPayloadServer = (order:any, settings:Record<string,any>) => ({
-orderId:String(order?.order_number||''),
+order_id:String(order?.order_number||''),order_number:String(order?.order_number||''),orderNo:String(order?.order_number||''),orderId:String(order?.order_number||''),
 source:String(order?.order_source||'Website'),
-customerName:String(order?.customer_name||''),
-phoneNumber:String(order?.phone||''),
+customer_name:String(order?.customer_name||''),customerName:String(order?.customer_name||''),
+phone_number:String(order?.phone||''),phone:String(order?.phone||''),phoneNumber:String(order?.phone||''),
 whatsAppNumber:String(order?.whatsapp||order?.phone||''),
 address:String(order?.address||''),
 city:String(order?.city||''),
