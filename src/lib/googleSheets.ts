@@ -892,24 +892,25 @@ function oraProcessPendingUiWorker(){
   if(needsMore)oraEnsureUiWorkerTrigger_();
 }
 function oraBuildOrderRows_(data){
-  var orderNo=String(data.order_id||data.order_number||"").trim();
+  var orderNo=String(data.orderId||data.order_id||data.order_number||"").trim();
   if(!orderNo)throw new Error("Order ID missing");
-  var source=String(data.order_source||"Website");
+  var source=String(data.source||data.order_source||"Website");
   var items=Array.isArray(data.items)?data.items:[];
   if(!items.length)throw new Error("No order items for "+orderNo);
-  var normal=Number(data.subtotal||0),discount=Number(data.special_offer_discount||0),delivery=Number(data.delivery_fee||0),
-      finalTotal=Number(data.total_amount||0),offer=String(data.offer_label||""),out=[];
+  var normal=Number(data.normalTotal??data.subtotal??0),discount=Number(data.discount??data.special_offer_discount??0),delivery=Number(data.deliveryFee??data.delivery_fee??0),
+      finalTotal=Number(data.finalTotal??data.total_amount??0),offer=String(data.offer??data.offer_label??""),out=[];
   for(var i=0;i<items.length;i++){
-    var it=items[i]||{},qty=Math.max(1,Number(it.quantity||1)),unit=Number(it.unit_price||0),
-        line=Math.round(qty*unit*100)/100,main=String(it.main_sku||it.sku||""),
-        variant=String(it.variant_name||""),sku=String(it.sku||""),row={};
+    var it=items[i]||{},qty=Math.max(1,Number(it.qty??it.quantity??1)),unit=Number(it.unitPrice??it.unit_price??0),
+        line=Math.round(Number((it.lineTotal??(qty*unit))||0)*100)/100,main=String(it.mainCode??it.main_sku??it.sku??""),
+        variant=String(it.variant??it.variant_name??""),sku=String(it.itemCode??it.sku??""),
+        itemName=String(it.itemName??it.product_name??""),row={};
     row["Order ID"]=orderNo;
-    row["Customer Name"]=i===0?String(data.customer_name||""):"";
-    row["Phone Number"]=i===0?String(data.phone||""):"";
-    row["Address"]=i===0?(String(data.address||"")+(data.city?", "+String(data.city):"")):"";
-    row["City"]=i===0?(data.city||""):"";
-    row["District"]=i===0?(data.district||""):"";
-    row["Item Name"]=String(it.product_name||"");
+    row["Customer Name"]=i===0?String(data.customerName??data.customer_name??""):"";
+    row["Phone Number"]=i===0?String(data.phoneNumber??data.phone??""):"";
+    row["Address"]=i===0?String(data.address??""):"";
+    row["City"]=i===0?String(data.city??""):"";
+    row["District"]=i===0?String(data.district??""):"";
+    row["Item Name"]=itemName;
     row["Variant / Color"]=variant;
     row["Qty"]=qty;
     row["Unit Price (Rs)"]=unit;
@@ -928,15 +929,15 @@ function oraBuildOrderRows_(data){
     row["Line Total (Rs)"]=line;
     row["Normal Total (Rs)"]=normal;
     row["Delivery Fee (Rs)"]=delivery;
-    row["WhatsApp Number"]=String(data.whatsapp||data.phone||"");
+    row["WhatsApp Number"]=String(data.whatsAppNumber??data.whatsapp??data.phoneNumber??data.phone??"");
     row["Original Main Code"]=main;
     row["Original Variant / Color"]=variant;
     row["Original Item Code"]=sku;
-    row["Original Item Name"]=String(it.product_name||"");
+    row["Original Item Name"]=itemName;
     row["Original Qty"]=qty;
-    row["Order Time"]=String(data.created_at||"");
-    row["Lead ID"]=String(data.platform_lead_id||"");
-    row["Imported Status"]=String(data.call_center_status||"Pending");
+    row["Order Time"]=String(data.orderTime??data.created_at??"");
+    row["Lead ID"]=String(data.leadId??data.platform_lead_id??"");
+    row["Imported Status"]=String(data.importedStatus??data.call_center_status??"Pending");
     row["Last Sync"]=new Date();
     out.push(ORA_ORDER_HEADERS.map(function(h){return typeof row[h]==="undefined"?"":row[h];}));
   }
@@ -1153,29 +1154,30 @@ const orderOfferLabel = (order:Order,settings?:StoreSettings) => {
 
 
 const buildOrderSyncPayload = (order:Order,settings?:StoreSettings) => ({
-  order_id:order.order_number,
-  order_number:order.order_number,
-  order_source:order.order_source,
-  customer_name:order.customer_name,
-  phone:order.phone,
-  whatsapp:order.whatsapp,
+  orderId:order.order_number,
+  source:order.order_source,
+  customerName:order.customer_name,
+  phoneNumber:order.phone,
+  whatsAppNumber:order.whatsapp,
   address:order.address,
   city:order.city,
-  created_at:order.created_at,
-  subtotal:Number(order.subtotal||0),
-  total_amount:Number(order.total_amount||0),
-  delivery_fee:Number(order.delivery_fee||0),
-  special_offer_discount:Number(order.special_offer_discount||0),
-  offer_label:orderOfferLabel(order,settings),
-  platform_lead_id:order.platform_lead_id||'',
-  call_center_status:order.call_center_status||'Pending',
+  district:order.district,
+  orderTime:order.created_at,
+  leadId:order.platform_lead_id||'',
+  importedStatus:order.call_center_status||'Pending',
+  offer:orderOfferLabel(order,settings),
+  discount:Number(order.special_offer_discount||0),
+  deliveryFee:Number(order.delivery_fee||0),
+  normalTotal:Number(order.subtotal||0),
+  finalTotal:Number(order.total_amount||0),
   items:(order.items||[]).map(it=>({
-    main_sku:it.main_sku||it.sku,
-    variant_name:it.variant_name||'',
-    sku:it.sku,
-    product_name:it.product_name,
-    quantity:it.quantity,
-    unit_price:it.unit_price,
+    itemName:it.product_name,
+    itemCode:it.sku,
+    qty:it.quantity,
+    unitPrice:it.unit_price,
+    lineTotal:Math.round(Number(it.quantity||1)*Number(it.unit_price||0)*100)/100,
+    variant:it.variant_name||'',
+    mainCode:it.main_sku||it.sku,
   })),
 });
 
