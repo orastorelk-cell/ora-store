@@ -1399,6 +1399,12 @@ app.post('/api/orders', async (req,res)=>{
     // Durable order FIRST. Customer success is never shown before this checkpoint.
     await saveOrderSnapshot(order);
 
+    try {
+      if (order && order.order_source !== 'Manual Admin') {
+        syncOrdersToGoogleSheetsServer([order]).catch(() => {});
+      }
+    } catch { /* non-blocking */ }
+
     const shouldSync=!deferSheetSync && isOrderEligibleForSheetServer(order);
 
     // Test-order buttons intentionally wait for Sheet confirmation so their success
