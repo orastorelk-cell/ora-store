@@ -528,12 +528,90 @@ export const AdminDashboard: React.FC = () => {
     whatsapp: '',
     address: '',
     city: '',
+    district: '',
     selected_product_id: products[0]?.id || '',
     selected_variant_id: '',
     quantity: 1,
     order_source: 'Facebook Ads' as OrderSource,
     payment_method: 'COD' as PaymentMethod,
   });
+
+  type ManualCitySuggestion = {
+    city: string;
+    district: string;
+  };
+
+  const [manualCitySuggestions, setManualCitySuggestions] = useState<ManualCitySuggestion[]>([]);
+  const manualCitySearchTimerRef = useRef<number | null>(null);
+
+  const handleManualCityChange = (value: string) => {
+    setManualOrderForm((prev) => ({
+      ...prev,
+      city: value,
+      district: '',
+    }));
+    setManualCitySuggestions([]);
+
+    if (manualCitySearchTimerRef.current !== null) {
+      window.clearTimeout(manualCitySearchTimerRef.current);
+      manualCitySearchTimerRef.current = null;
+    }
+
+    const query = value.trim();
+    if (query.length < 3) return;
+
+    manualCitySearchTimerRef.current = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/courier/fardar/search?q=${encodeURIComponent(query)}`);
+        const data: unknown = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          setManualCitySuggestions([]);
+          return;
+        }
+
+        const rawSuggestions =
+          Array.isArray(data)
+            ? data
+            : data && typeof data === 'object' && Array.isArray((data as { suggestions?: unknown }).suggestions)
+              ? (data as { suggestions: unknown[] }).suggestions
+              : data && typeof data === 'object' && Array.isArray((data as { results?: unknown }).results)
+                ? (data as { results: unknown[] }).results
+                : [];
+
+        const suggestions: ManualCitySuggestion[] = rawSuggestions
+          .map((item) => {
+            if (!item || typeof item !== 'object') return null;
+            const row = item as { city?: unknown; name?: unknown; district?: unknown };
+            const city = String(row.city ?? row.name ?? '').trim();
+            const district = String(row.district ?? '').trim();
+            return city ? { city, district } : null;
+          })
+          .filter((item): item is ManualCitySuggestion => item !== null);
+
+        setManualCitySuggestions(suggestions);
+      } catch {
+        setManualCitySuggestions([]);
+      }
+    }, 300);
+  };
+
+  const pickManualCity = (suggestion: ManualCitySuggestion) => {
+    setManualOrderForm((prev) => ({
+      ...prev,
+      city: suggestion.city,
+      district: suggestion.district,
+    }));
+    setManualCitySuggestions([]);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (manualCitySearchTimerRef.current !== null) {
+        window.clearTimeout(manualCitySearchTimerRef.current);
+      }
+    };
+  }, []);
 
   // Bulk CSV Order Import State
   const [isBulkOrderOpen, setIsBulkOrderOpen] = useState(false);
@@ -1612,6 +1690,7 @@ export const AdminDashboard: React.FC = () => {
         whatsapp: manualOrderForm.whatsapp || manualOrderForm.phone,
         address: manualOrderForm.address,
         city: manualOrderForm.city,
+        district: manualOrderForm.district || '',
         payment_method: manualOrderForm.payment_method,
         order_source: manualOrderForm.order_source,
       });
@@ -2079,6 +2158,7 @@ export const AdminDashboard: React.FC = () => {
                 whatsapp: '',
                 address: '',
                 city: '',
+                district: '',
                 selected_product_id: products[0]?.id || '',
                 quantity: 1,
                 order_source: 'Facebook Ads',
@@ -5829,11 +5909,38 @@ export const AdminDashboard: React.FC = () => {
 
                 <div>
                   <label className="block text-neutral-300 mb-1">City *</label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      required
+                      value={manualOrderForm.city}
+                      onChange={(e) => handleManualCityChange(e.target.value)}
+                      className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white"
+                    />
+                    {manualCitySuggestions.length > 0 && (
+                      <div className="absolute z-50 left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded-xl border border-neutral-800 bg-neutral-950 shadow-xl">
+                        {manualCitySuggestions.map((suggestion, index) => (
+                          <button
+                            key={`${suggestion.city}-${suggestion.district}-${index}`}
+                            type="button"
+                            onClick={() => pickManualCity(suggestion)}
+                            className="w-full px-3 py-2 text-left text-white hover:bg-neutral-800 border-b border-neutral-800 last:border-b-0"
+                          >
+                            {suggestion.city} • {suggestion.district}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-neutral-300 mb-1">District *</label>
                   <input
                     type="text"
                     required
-                    value={manualOrderForm.city}
-                    onChange={(e) => setManualOrderForm({ ...manualOrderForm, city: e.target.value })}
+                    value={manualOrderForm.district}
+                    onChange={(e) => setManualOrderForm({ ...manualOrderForm, district: e.target.value })}
                     className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white"
                   />
                 </div>
