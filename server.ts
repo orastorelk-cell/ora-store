@@ -842,7 +842,18 @@ app.put('/api/admin/storefront/state', requireAdminSession, async (req,res) => {
     const settings = req.body?.settings && typeof req.body.settings === 'object' && !Array.isArray(req.body.settings) ? req.body.settings : null;
     if (!products || !categories || !settings) return res.status(400).json({ error:'Products, categories and settings are required.' });
     const state = await writeSharedStorefrontState({ products, categories, settings });
-    return res.json({ ok:true, version:state.version, updated_at:state.updated_at });
+    try {
+  const webhook = String(settings?.google_sheet_webhook_url || '').trim();
+  if (webhook) {
+    postAppsScriptFastServer(webhook, {
+      payload_type: 'catalog_sync',
+      products,
+      pricing: Object.fromEntries((Array.isArray(products) ? products : []).map((p:any) => [String(p?.sku || ''), Number(p?.selling_price || 0)])),
+    }).catch(() => {});
+  }
+} catch { /* non-blocking */ }
+return res.json({ ok:true, version:state.version, updated_at:state.updated_at });
+
   } catch (e:any) {
     return res.status(500).json({ error:e?.message || 'Shared storefront state could not be saved.' });
   }
@@ -890,6 +901,7 @@ const buildOrderSheetPayloadServer = (order:any, settings:Record<string,any>) =>
   whatsapp:String(order?.whatsapp||order?.phone||''),
   address:String(order?.address||''),
   city:String(order?.city||''),
+  district:String(order?.district||''),
   created_at:String(order?.created_at||new Date().toISOString()),
   subtotal:Number(order?.subtotal||0),
   total_amount:Number(order?.total_amount||0),
