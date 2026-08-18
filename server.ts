@@ -1736,7 +1736,7 @@ app.get('/api/courier/fardar/search', async (req, res) => {
     const q = String(req.query.q || '').trim().toLowerCase();
     const limit = Math.min(30, Math.max(1, Number(req.query.limit || 20)));
     if (q.length < 2) return res.json({ ok: true, cities: [] });
-    const cities = await getFardarCities();
+    const cities = await (async () => { const sb = getSupabaseAdmin(); if (!sb) return []; const { data, error } = await sb.from('fardar_cities').select('name,district').ilike('name', '%' + q + '%').order('name').limit(limit); if (error) throw new Error('SEARCH_FAIL: ' + error.message); return (data || []).map((r: any) => ({ city: String(r.name || '').trim(), district: String(r.district || '').trim() })); })();
     const matches = cities
       .filter((c: any) => String(c.city_name || c.name || c.city || '').toLowerCase().includes(q))
       .slice(0, limit)
