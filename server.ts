@@ -1679,7 +1679,7 @@ const getFardarCities = async (): Promise<FardarCityRow[]> => {
   return readJsonArray(fardarCitiesFile) as FardarCityRow[];
 };
 const replaceFardarCities = async (rows: FardarCityRow[]) => {
-  const clean = Array.from(new Map(rows.map(r => [normalizeCityKey(r.name), { name: String(r.name || '').trim(), code: String(r.code || '').trim() || undefined }])).values()).filter(r => r.name);
+  const clean = Array.from(new Map(rows.map(r => [normalizeCityKey(r.name), { name: String(r.name || '').trim(), code: String(r.code || '').trim() || undefined, district: String(r.district || '').trim() || undefined }])).values()).filter(r => r.name);
   const sb = getSupabaseAdmin();
   if (sb) {
     try {
@@ -1736,7 +1736,7 @@ app.get('/api/courier/fardar/search', async (req, res) => {
     const q = String(req.query.q || '').trim().toLowerCase();
     const limit = Math.min(30, Math.max(1, Number(req.query.limit || 20)));
     if (q.length < 2) return res.json({ ok: true, cities: [] });
-    const cities = await (async () => { const sb = getSupabaseAdmin(); if (!sb) return []; const { data, error } = await sb.from('fardar_cities').select('name,district').limit(5); if (error) throw new Error('FARDAR_QUERY: ' + error.message); return (data || []).map((r: any) => ({ name: String(r.name), district: String(r.district || '') })); })();
+    const cities = await getFardarCities();
     const matches = cities
       .filter((c: any) => String(c.city_name || c.name || c.city || '').toLowerCase().includes(q))
       .slice(0, limit)
