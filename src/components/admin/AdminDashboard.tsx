@@ -573,8 +573,8 @@ export const AdminDashboard: React.FC = () => {
         const rawSuggestions =
           Array.isArray(data)
             ? data
-            : data && typeof data === 'object' && Array.isArray((data as { suggestions?: unknown }).suggestions)
-              ? (data as { suggestions: unknown[] }).suggestions
+            : data && typeof data === 'object' && Array.isArray((data as { cities?: unknown }).cities)
+              ? (data as { cities: unknown[] }).cities
               : data && typeof data === 'object' && Array.isArray((data as { results?: unknown }).results)
                 ? (data as { results: unknown[] }).results
                 : [];
