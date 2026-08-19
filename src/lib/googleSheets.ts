@@ -17,7 +17,7 @@ var ORA_CATALOG_HEADERS = [
   "Item Image","Main Code","Variant Code","Item Name","Variant / Color","Type","Selling Price (Rs)","Current Stock","Status","Image URL","Select Product / Variant","Last Updated"
 ];
 var ORA_ORDER_SHEETS = ["CALL CENTER ORDERS","FACEBOOK ORDERS","TIKTOK ORDERS"];
-var ORA_EDITABLE_HEADERS = ["Variant / Color","Qty","Item Action","Change Item To","Apply Item Change","Order Action","Cancel Reason"];
+var ORA_EDITABLE_HEADERS = ["Variant / Color","Qty","Item Action","Change Item To","Apply Item Change","Order Action","Cancel Reason","City"];
 var ORA_UI_TEMPLATE_SHEET = "_ORA UI TEMPLATE";
 var ORA_UI_QUEUE_KEY = "ORA_PENDING_UI_QUEUE_V127";
 var ORA_UI_WORKER = "oraProcessPendingUiWorker";
@@ -78,6 +78,7 @@ function oraEnsureSheet_(ss, name, headers) {
 function oraEnsureCoreSheets_(ss) {
   for (var i=0;i<ORA_ORDER_SHEETS.length;i++) oraEnsureSheet_(ss, ORA_ORDER_SHEETS[i], ORA_ORDER_HEADERS);
   oraEnsureSheet_(ss, "PRODUCT CATALOG", ORA_CATALOG_HEADERS);
+  oraEnsureCityTab_(ss);
 }
 function oraFormatOrderSheet_(sheet) {
   sheet.setFrozenRows(1);
@@ -199,6 +200,8 @@ function oraInstallOwnerEditTrigger_(ss){
 }
 function setupOraFreshSheet() {
   var ss=SpreadsheetApp.getActiveSpreadsheet();
+  // Preserve the user-maintained CITY LIST while rebuilding O-RA sheets.
+  oraEnsureCityTab_(ss);
   // CLEAN RESET: delete only O-RA generated tabs and recreate them from scratch.
   // This permanently removes old dropdowns/validations/formats that can survive migrations.
   var tempName="_ORA_SETUP_TEMP_";
@@ -232,6 +235,7 @@ function onOpen() {
     .addSeparator()
     .addItem("Open Easy Guide","oraOpenGuide")
     .addItem("Search / Change Product","oraOpenProductSearchSidebar")
+    .addItem("Rebuild City Dropdowns","oraRebuildCityDropdowns")
     .addItem("Reapply Sheet Protection","reapplyOraProtections")
     .addItem("Repair Action Dropdowns","repairOraActionDropdowns")
     .addItem("Apply Colored Chips + Black Text","captureOraCustomChipColors")
@@ -263,7 +267,7 @@ function oraOpenProductSearchSidebar(){
     '<input id="q" autofocus placeholder="Type S0004, headphones, purple..." oninput="queueSearch()">'+
     '<div id="msg"></div><div id="results"></div><script>'+
     'var timer=null;var sheetName='+JSON.stringify(sheetName)+';var row='+row+';'+
-    'function esc(v){return String(v||"").replace(/[&<>\"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\\\"":"&quot;"}[c]||c;});}'+
+    'function esc(v){return String(v||"").replace(/[&<>\\"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\\\\\\"":"&quot;"}[c]||c;});}'+
     'function queueSearch(){clearTimeout(timer);timer=setTimeout(runSearch,180);}'+
     'function runSearch(){var q=document.getElementById("q").value;document.getElementById("msg").textContent="Searching...";google.script.run.withSuccessHandler(render).withFailureHandler(fail).oraSearchProductsForSidebar(q);}'+
     'function render(rows){var box=document.getElementById("results");box.innerHTML="";document.getElementById("msg").textContent=rows.length?rows.length+" result(s)":"No matching product";rows.forEach(function(r){var b=document.createElement("button");b.className="item";b.innerHTML="<div class=code>"+esc(r.code)+"</div><div class=name>"+esc(r.name)+(r.variant?" - "+esc(r.variant):"")+"</div><div class=meta>Rs. "+esc(r.price)+" • "+esc(r.type)+"</div>";b.onclick=function(){choose(r.label);};box.appendChild(b);});}'+
@@ -356,17 +360,46 @@ function repairOraBlankOrderRows(){
   SpreadsheetApp.getActive().toast("Blank/ghost order rows cleaned. Future new orders will recreate their own controls automatically.","O-RA",6);
   return total;
 }
-function oraDeleteOrder_(ss,orderNo,source){
-var sh=oraEnsureSheet_(ss,oraOrderSheetName_(source||oraSourceFromOrder_(orderNo)),ORA_ORDER_HEADERS),rows=oraOrderRows_(sh,orderNo);
-if(!rows.length)return 0;
-for(var i=0;i<rows.length;i++){
-var r=rows[i];
-sh.getRange(r,oraHeaderCol_("Order Action")).setValue("DELETED");
-sh.getRange(r,oraHeaderCol_("Cancel Reason")).setValue("Order deleted from O-RA system");
-sh.getRange(r,oraHeaderCol_("Last Sync")).setValue(new Date());
+function oraEnsureDeletedSheet_(ss){
+  var sh=ss.getSheetByName(ORA_DELETED_SHEET);
+  if(!sh)sh=ss.insertSheet(ORA_DELETED_SHEET);
+  var headers=ORA_ORDER_HEADERS.concat(["Deleted At","Delete Reason","Deleted Source"]);
+  sh.getRange(1,1,1,headers.length).setValues([headers]);
+  sh.getRange(1,1,1,headers.length).setFontWeight("bold").setBackground("#111827").setFontColor("#ffffff");
+  sh.setFrozenRows(1);
+  return sh;
 }
-SpreadsheetApp.flush();
-return rows.length;
+
+function oraDeleteOrder_(ss,orderNo,source,reason){
+  var id=String(orderNo||"").trim();
+  var src=String(source||oraSourceFromOrder_(id)||"").trim();
+  var sh=oraEnsureSheet_(ss,oraOrderSheetName_(src),ORA_ORDER_HEADERS);
+  var rows=oraOrderRows_(sh,id);
+  if(!rows.length)return 0;
+
+  // Test orders are disposable and MUST NOT enter the Deleted Orders archive.
+  var isTest=/\\btest\\b/i.test(src)||/\\btest\\b/i.test(id);
+  if(isTest){
+    for(var ti=rows.length-1;ti>=0;ti--)sh.deleteRow(rows[ti]);
+    SpreadsheetApp.flush();
+    return rows.length;
+  }
+
+  var archive=oraEnsureDeletedSheet_(ss);
+  var now=new Date();
+  var archiveRows=[];
+  for(var i=0;i<rows.length;i++){
+    var r=rows[i];
+    var vals=sh.getRange(r,1,1,ORA_ORDER_HEADERS.length).getValues()[0];
+    archiveRows.push(vals.concat([now,String(reason||"Order deleted from O-RA system"),src]));
+  }
+  if(archiveRows.length){
+    var start=archive.getLastRow()+1;
+    archive.getRange(start,1,archiveRows.length,archiveRows[0].length).setValues(archiveRows);
+  }
+  for(var j=rows.length-1;j>=0;j--)sh.deleteRow(rows[j]);
+  SpreadsheetApp.flush();
+  return rows.length;
 }
 function oraClearDataRows_(sheet){
   var maxRows=sheet.getMaxRows();
@@ -663,13 +696,13 @@ function oraRefreshVariant_(ss,sheet,row,oldValue){
   oraSetVariantValidation_(ss,sheet,row);
   oraRecalcOrder_(sheet,sheet.getRange(row,oraHeaderCol_("Order ID")).getDisplayValue());
 }
-function oraRestoreLockedEdit_(e){if(!e||!e.range||e.range.getNumRows()!==1||e.range.getNumColumns()!==1)return false;var header=String(e.range.getSheet().getRange(1,e.range.getColumn()).getDisplayValue()||"");if(ORA_EDITABLE_HEADERS.indexOf(header)>=0)return false;if(typeof e.oldValue!=="undefined")e.range.setValue(e.oldValue);else e.range.clearContent();SpreadsheetApp.getActive().toast("Protected AUTO field. Edit only Qty, Color, Item Action, Change Item To, Apply Item Change, Order Action or Cancel Reason.","O-RA Safe Edit",5);return true;}
+function oraRestoreLockedEdit_(e){if(!e||!e.range||e.range.getNumRows()!==1||e.range.getNumColumns()!==1)return false;var header=String(e.range.getSheet().getRange(1,e.range.getColumn()).getDisplayValue()||"");if(ORA_EDITABLE_HEADERS.indexOf(header)>=0)return false;if(typeof e.oldValue!=="undefined")e.range.setValue(e.oldValue);else e.range.clearContent();SpreadsheetApp.getActive().toast("Protected AUTO field. Edit only City, Qty, Color, Item Action, Change Item To, Apply Item Change, Order Action or Cancel Reason.","O-RA Safe Edit",5);return true;}
 function oraValidateQtyEdit_(e){var n=Number(e&&e.value);if(Number.isFinite(n)&&n>=1&&n<=99&&Math.floor(n)===n)return true;if(typeof e.oldValue!=="undefined"&&String(e.oldValue)!=="")e.range.setValue(e.oldValue);else e.range.setValue(1);SpreadsheetApp.getActive().toast("Qty must be a whole number from 1 to 99.","O-RA Qty",4);return false;}
 function oraOwnerEditTrigger(e){
   try{
     if(!e||!e.range)return;var sheet=e.range.getSheet();if(ORA_ORDER_SHEETS.indexOf(sheet.getName())<0)return;var row=e.range.getRow();if(row<2)return;if(oraRestoreLockedEdit_(e))return;
     var ss=sheet.getParent(),header=String(sheet.getRange(1,e.range.getColumn()).getDisplayValue()||""),orderNo=sheet.getRange(row,oraHeaderCol_("Order ID")).getDisplayValue();
-    if(header==="Variant / Color")oraRefreshVariant_(ss,sheet,row,e.oldValue);
+    if(header==="City")oraApplyCityDistrictFromValue_(sheet,row,e.value);if(header==="Variant / Color")oraRefreshVariant_(ss,sheet,row,e.oldValue);
     if(header==="Change Item To")oraPreviewProductChange_(ss,sheet,row);
     if(header==="Apply Item Change"&&String(e.value||"").toUpperCase()==="TRUE")oraApplyProductChange_(ss,sheet,row);
     if(header==="Order Action"){var rows=oraOrderRows_(sheet,orderNo),vals=[];for(var i=0;i<rows.length;i++)vals.push([String(e.value||"PENDING")]);for(var j=0;j<rows.length;j++){var oc=sheet.getRange(rows[j],oraHeaderCol_("Order Action"));oc.setValue(vals[j][0]);oraStyleActionCell_(oc);}}
@@ -736,6 +769,9 @@ function oraApplyActionValidationRange_(ss,sheet,start,count){
 
 function oraApplyFastBatchControls_(ss,sheet,start,count){
   if(count<=0)return;
+
+  // City/District selector is available on CALL CENTER, FACEBOOK and TIKTOK.
+  oraApplyCityDropdown_(ss,sheet,start,count);
 
   // Qty validation in one range operation.
   var qtyRule=SpreadsheetApp.newDataValidation().requireNumberBetween(1,99).setAllowInvalid(false)
@@ -833,6 +869,8 @@ function oraQueueUiWork_(ss,sheetName,start,count){
 }
 function oraApplyUiChunk_(ss,sheet,start,count){
   if(count<=0)return 0;
+
+  oraApplyCityDropdown_(ss,sheet,start,count);
   var ids=sheet.getRange(start,oraHeaderCol_("Order ID"),count,1).getDisplayValues();
   var catalogRows=oraCatalogRows_(ss),groups={},order=[];
   var cat=oraEnsureSheet_(ss,"PRODUCT CATALOG",ORA_CATALOG_HEADERS),last=cat.getLastRow();
@@ -891,10 +929,258 @@ function oraProcessPendingUiWorker(){
   }
   if(needsMore)oraEnsureUiWorkerTrigger_();
 }
+
+// ============================================================
+// CITY / DISTRICT LOOKUP - ALL ORDER SHEETS
+// - CITY LIST: A=City, B=District, C=City • District (auto)
+// - 3-character searchable dropdown on CALL CENTER / FACEBOOK / TIKTOK
+// - Selecting a City • District value writes City + District to that row
+// - Duplicate city names with different districts are preserved
+// ============================================================
+
+var ORA_CITY_TAB = "CITY LIST";
+
+function oraEnsureCityTab_(ss){
+  var sh = ss.getSheetByName(ORA_CITY_TAB);
+  if(!sh) sh = ss.insertSheet(ORA_CITY_TAB);
+
+  sh.getRange(1,1,1,3).setValues([["City","District","City • District (auto)"]]);
+  sh.getRange(1,1,1,3)
+    .setFontWeight("bold")
+    .setBackground("#111827")
+    .setFontColor("#ffffff");
+
+  sh.setColumnWidth(1,170);
+  sh.setColumnWidth(2,150);
+  sh.setColumnWidth(3,280);
+
+  oraEnsureCombined_(ss);
+  return sh;
+}
+
+function oraEnsureCombined_(ss){
+  var sh = ss.getSheetByName(ORA_CITY_TAB);
+  if(!sh) return;
+
+  var last = sh.getLastRow();
+  if(last < 2) return;
+
+  var vals = sh.getRange(2,1,last-1,2).getDisplayValues();
+  var out = [];
+
+  for(var i=0;i<vals.length;i++){
+    var city = String(vals[i][0] || "").trim();
+    var district = String(vals[i][1] || "").trim();
+
+    out.push([
+      city
+        ? city + (district ? " • " + district : "")
+        : ""
+    ]);
+  }
+
+  sh.getRange(2,3,Math.max(1,sh.getMaxRows()-1),1).clearContent();
+
+  if(out.length){
+    sh.getRange(2,3,out.length,1).setValues(out);
+  }
+}
+
+function oraApplyCityDropdown_(ss, sheet, startRow, count){
+  try{
+    if(!sheet || ORA_ORDER_SHEETS.indexOf(sheet.getName()) < 0 || count <= 0)
+      return;
+
+    var cityTab = oraEnsureCityTab_(ss);
+    var last = cityTab.getLastRow();
+
+    var range = sheet.getRange(
+      startRow,
+      oraHeaderCol_("City"),
+      count,
+      1
+    );
+
+    range.clearDataValidations();
+
+    if(last >= 2){
+      range.setDataValidation(
+        SpreadsheetApp.newDataValidation()
+          .requireValueInRange(
+            cityTab.getRange(2,3,last-1,1),
+            true
+          )
+          .setAllowInvalid(true)
+          .setHelpText("Type/search 3+ letters, choose City • District.")
+          .build()
+      );
+    }
+  }catch(e){}
+}
+
+function oraApplyCityDistrictFromValue_(sheet, row, value){
+  try{
+    if(!sheet || ORA_ORDER_SHEETS.indexOf(sheet.getName()) < 0 || row < 2)
+      return;
+
+    var raw = String(value || "").trim();
+    if(!raw) return;
+
+    var city = raw;
+    var district = "";
+
+    var separator = " • ";
+    var pos = raw.indexOf(separator);
+
+    if(pos >= 0){
+      city = raw.substring(0,pos).trim();
+      district = raw.substring(pos + separator.length).trim();
+    }else{
+      // If staff typed a complete city name instead of choosing the
+      // combined dropdown value, resolve it when there is one exact match.
+      var ss = sheet.getParent();
+      var cityTab = ss.getSheetByName(ORA_CITY_TAB);
+
+      if(cityTab && cityTab.getLastRow() >= 2){
+        var vals = cityTab.getRange(
+          2,1,cityTab.getLastRow()-1,2
+        ).getDisplayValues();
+
+        var q = raw.toLowerCase();
+        var matches = [];
+
+        for(var i=0;i<vals.length;i++){
+          var c = String(vals[i][0] || "").trim();
+          var d = String(vals[i][1] || "").trim();
+
+          if(c && c.toLowerCase() === q){
+            matches.push({city:c,district:d});
+          }
+        }
+
+        // Only auto-fill when the typed city maps to one unique district.
+        if(matches.length === 1){
+          city = matches[0].city;
+          district = matches[0].district;
+        }
+      }
+    }
+
+    sheet.getRange(row, oraHeaderCol_("City")).setValue(city);
+
+    if(district){
+      sheet.getRange(row, oraHeaderCol_("District")).setValue(district);
+    }else{
+      // If a user typed only a partial/ambiguous value, do not destroy
+      // an existing district until a specific dropdown option is chosen.
+      var currentDistrict = String(
+        sheet.getRange(row, oraHeaderCol_("District")).getDisplayValue() || ""
+      ).trim();
+
+      if(!currentDistrict){
+        sheet.getRange(row, oraHeaderCol_("District")).clearContent();
+      }
+    }
+  }catch(e){}
+}
+
+function oraSearchCitiesFromTab_(q){
+  try{
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var cityTab = oraEnsureCityTab_(ss);
+    var last = cityTab.getLastRow();
+
+    var query = String(q || "").trim().toLowerCase();
+
+    if(query.length < 3 || last < 2)
+      return [];
+
+    var vals = cityTab.getRange(
+      2,1,last-1,2
+    ).getDisplayValues();
+
+    var out = [];
+
+    for(var i=0;i<vals.length && out.length < 300;i++){
+      var city = String(vals[i][0] || "").trim();
+      var district = String(vals[i][1] || "").trim();
+
+      if(!city)
+        continue;
+
+      if(city.toLowerCase().indexOf(query) < 0)
+        continue;
+
+      out.push({
+        city: city,
+        district: district,
+        label: city + (district ? " • " + district : "")
+      });
+    }
+
+    return out;
+  }catch(e){
+    return [];
+  }
+}
+
+function oraRebuildCityDropdowns(){
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  oraEnsureCityTab_(ss);
+
+  var total = 0;
+
+  for(var i=0;i<ORA_ORDER_SHEETS.length;i++){
+    var sh = ss.getSheetByName(ORA_ORDER_SHEETS[i]);
+    if(!sh) continue;
+
+    var last = sh.getLastRow();
+
+    if(last >= 2){
+      oraApplyCityDropdown_(ss, sh, 2, last-1);
+      total += last-1;
+    }
+  }
+
+  SpreadsheetApp.getActive().toast(
+    "City search enabled on all order tabs (" + total + " rows).",
+    "O-RA",
+    4
+  );
+
+  return total;
+}
+
+function oraResolveCityDistrict_(ss,cityValue,districtValue){
+  var city=String(cityValue||"").trim();
+  var district=String(districtValue||"").trim();
+  if(!city)return {city:"",district:district};
+  if(district)return {city:city,district:district};
+  var tab=ss.getSheetByName(ORA_CITY_TAB);
+  if(!tab||tab.getLastRow()<2)return {city:city,district:""};
+  var vals=tab.getRange(2,1,tab.getLastRow()-1,2).getDisplayValues();
+  var q=city.toLowerCase();
+  var matches=[];
+  for(var i=0;i<vals.length;i++){
+    var c=String(vals[i][0]||"").trim(),d=String(vals[i][1]||"").trim();
+    if(c&&c.toLowerCase()===q)matches.push({city:c,district:d});
+  }
+  if(matches.length===1)return matches[0];
+  // If the same city appears many times but all rows point to the same district,
+  // it is still safe to auto-fill that district.
+  var districts={};
+  for(var j=0;j<matches.length;j++)if(matches[j].district)districts[matches[j].district]=true;
+  var keys=Object.keys(districts);
+  if(keys.length===1)return {city:matches[0].city,district:keys[0]};
+  return {city:city,district:""};
+}
+
 function oraBuildOrderRows_(data){
   var orderNo=String(data.orderId||data.order_id||data.order_number||"").trim();
   if(!orderNo)throw new Error("Order ID missing");
   var source=String(data.source||data.order_source||"Website");
+  var resolvedCity=oraResolveCityDistrict_(ss,data.city,data.district);
   var items=Array.isArray(data.items)?data.items:[];
   if(!items.length)throw new Error("No order items for "+orderNo);
   var normal=Number(data.normalTotal??data.subtotal??0),discount=Number(data.discount??data.special_offer_discount??0),delivery=Number(data.deliveryFee??data.delivery_fee??0),
@@ -908,8 +1194,8 @@ function oraBuildOrderRows_(data){
     row["Customer Name"]=i===0?String(data.customerName??data.customer_name??""):"";
     row["Phone Number"]=i===0?String(data.phoneNumber??data.phone??""):"";
     row["Address"]=i===0?String(data.address??""):"";
-    row["City"]=i===0?String(data.city??""):"";
-    row["District"]=i===0?String(data.district??""):"";
+    row["City"]=i===0?resolvedCity.city:"";
+    row["District"]=i===0?resolvedCity.district:"";
     row["Item Name"]=itemName;
     row["Variant / Color"]=variant;
     row["Qty"]=qty;
@@ -1042,9 +1328,10 @@ function oraSyncOrder_(ss,data){
   }
   var items=Array.isArray(data.items)?data.items:[];if(!items.length)throw new Error("No order items");
   var normal=Number(data.subtotal||0),discount=Number(data.special_offer_discount||0),delivery=Number(data.delivery_fee||0),finalTotal=Number(data.total_amount||0),offer=String(data.offer_label||""),out=[];
+  var resolvedCity=oraResolveCityDistrict_(ss,data.city,data.district);
   for(var i=0;i<items.length;i++){
     var it=items[i]||{},qty=Math.max(1,Number(it.quantity||1)),unit=Number(it.unit_price||0),line=Math.round(qty*unit*100)/100,main=String(it.main_sku||it.sku||""),variant=String(it.variant_name||""),sku=String(it.sku||""),row={};
-    row["Order ID"]=orderNo;row["Customer Name"]=i===0?String(data.customer_name||""):"";row["Phone Number"]=i===0?String(data.phone||""):"";row["Address"]=i===0?(String(data.address||"")+(data.city?", "+String(data.city):"")):"";row["Item Name"]=String(it.product_name||"");row["Variant / Color"]=variant;row["Qty"]=qty;row["Unit Price (Rs)"]=unit;row["Item Action"]="KEEP ITEM";row["Change Item To"]="";row["Change Preview"]="";row["Apply Item Change"]=false;row["Order Action"]=i===0?"PENDING":"";row["Cancel Reason"]="";row["Final Total (Rs)"]=finalTotal;row["Offer"]=offer;row["Discount (Rs)"]=discount;row["Source"]=source;row["Main Code"]=main;row["Item Code"]=sku;row["Line Total (Rs)"]=line;row["Normal Total (Rs)"]=normal;row["Delivery Fee (Rs)"]=delivery;row["WhatsApp Number"]=String(data.whatsapp||data.phone||"");row["Original Main Code"]=main;row["Original Variant / Color"]=variant;row["Original Item Code"]=sku;row["Original Item Name"]=String(it.product_name||"");row["Original Qty"]=qty;row["Order Time"]=String(data.created_at||"");row["Lead ID"]=String(data.platform_lead_id||"");row["Imported Status"]=String(data.call_center_status||"Pending");row["Last Sync"]=new Date();
+    row["Order ID"]=orderNo;row["Customer Name"]=i===0?String(data.customer_name||""):"";row["Phone Number"]=i===0?String(data.phone||""):"";row["Address"]=i===0?(String(data.address||"")+(resolvedCity.city?", "+resolvedCity.city:"")):"";row["City"]=i===0?resolvedCity.city:"";row["District"]=i===0?resolvedCity.district:"";row["Item Name"]=String(it.product_name||"");row["Variant / Color"]=variant;row["Qty"]=qty;row["Unit Price (Rs)"]=unit;row["Item Action"]="KEEP ITEM";row["Change Item To"]="";row["Change Preview"]="";row["Apply Item Change"]=false;row["Order Action"]=i===0?"PENDING":"";row["Cancel Reason"]="";row["Final Total (Rs)"]=finalTotal;row["Offer"]=offer;row["Discount (Rs)"]=discount;row["Source"]=source;row["Main Code"]=main;row["Item Code"]=sku;row["Line Total (Rs)"]=line;row["Normal Total (Rs)"]=normal;row["Delivery Fee (Rs)"]=delivery;row["WhatsApp Number"]=String(data.whatsapp||data.phone||"");row["Original Main Code"]=main;row["Original Variant / Color"]=variant;row["Original Item Code"]=sku;row["Original Item Name"]=String(it.product_name||"");row["Original Qty"]=qty;row["Order Time"]=String(data.created_at||"");row["Lead ID"]=String(data.platform_lead_id||"");row["Imported Status"]=String(data.call_center_status||"Pending");row["Last Sync"]=new Date();
     out.push(ORA_ORDER_HEADERS.map(function(h){return typeof row[h]==="undefined"?"":row[h];}));
   }
   var start=oraLastOrderRow_(sheet)+1;sheet.getRange(start,1,out.length,ORA_ORDER_HEADERS.length).setValues(out);
@@ -1100,7 +1387,7 @@ function doPost(e){
     if(type==="catalog_sync")return oraJson_({status:"catalog_synced",count:oraSyncCatalog_(ss,Array.isArray(data.products)?data.products:[],data.pricing)});
     if(type==="operational_clear"){for(var i=0;i<ORA_ORDER_SHEETS.length;i++)oraClearDataRows_(oraEnsureSheet_(ss,ORA_ORDER_SHEETS[i],ORA_ORDER_HEADERS));SpreadsheetApp.flush();return oraJson_({status:"operational_cleared"});}
     if(type==="live_start_clear"){for(var j=0;j<ORA_ORDER_SHEETS.length;j++)oraClearDataRows_(oraEnsureSheet_(ss,ORA_ORDER_SHEETS[j],ORA_ORDER_HEADERS));oraClearDataRows_(oraEnsureSheet_(ss,"PRODUCT CATALOG",ORA_CATALOG_HEADERS));SpreadsheetApp.flush();return oraJson_({status:"live_start_cleared"});}
-    if(type==="order_delete" || data.action==="deleteOrder"){var removed=oraDeleteOrder_(ss,data.orderNo||data.orderId||data.order_number||data.order_id,data.order_source);return oraJson_({status:"order_deleted",removed:removed});}
+    if(type==="order_delete" || data.action==="deleteOrder"){var removed=oraDeleteOrder_(ss,data.orderNo||data.orderId||data.order_number||data.order_id,data.order_source,data.reason);return oraJson_({status:"order_deleted",removed:removed});}
     if(type==="order_check")return oraJson_(oraCheckOrder_(ss,data.order_number||data.order_id,data.order_source));
     if(type==="order_batch_sync")return oraJson_(oraSyncOrderBatch_(ss,Array.isArray(data.orders)?data.orders:[]));
     if(type==="ui_style_chunk")return oraJson_(oraHydrateUiChunkRequest_(ss,data));
@@ -1108,7 +1395,7 @@ function doPost(e){
     return oraJson_({status:"error",message:"Unknown payload_type: "+type});
   }catch(err){return oraJson_({status:"error",message:String(err&&err.message||err)});}
 }
-function doGet(){return oraJson_({status:"ok",service:"O-RA Google Sheet Sync V14.9 Final"});}`;
+function doGet(){try{oraEnsureCityTab_(SpreadsheetApp.getActiveSpreadsheet());oraRebuildCityDropdowns();}catch(e){}return oraJson_({status:"ok",service:"O-RA Google Sheet Sync V15.6 City All Tabs"});}`;
 
 const proxyPost = async (webhookUrl:string,payload:any) => {
   const response=await fetch('/api/google-sheets/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({webhookUrl,payload})});
