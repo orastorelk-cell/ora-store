@@ -1399,12 +1399,6 @@ app.post('/api/orders', async (req,res)=>{
     // Durable order FIRST. Customer success is never shown before this checkpoint.
     await saveOrderSnapshot(order);
 
-    try {
-      if (order && order.order_source !== 'Manual Admin') {
-        syncOrdersToGoogleSheetsServer([order]).catch(() => {});
-      }
-    } catch { /* non-blocking */ }
-
     const shouldSync=!deferSheetSync && isOrderEligibleForSheetServer(order);
 
     // Test-order buttons intentionally wait for Sheet confirmation so their success
@@ -1592,14 +1586,6 @@ app.delete('/api/orders/:id', requireSuperAdmin, async (req,res)=>{
         sheetSync={ok:String(result?.status||'')==='order_deleted'};
       }
     }catch(e:any){ sheetSync={ok:false,error:e?.message||'Google Sheet delete failed.'}; }
-    try {
-      const state = await readSharedStorefrontState();
-      const settings = (state?.settings && typeof state.settings === 'object') ? state.settings : {};
-      const sheetWebhookUrl = String(settings?.google_sheet_webhook_url || '').trim();
-      if (sheetWebhookUrl) {
-        postAppsScriptFastServer(sheetWebhookUrl, { payload_type: 'delete_order', order_number: String(order.order_number), orderNo: String(order.order_number) }).catch(() => {});
-      }
-    } catch {}
     return res.json({ok:true,order_number:order.order_number,reason,sheet_sync:sheetSync});
   }catch(e:any){return res.status(500).json({error:e?.message||'Order delete failed.'});}
 });
@@ -1640,10 +1626,24 @@ app.delete('/api/operational-test-data', requireSuperAdmin, async (_req,res)=>{
       }
     }
 
+    let sheetSync:OraSheetSyncResult={ok:true,skipped:true};
+    try {
+      const state=await readSharedStorefrontState();
+      const webhook=String(state?.settings?.google_sheet_webhook_url||'').trim();
+      if(webhook){
+        const result=await postAppsScriptFastServer(webhook,{payload_type:'operational_clear'},12000);
+        sheetSync={ok:String(result?.status||'')==='operational_cleared'};
+        if(!sheetSync.ok) sheetSync.error='Google Sheet returned an unexpected clear status.';
+      }
+    }catch(e:any){
+      sheetSync={ok:false,error:e?.message||'Google Sheet clear failed.'};
+    }
+
     return res.json({
       ok:true,
       removed_local_orders:beforeLocal,
-      remaining_local_orders:readOrderSnapshotsLocal().length
+      remaining_local_orders:readOrderSnapshotsLocal().length,
+      sheet_sync:sheetSync
     });
   } catch (e:any) {
     return res.status(500).json({error:e?.message || 'Operational data clear failed.'});
