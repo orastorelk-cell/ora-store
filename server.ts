@@ -1581,7 +1581,7 @@ app.delete('/api/orders/:id', requireSuperAdmin, async (req,res)=>{
     try{
       const state=await readSharedStorefrontState();
       const webhook=String(state?.settings?.google_sheet_webhook_url||'').trim();
-      if(webhook && order.order_source!=='Manual Admin'){
+      if(webhook){
         const result=await postAppsScriptFastServer(webhook,{payload_type:'order_delete',order_number:order.order_number,order_source:order.order_source,reason});
         sheetSync={ok:String(result?.status||'')==='order_deleted'};
       }
@@ -1612,10 +1612,10 @@ app.delete('/api/operational-test-data', requireSuperAdmin, async (_req,res)=>{
   try {
     const beforeLocal = readOrderSnapshotsLocal().length;
 
-    // Localhost authoritative test store: clear it immediately.
+    // Clear the durable local order store first.
     writeOrderSnapshotsLocal([]);
 
-    // Live/Supabase mirror: clear if configured.
+    // Clear the Supabase mirror when configured.
     const sb=getSupabaseAdmin();
     if(sb){
       try{
@@ -1626,17 +1626,21 @@ app.delete('/api/operational-test-data', requireSuperAdmin, async (_req,res)=>{
       }
     }
 
-    let sheetSync:OraSheetSyncResult={ok:true,skipped:true};
+    // Clear the same operational order rows from Google Sheets.
+    let sheetSync: any = {ok:true, skipped:true};
     try {
       const state=await readSharedStorefrontState();
       const webhook=String(state?.settings?.google_sheet_webhook_url||'').trim();
       if(webhook){
-        const result=await postAppsScriptFastServer(webhook,{payload_type:'operational_clear'},12000);
-        sheetSync={ok:String(result?.status||'')==='operational_cleared'};
-        if(!sheetSync.ok) sheetSync.error='Google Sheet returned an unexpected clear status.';
+        const result=await postAppsScriptFastServer(webhook,{payload_type:'operational_clear'});
+        sheetSync={
+          ok:String(result?.status||'')==='operational_cleared',
+          skipped:false,
+          status:String(result?.status||'')
+        };
       }
-    }catch(e:any){
-      sheetSync={ok:false,error:e?.message||'Google Sheet clear failed.'};
+    } catch(e:any) {
+      sheetSync={ok:false,skipped:false,error:e?.message||'Google Sheet clear failed.'};
     }
 
     return res.json({
