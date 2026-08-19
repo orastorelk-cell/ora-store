@@ -2282,7 +2282,7 @@ useEffect(() => {
       created_at: now,
     };
 
-    const savedTestOrder=await publicOrderSave(testOrder, undefined, false, true);
+    const savedTestOrder=await publicOrderSave(testOrder, undefined, false, false);
     setOrders(prev => [savedTestOrder, ...prev.filter(o=>o.id!==savedTestOrder.id&&o.order_number!==savedTestOrder.order_number)]);
     logActivity({ action: count === 5 ? 'Website 5-Item Test Order Created' : 'Website Test Order Created', module:'Google Sheets', target_id:savedTestOrder.id, target_label:savedTestOrder.order_number });
     return savedTestOrder;
