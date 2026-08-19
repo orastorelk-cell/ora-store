@@ -1136,7 +1136,9 @@ useEffect(() => {
   };
 
   const queueOrderSheetSync = (order: Order) => {
-    if (!settings.google_sheet_webhook_url || order.order_source === 'Manual Admin') return;
+    // Server (server.ts) already syncs orders to Google Sheets on creation.
+    // Client posting is disabled to prevent duplicate rows.
+    return;
     const holdWebsiteBankPayment = order.order_source === 'Website' && order.payment_method === 'Bank Payment' && order.payment_verification_status !== 'Approved';
     if (holdWebsiteBankPayment) return;
 
