@@ -918,7 +918,7 @@ function oraBuildOrderRows_(data){
     row["Change Item To"]="";
     row["Change Preview"]="";
     row["Apply Item Change"]=false;
-    row["Order Action"]="PENDING";
+    row["Order Action"]=i===0?"PENDING":"";
     row["Cancel Reason"]="";
     row["Final Total (Rs)"]=finalTotal;
     row["Offer"]=offer;
@@ -1044,7 +1044,7 @@ function oraSyncOrder_(ss,data){
   var normal=Number(data.subtotal||0),discount=Number(data.special_offer_discount||0),delivery=Number(data.delivery_fee||0),finalTotal=Number(data.total_amount||0),offer=String(data.offer_label||""),out=[];
   for(var i=0;i<items.length;i++){
     var it=items[i]||{},qty=Math.max(1,Number(it.quantity||1)),unit=Number(it.unit_price||0),line=Math.round(qty*unit*100)/100,main=String(it.main_sku||it.sku||""),variant=String(it.variant_name||""),sku=String(it.sku||""),row={};
-    row["Order ID"]=orderNo;row["Customer Name"]=i===0?String(data.customer_name||""):"";row["Phone Number"]=i===0?String(data.phone||""):"";row["Address"]=i===0?(String(data.address||"")+(data.city?", "+String(data.city):"")):"";row["Item Name"]=String(it.product_name||"");row["Variant / Color"]=variant;row["Qty"]=qty;row["Unit Price (Rs)"]=unit;row["Item Action"]="KEEP ITEM";row["Change Item To"]="";row["Change Preview"]="";row["Apply Item Change"]=false;row["Order Action"]="PENDING";row["Cancel Reason"]="";row["Final Total (Rs)"]=finalTotal;row["Offer"]=offer;row["Discount (Rs)"]=discount;row["Source"]=source;row["Main Code"]=main;row["Item Code"]=sku;row["Line Total (Rs)"]=line;row["Normal Total (Rs)"]=normal;row["Delivery Fee (Rs)"]=delivery;row["WhatsApp Number"]=String(data.whatsapp||data.phone||"");row["Original Main Code"]=main;row["Original Variant / Color"]=variant;row["Original Item Code"]=sku;row["Original Item Name"]=String(it.product_name||"");row["Original Qty"]=qty;row["Order Time"]=String(data.created_at||"");row["Lead ID"]=String(data.platform_lead_id||"");row["Imported Status"]=String(data.call_center_status||"Pending");row["Last Sync"]=new Date();
+    row["Order ID"]=orderNo;row["Customer Name"]=i===0?String(data.customer_name||""):"";row["Phone Number"]=i===0?String(data.phone||""):"";row["Address"]=i===0?(String(data.address||"")+(data.city?", "+String(data.city):"")):"";row["Item Name"]=String(it.product_name||"");row["Variant / Color"]=variant;row["Qty"]=qty;row["Unit Price (Rs)"]=unit;row["Item Action"]="KEEP ITEM";row["Change Item To"]="";row["Change Preview"]="";row["Apply Item Change"]=false;row["Order Action"]=i===0?"PENDING":"";row["Cancel Reason"]="";row["Final Total (Rs)"]=finalTotal;row["Offer"]=offer;row["Discount (Rs)"]=discount;row["Source"]=source;row["Main Code"]=main;row["Item Code"]=sku;row["Line Total (Rs)"]=line;row["Normal Total (Rs)"]=normal;row["Delivery Fee (Rs)"]=delivery;row["WhatsApp Number"]=String(data.whatsapp||data.phone||"");row["Original Main Code"]=main;row["Original Variant / Color"]=variant;row["Original Item Code"]=sku;row["Original Item Name"]=String(it.product_name||"");row["Original Qty"]=qty;row["Order Time"]=String(data.created_at||"");row["Lead ID"]=String(data.platform_lead_id||"");row["Imported Status"]=String(data.call_center_status||"Pending");row["Last Sync"]=new Date();
     out.push(ORA_ORDER_HEADERS.map(function(h){return typeof row[h]==="undefined"?"":row[h];}));
   }
   var start=oraLastOrderRow_(sheet)+1;sheet.getRange(start,1,out.length,ORA_ORDER_HEADERS.length).setValues(out);
