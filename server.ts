@@ -1,23 +1,23 @@
-const buildOrderSheetRowServer = (order: any, settings: Record<string, any>) => ({
+const buildOrderSheetRowServer = (order: any, item: any, isFirst: boolean, settings: Record<string, any>) => ({
   'Order ID': String(order?.order_number || ''),
   'Customer Name': String(order?.customer_name || ''),
   'Phone Number': String(order?.phone || ''),
   'Address': String(order?.address || ''),
-  'Item Name': String(order?.items?.[0]?.product_name || order?.items?.[0]?.name || ''),
-  'Item Code': String(order?.items?.[0]?.sku || ''),
-  'Qty': (order?.items || []).reduce((s: number, it: any) => s + Math.max(1, Number(it?.quantity || 1)), 0) || 1,
-  'Unit Price (Rs)': Number(order?.items?.[0]?.unit_price || order?.items?.[0]?.price || 0),
-  'Final Total (Rs)': Number(order?.total_amount ?? order?.total ?? 0),
-  'Variant / Color': String(order?.items?.[0]?.variant_name || ''),
-  'Order Action': 'PENDING',
-  'Discount (Rs)': Number(order?.discount || 0),
-  'Source': String(order?.order_source || order?.source || 'Website'),
-  'Delivery Fee (Rs)': Number(order?.delivery_fee || 0),
-  'WhatsApp Number': String(order?.whatsapp || order?.phone || ''),
-  'Order Time': String(order?.created_at || new Date().toISOString()),
-  'Imported Status': String(order?.call_center_status || 'Pending'),
-  'City': String(order?.city || ''),
-  'District': String(order?.district || '')
+  'Item Name': String(item?.product_name || item?.name || item?.item_name || order?.items?.[0]?.product_name || ''),
+'Item Code': String(item?.sku || item?.item_code || order?.items?.[0]?.sku || ''),
+'Qty': Math.max(1, Number(item?.quantity ?? item?.qty ?? 1)),
+'Unit Price (Rs)': Number(item?.unit_price ?? item?.price ?? order?.items?.[0]?.unit_price ?? 0),
+'Final Total (Rs)': isFirst ? Number(order?.total_amount ?? order?.total ?? 0) : 0,
+'Variant / Color': String(item?.variant_name || order?.items?.[0]?.variant_name || ''),
+'Order Action': 'PENDING',
+'Discount (Rs)': isFirst ? Number(order?.discount || 0) : 0,
+'Source': String(order?.order_source || order?.source || 'Website'),
+'Delivery Fee (Rs)': isFirst ? Number(order?.delivery_fee || 0) : 0,
+'WhatsApp Number': String(order?.whatsapp || order?.phone || ''),
+'Order Time': String(order?.created_at || new Date().toISOString()),
+'Imported Status': String(order?.call_center_status || 'Pending'),
+'City': String(order?.city || ''),
+'District': String(order?.district || '')
 });
 
 import express from "express";
@@ -979,7 +979,7 @@ const syncOrdersToGoogleSheetsServer = async (orders:any[]):Promise<OraSheetSync
     if(!webhook) return {ok:false,skipped:true,error:'Google Sheet Web App URL is not saved in shared Store Settings.'};
     const eligible=(Array.isArray(orders)?orders:[]).filter(isOrderEligibleForSheetServer);
     if(!eligible.length) return {ok:true,skipped:true,synced:0,existing:0,rows:0};
-    const result=await postAppsScriptFastServer(webhook,{action:'sync_orders',groups:{[String(eligible[0]?.order_source||'Website')]:eligible.map(o=>buildOrderSheetRowServer(o,settings))}});
+    const result=await postAppsScriptFastServer(webhook,{action:'sync_orders',groups:(()=>{const g={};for(const o of eligible){const s=String(o?.order_source||o?.source||'Website');if(!g[s])g[s]=[];const its=(o?.items&&o?.items.length)?o.items:[null];for(let i=0;i<its.length;i++){g[s].push(buildOrderSheetRowServer(o,its[i],i===0,settings));}}return g;})()});
     if(!['orders_batch_synced','orders_synced'].includes(String(result?.status||''))) throw new Error(`Unexpected Apps Script status: ${String(result?.status||'empty')}`);
     return {ok:true,synced:Number(result?.synced||0),existing:Number(result?.existing||0),rows:Number(result?.rows||0)};
   }catch(e:any){
