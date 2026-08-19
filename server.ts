@@ -1,3 +1,25 @@
+const buildOrderSheetRowServer = (order: any, settings: Record<string, any>) => ({
+  'Order ID': String(order?.order_number || ''),
+  'Customer Name': String(order?.customer_name || ''),
+  'Phone Number': String(order?.phone || ''),
+  'Address': String(order?.address || ''),
+  'Item Name': String(order?.items?.[0]?.product_name || order?.items?.[0]?.name || ''),
+  'Item Code': String(order?.items?.[0]?.sku || ''),
+  'Qty': (order?.items || []).reduce((s: number, it: any) => s + Math.max(1, Number(it?.quantity || 1)), 0) || 1,
+  'Unit Price (Rs)': Number(order?.items?.[0]?.unit_price || order?.items?.[0]?.price || 0),
+  'Final Total (Rs)': Number(order?.total_amount ?? order?.total ?? 0),
+  'Variant / Color': String(order?.items?.[0]?.variant_name || ''),
+  'Order Action': 'PENDING',
+  'Discount (Rs)': Number(order?.discount || 0),
+  'Source': String(order?.order_source || order?.source || 'Website'),
+  'Delivery Fee (Rs)': Number(order?.delivery_fee || 0),
+  'WhatsApp Number': String(order?.whatsapp || order?.phone || ''),
+  'Order Time': String(order?.created_at || new Date().toISOString()),
+  'Imported Status': String(order?.call_center_status || 'Pending'),
+  'City': String(order?.city || ''),
+  'District': String(order?.district || '')
+});
+
 import express from "express";
 import path from "path";
 import { GoogleGenAI, Type } from "@google/genai";
@@ -957,7 +979,7 @@ const syncOrdersToGoogleSheetsServer = async (orders:any[]):Promise<OraSheetSync
     if(!webhook) return {ok:false,skipped:true,error:'Google Sheet Web App URL is not saved in shared Store Settings.'};
     const eligible=(Array.isArray(orders)?orders:[]).filter(isOrderEligibleForSheetServer);
     if(!eligible.length) return {ok:true,skipped:true,synced:0,existing:0,rows:0};
-    const result=await postAppsScriptFastServer(webhook,{payload_type:'order_batch_sync',orders:eligible.map(o=>buildOrderSheetPayloadServer(o,settings))});
+    const result=await postAppsScriptFastServer(webhook,{action:'sync_orders',groups:{[String(eligible[0]?.order_source||'Website')]:eligible.map(o=>buildOrderSheetRowServer(o,settings))}});
     if(!['orders_batch_synced','orders_synced'].includes(String(result?.status||''))) throw new Error(`Unexpected Apps Script status: ${String(result?.status||'empty')}`);
     return {ok:true,synced:Number(result?.synced||0),existing:Number(result?.existing||0),rows:Number(result?.rows||0)};
   }catch(e:any){
