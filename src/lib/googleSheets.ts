@@ -1,1233 +1,2900 @@
-import { Order, StoreSettings, Product, OrderSource } from '../types';
-import { buildCatalogRows } from './productVariants';
-
-export const GOOGLE_APPS_SCRIPT_CODE = String.raw`// ============================================================
-// O-RA STORE - GOOGLE SHEET SYNC V14.9 FINAL
-// High-volume sync: batch row writes + deferred UI styling to keep 50-500+ order imports responsive.
-// Safe contract: Sheet edits do not change O-RA until CSV is uploaded back.
+// ============================================================
+// O-RA STORE - GOOGLE SHEET SYNC V15.5
+// CITY LIST: A=City, B=District
+// Existing order columns are NEVER cleared/reordered.
 // ============================================================
 
-var ORA_ORDER_HEADERS = [
-  "Order ID","Customer Name","Phone Number","Address","Item Name","Item Code","Qty","Unit Price (Rs)","Final Total (Rs)","Variant / Color",
-  "Item Action","Order Action","Offer","Cancel Reason","Change Item To","Change Preview","Apply Item Change",
-  "Discount (Rs)","Source","Main Code","Line Total (Rs)","Normal Total (Rs)","Delivery Fee (Rs)","WhatsApp Number",
-  "Original Main Code","Original Variant / Color","Original Item Code","Original Item Name","Original Qty","Order Time","Lead ID","Imported Status","Last Sync","City","District"
-];
-var ORA_CATALOG_HEADERS = [
-  "Item Image","Main Code","Variant Code","Item Name","Variant / Color","Type","Selling Price (Rs)","Current Stock","Status","Image URL","Select Product / Variant","Last Updated"
-];
+var ORA_ORDER_HEADERS = ["Order ID","Customer Name","Phone Number","Address","Item Name","Item Code","Qty","Unit Price (Rs)","Final Total (Rs)","Variant / Color","Item Action","Order Action","Offer","Cancel Reason","Change Item To","Change Preview","Apply Item Change","Discount (Rs)","Source","Main Code","Line Total (Rs)","Normal Total (Rs)","Delivery Fee (Rs)","WhatsApp Number","Original Main Code","Original Variant / Color","Original Item Code","Original Item Name","Original Qty","Order Time","Lead ID","Imported Status","Last Sync","City","District"];
+
+var ORA_CATALOG_HEADERS = ["Item Image","Main Code","Variant Code","Item Name","Variant / Color","Type","Selling Price (Rs)","Current Stock","Status","Image URL","Select Product / Variant","Last Updated"];
+
 var ORA_ORDER_SHEETS = ["CALL CENTER ORDERS","FACEBOOK ORDERS","TIKTOK ORDERS"];
-var ORA_EDITABLE_HEADERS = ["Variant / Color","Qty","Item Action","Change Item To","Apply Item Change","Order Action","Cancel Reason"];
-var ORA_UI_TEMPLATE_SHEET = "_ORA UI TEMPLATE";
-var ORA_UI_QUEUE_KEY = "ORA_PENDING_UI_QUEUE_V127";
-var ORA_UI_WORKER = "oraProcessPendingUiWorker";
-var ORA_UI_WORKER_ROWS = 120;
-var ORA_UI_IMMEDIATE_ROWS = 20;
+var ORA_DELETED_SHEET = "DELETED ORDERS";
+var ORA_CITY_TAB = "CITY LIST";
+var ORA_VERSION = "O-RA Store Google Sheet Sync V15.5";
 
 function oraJson_(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+  return ContentService
+    .createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
 }
-function oraHeaderCol_(name) { return ORA_ORDER_HEADERS.indexOf(name) + 1; }
+
+function oraCol_(h) {
+  return ORA_ORDER_HEADERS.indexOf(h) + 1;
+}
+
 function oraOrderSheetName_(source) {
   var s = String(source || "").toLowerCase();
   if (s.indexOf("facebook") >= 0) return "FACEBOOK ORDERS";
   if (s.indexOf("tiktok") >= 0) return "TIKTOK ORDERS";
   return "CALL CENTER ORDERS";
 }
-function oraSourceFromOrder_(orderNo) {
-  var id = String(orderNo || "").toUpperCase();
-  if (id.indexOf("FB-") === 0) return "Facebook Ads";
-  if (id.indexOf("TK-") === 0) return "TikTok Ads";
-  return "Website";
+
+function oraPick_(o, keys) {
+  for (var i = 0; i < keys.length; i++) {
+    var v = o ? o[keys[i]] : undefined;
+    if (v !== undefined && v !== null && String(v) !== "") return v;
+  }
+  return "";
 }
-function oraSheetHasHeaders_(sheet, headers) {
-  if (!sheet || sheet.getLastColumn() < headers.length || sheet.getLastRow() < 1) return false;
-  var row = sheet.getRange(1,1,1,headers.length).getDisplayValues()[0];
-  for (var i=0;i<headers.length;i++) if (String(row[i] || "") !== headers[i]) return false;
+
+function oraNum_(v) {
+  var n = Number(String(v || "0").replace(/[^0-9.-]/g, ""));
+  return isFinite(n) ? n : 0;
+}
+
+function oraItemActionColor_(v) {
+  return String(v || "").toUpperCase().indexOf("CANCEL") >= 0
+    ? "#fecaca"
+    : "#bbf7d0";
+}
+
+function oraOrderActionColor_(v) {
+  var s = String(v || "").toUpperCase();
+  if (s.indexOf("CONFIRM") >= 0) return "#bbf7d0";
+  if (s.indexOf("CANCEL") >= 0) return "#fecaca";
+  if (s.indexOf("NO ANSWER") >= 0) return "#fbcfe8";
+  return "#bfdbfe";
+}
+
+function oraHasHeaders_(sh, headers) {
+  if (!sh || sh.getLastRow() < 1) return false;
+  var row = sh.getRange(1, 1, 1, headers.length).getDisplayValues()[0];
+  for (var i = 0; i < headers.length; i++) {
+    if (String(row[i] || "") !== headers[i]) return false;
+  }
   return true;
 }
+
+/*
+ IMPORTANT:
+ Existing sheets are NEVER cleared.
+ Existing columns are NEVER reordered.
+ Existing City / District / Confirm / Cancel / Upload columns stay where they are.
+ Only genuinely missing headers are appended at the end.
+*/
 function oraEnsureSheet_(ss, name, headers) {
   var sh = ss.getSheetByName(name);
-  if (!sh) sh = ss.insertSheet(name);
-  if (!oraSheetHasHeaders_(sh, headers)) {
-    // Header order may change between O-RA versions. Preserve existing rows by
-    // matching the OLD header names to the NEW header names instead of wiping data.
-    var oldLastRow=sh.getLastRow(),oldLastCol=sh.getLastColumn(),oldHeaders=[],oldData=[];
-    if(oldLastRow>=1&&oldLastCol>0){
-      oldHeaders=sh.getRange(1,1,1,oldLastCol).getDisplayValues()[0];
-      if(oldLastRow>1)oldData=sh.getRange(2,1,oldLastRow-1,oldLastCol).getValues();
+
+  if (!sh) {
+    sh = ss.insertSheet(name);
+
+    if (sh.getMaxColumns() < headers.length) {
+      sh.insertColumnsAfter(
+        sh.getMaxColumns(),
+        headers.length - sh.getMaxColumns()
+      );
     }
-    var index={};for(var oi=0;oi<oldHeaders.length;oi++){var oh=String(oldHeaders[oi]||"").trim();if(oh)index[oh]=oi;}
-    // IMPORTANT: old column validations can stay attached to cells even when the
-    // header order changes. Clear them BEFORE migrated values are written, or a
-    // value such as NO ANSWER / Offer can be rejected by the validation that
-    // belonged to that column in the previous layout.
-    if (sh.getMaxRows() > 1 && sh.getMaxColumns() > 0) {
-      sh.getRange(2,1,sh.getMaxRows()-1,sh.getMaxColumns()).clearDataValidations();
-    }
-    sh.clear();
-    if (sh.getMaxColumns() < headers.length) sh.insertColumnsAfter(sh.getMaxColumns(), headers.length - sh.getMaxColumns());
-    sh.getRange(1,1,1,headers.length).setValues([headers]);
-    if(oldData.length&&Object.keys(index).length){
-      var migrated=oldData.map(function(r){return headers.map(function(h){return typeof index[h]==="number"?r[index[h]]:"";});});
-      sh.getRange(2,1,migrated.length,headers.length).setValues(migrated);
-    }
+
+    sh.getRange(1, 1, 1, headers.length).setValues([headers]);
+    return sh;
   }
-  return sh;
-}
-function oraEnsureCoreSheets_(ss) {
-  for (var i=0;i<ORA_ORDER_SHEETS.length;i++) oraEnsureSheet_(ss, ORA_ORDER_SHEETS[i], ORA_ORDER_HEADERS);
-  oraEnsureSheet_(ss, "PRODUCT CATALOG", ORA_CATALOG_HEADERS);
-}
-function oraFormatOrderSheet_(sheet) {
-  sheet.setFrozenRows(1);
-  sheet.setFrozenColumns(4);
-  sheet.getRange(1,1,1,ORA_ORDER_HEADERS.length).setFontWeight("bold").setBackground("#111827").setFontColor("#ffffff").setWrap(true);
-  var widths = {"Order ID":100,"Customer Name":130,"Phone Number":94,"Address":155,"Item Name":165,"Item Code":92,"Qty":46,"Unit Price (Rs)":86,"Final Total (Rs)":92,"Variant / Color":105,"Item Action":105,"Order Action":120,"Offer":90,"Cancel Reason":125,"Change Item To":155,"Change Preview":165,"Apply Item Change":86};
-  Object.keys(widths).forEach(function(h){ sheet.setColumnWidth(oraHeaderCol_(h), widths[h]); });
-  var rows = Math.max(1, sheet.getMaxRows()-1);
-  sheet.getRange(2,oraHeaderCol_("Phone Number"),rows,1).setNumberFormat("@");
-  sheet.getRange(2,oraHeaderCol_("WhatsApp Number"),rows,1).setNumberFormat("@");
-  sheet.getRange(2,oraHeaderCol_("Lead ID"),rows,1).setNumberFormat("@");
-  sheet.getRange(2,oraHeaderCol_("Qty"),rows,1).setNumberFormat("0");
-  ["Unit Price (Rs)","Final Total (Rs)","Discount (Rs)","Line Total (Rs)","Normal Total (Rs)","Delivery Fee (Rs)"].forEach(function(h){ sheet.getRange(2,oraHeaderCol_(h),rows,1).setNumberFormat("#,##0.00"); });
-  // Start with a clean data area. Controls are added ONLY to real order rows,
-  // so blank rows never show confusing dropdowns/checkboxes.
-  sheet.getRange(2,1,rows,ORA_ORDER_HEADERS.length).clearDataValidations();
-  sheet.getRange(2,oraHeaderCol_("Qty"),rows,1).setBackground("#ecfeff");
-  sheet.getRange(2,oraHeaderCol_("Variant / Color"),rows,1).setBackground("#f8fafc");
-  sheet.getRange(2,oraHeaderCol_("Item Action"),rows,1).setBackground("#fff7ed");
-  sheet.getRange(2,oraHeaderCol_("Order Action"),rows,1).setBackground("#ecfdf5");
-  sheet.getRange(2,oraHeaderCol_("Cancel Reason"),rows,1).setBackground("#fff1f2");
-  sheet.getRange(2,oraHeaderCol_("Change Item To"),rows,1).setBackground("#eff6ff");
-  sheet.getRange(2,oraHeaderCol_("Change Preview"),rows,1).setBackground("#eff6ff");
-  sheet.getRange(2,oraHeaderCol_("Apply Item Change"),rows,1).setBackground("#eff6ff");
-  if (sheet.getFilter()) sheet.getFilter().remove();
-  sheet.getRange(1,1,Math.max(2,sheet.getLastRow()),ORA_ORDER_HEADERS.length).createFilter();
-  oraApplySimpleView_(sheet);
-}
-function oraFormatCatalogSheet_(sheet) {
-  sheet.setFrozenRows(1);
-  sheet.getRange(1,1,1,ORA_CATALOG_HEADERS.length).setFontWeight("bold").setBackground("#111827").setFontColor("#ffffff").setWrap(true);
-  var widths=[90,110,130,240,130,90,115,90,90,280,380,150];
-  for(var i=0;i<widths.length;i++) sheet.setColumnWidth(i+1,widths[i]);
-  var rows=Math.max(1,sheet.getMaxRows()-1);
-  sheet.getRange(2,2,rows,2).setNumberFormat("@");
-  sheet.getRange(2,7,rows,1).setNumberFormat("#,##0.00");
-  sheet.getRange(2,8,rows,1).setNumberFormat("0");
-  sheet.setRowHeights(2, Math.max(1,Math.min(rows,1000)), 64);
-}
-function oraApplySimpleView_(sheet) {
-  try {
-    sheet.showColumns(1,ORA_ORDER_HEADERS.length);
-    if (ORA_ORDER_HEADERS.length > 17) sheet.hideColumns(18,ORA_ORDER_HEADERS.length-17);
-  } catch(e) {}
-}
-function oraGuideSheet_(ss) {
-  var sh=ss.getSheetByName("CALL CENTER GUIDE");
-  if(!sh) sh=ss.insertSheet("CALL CENTER GUIDE",0);
-  sh.clear();
-  var rows=[
-    ["O-RA CALL CENTER - EASY GUIDE",""],
-    ["1","Customerට call කරලා Order එක verify කරන්න. එක Order එකේ Items කිහිපයක් තිබ්බොත් ඒ rows එකම bordered block එකක් ලෙස පේනවා."],
-    ["2","Qty වෙනස් නම් Qty cell එකට 1-99 අතර whole number එක type කර Enter කරන්න. Final Total / Offer auto recalculate වෙනවා. Offer column එක protected AUTO field එකක් — edit කරන්න බැහැ."],
-    ["3","Color / Variant තියෙන Item එකකට විතරක් VARIANT / COLOR dropdown එක පේනවා. Color එක මාරු කළාම Item Code + Unit Price + Final Total auto update වෙනවා."],
-    ["4","එක Item එකක් අවශ්‍ය නැත්නම් ITEM ACTION → CANCEL ITEM. ඒ item amount එක Final Total එකෙන් auto අඩු වෙනවා. KEEP ITEM දැම්මොත් amount එක ආපහු auto එකතු වෙනවා."],
-    ["5","සම්පූර්ණ Item එක වෙන product එකකට මාරු කරන්න නම් CHANGE ITEM TO dropdown එක පරණ විදිහටම use කරන්න. Products ගොඩක් නම් row එක select කර O-RA Call Center → Search / Change Product menu එකෙන් Item Code / Name search කරන්න. අවසානයේ APPLY ITEM CHANGE checkbox එක tick කරන්න."],
-    ["6","Call එකට පිළිතුරක් නැත්නම් ORDER ACTION → NO ANSWER. ඒ Order එක follow-up සඳහා Sheet එකේම තබා ගන්න."],
-    ["7","Order එක Confirm නම් ORDER ACTION → CONFIRM ORDER. මුළු Order එක Cancel නම් CANCEL ENTIRE ORDER."],
-    ["8","Confirm/Cancel rows filter කර copy කර O-RA System → Confirm + Cancel Upload template එකට දාන්න. PENDING / NO ANSWER upload එකෙන් ignore වෙනවා."],
-    ["IMPORTANT","ROW DELETE / ROW INSERT manually කරන්න එපා. Order delete/clear කිරීම O-RA System එකෙන් විතරක් කරන්න. Stock / FIFO / Invoice / Sheet sync ඒ flow එකෙන් safeව පවත්වාගෙන යනවා."],
-    ["EDIT ACCESS","Call Center usersට edit කරන්න පුළුවන්: Qty, valid Variant / Color, Item Action, Order Action, Cancel Reason, Change Item To, Apply Item Change. Offer / Unit Price / Final Total / Item Code protected AUTO fields. Normal item එකකට Color/Variant change කරන්න බෑ."]
-  ];
-  sh.getRange(1,1,rows.length,2).setValues(rows).setWrap(true).setVerticalAlignment("top");
-  sh.getRange(1,1,1,2).merge().setFontWeight("bold").setFontSize(16).setBackground("#111827").setFontColor("#ffffff");
-  sh.getRange(rows.length-1,1,2,1).setFontWeight("bold").setBackground("#fff7ed");
-  sh.setColumnWidth(1,115);sh.setColumnWidth(2,800);
-  sh.setRowHeights(2,rows.length-1,50);
+
+  var lc = Math.max(1, sh.getLastColumn());
+  var current = sh.getRange(1, 1, 1, lc).getDisplayValues()[0];
+  var seen = {};
+
+  for (var i = 0; i < current.length; i++) {
+    var h = String(current[i] || "").trim();
+    if (h) seen[h] = i + 1;
+  }
+
+  var missing = [];
+
+  for (var j = 0; j < headers.length; j++) {
+    var wanted = headers[j];
+    if (!seen[wanted]) missing.push(wanted);
+  }
+
+  if (missing.length) {
+    var start = Math.max(1, sh.getLastColumn()) + 1;
+
+    if (sh.getMaxColumns() < start + missing.length - 1) {
+      sh.insertColumnsAfter(
+        sh.getMaxColumns(),
+        start + missing.length - 1 - sh.getMaxColumns()
+      );
+    }
+
+    sh.getRange(1, start, 1, missing.length)
+      .setValues([missing]);
+  }
+
   return sh;
 }
 
-function oraRemoveOraProtections_(sheet) {
-  var protections=sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET);
-  for(var i=0;i<protections.length;i++){
-    var d=String(protections[i].getDescription()||"");
-    if(d.indexOf("O-RA ")===0 && protections[i].canEdit()) protections[i].remove();
-  }
-}
-function oraLockSheet_(sheet, unprotectedRanges, description) {
-  oraRemoveOraProtections_(sheet);
-  var protection=sheet.protect().setDescription(description||"O-RA SAFE SHEET LOCK");
-  protection.setWarningOnly(false);
-  var me=Session.getEffectiveUser();
-  try{protection.addEditor(me);}catch(e){}
-  try{var editors=protection.getEditors();if(editors&&editors.length)protection.removeEditors(editors);}catch(e){}
-  try{protection.addEditor(me);}catch(e){}
-  try{if(protection.canDomainEdit())protection.setDomainEdit(false);}catch(e){}
-  protection.setUnprotectedRanges(unprotectedRanges||[]);
-  return protection;
-}
-function oraApplyProtections_(ss) {
-  for(var i=0;i<ORA_ORDER_SHEETS.length;i++){
-    var sh=ss.getSheetByName(ORA_ORDER_SHEETS[i]);
-    if(!sh) continue;
-    var maxRows=Math.max(2,sh.getMaxRows());
-    var editable=[];
-    for(var j=0;j<ORA_EDITABLE_HEADERS.length;j++){
-      var c=oraHeaderCol_(ORA_EDITABLE_HEADERS[j]);
-      if(c>0) editable.push(sh.getRange(2,c,maxRows-1,1));
-    }
-    oraLockSheet_(sh,editable,"O-RA CALL CENTER SAFE LOCK - DO NOT DELETE/INSERT ROWS");
-  }
-  var catalog=ss.getSheetByName("PRODUCT CATALOG");
-  if(catalog) oraLockSheet_(catalog,[],"O-RA PRODUCT CATALOG - VIEW ONLY");
-  var guide=ss.getSheetByName("CALL CENTER GUIDE");
-  if(guide) oraLockSheet_(guide,[],"O-RA CALL CENTER GUIDE - VIEW ONLY");
-}
-function reapplyOraProtections(){
-  var ss=SpreadsheetApp.getActiveSpreadsheet();
-  oraApplyProtections_(ss);
-  SpreadsheetApp.flush();
-  SpreadsheetApp.getActive().toast("O-RA sheet protections applied.","O-RA",4);
-}
-function oraInstallOwnerEditTrigger_(ss){
-  var triggers=ScriptApp.getProjectTriggers();
-  for(var i=0;i<triggers.length;i++){
-    if(triggers[i].getHandlerFunction()==="oraOwnerEditTrigger") ScriptApp.deleteTrigger(triggers[i]);
-  }
-  ScriptApp.newTrigger("oraOwnerEditTrigger").forSpreadsheet(ss).onEdit().create();
-}
-function setupOraFreshSheet() {
-  var ss=SpreadsheetApp.getActiveSpreadsheet();
-  // CLEAN RESET: delete only O-RA generated tabs and recreate them from scratch.
-  // This permanently removes old dropdowns/validations/formats that can survive migrations.
-  var tempName="_ORA_SETUP_TEMP_";
-  var temp=ss.getSheetByName(tempName);if(!temp)temp=ss.insertSheet(tempName);
-  var targets=ORA_ORDER_SHEETS.concat(["PRODUCT CATALOG","CALL CENTER GUIDE"]);
-  for(var d=0;d<targets.length;d++){var old=ss.getSheetByName(targets[d]);if(old)ss.deleteSheet(old);}
-  oraEnsureCoreSheets_(ss);
-  for(var i=0;i<ORA_ORDER_SHEETS.length;i++){var sh=ss.getSheetByName(ORA_ORDER_SHEETS[i]);oraFormatOrderSheet_(sh);}
-  oraFormatCatalogSheet_(ss.getSheetByName("PRODUCT CATALOG"));
-  oraGuideSheet_(ss);
-  oraApplyProtections_(ss);
-  oraInstallOwnerEditTrigger_(ss);
-  onOpen();
-  var t=ss.getSheetByName(tempName);if(t&&ss.getSheets().length>1)ss.deleteSheet(t);
-  ss.setActiveSheet(ss.getSheetByName("CALL CENTER ORDERS"));
-  SpreadsheetApp.flush();
-  return "O-RA clean fresh sheets recreated - V12.7 Performance Batch.";
-}
-// Backward-compatible menu/setup name used by older UI text.
-function setupOraCallCenterSheet(){ return setupOraFreshSheet(); }
+function oraFormatOrderSheet_(sh, startRow, count) {
+  if (sh.getRange(1, 1).getBackground() !== "#111827") {
 
-function onOpen() {
-  SpreadsheetApp.getUi().createMenu("O-RA Call Center")
-    .addItem("Simple Staff View","oraSimpleStaffView")
-    .addItem("Show Technical Columns","oraShowTechnicalColumns")
-    .addSeparator()
-    .addItem("Show Pending Only","oraShowPendingOnly")
-    .addItem("Show No Answer Only","oraShowNoAnswerOnly")
-    .addItem("Show Pending + No Answer","oraShowPendingNoAnswer")
-    .addItem("Show All Orders","oraShowAllOrders")
-    .addSeparator()
-    .addItem("Open Easy Guide","oraOpenGuide")
-    .addItem("Search / Change Product","oraOpenProductSearchSidebar")
-    .addItem("Reapply Sheet Protection","reapplyOraProtections")
-    .addItem("Repair Action Dropdowns","repairOraActionDropdowns")
-    .addItem("Apply Colored Chips + Black Text","captureOraCustomChipColors")
-    .addItem("Clean Chip Borders","repairOraChipBorders")
-    .addItem("Clean Blank/Ghost Rows + Borders","repairOraBlankOrderRows")
-    .addItem("Setup Fresh O-RA Sheets","setupOraFreshSheet")
-    .addToUi();
-}
-function oraSimpleStaffView(){var sh=SpreadsheetApp.getActiveSheet();if(ORA_ORDER_SHEETS.indexOf(sh.getName())<0){SpreadsheetApp.getActive().toast("Open an O-RA order sheet first.");return;}oraApplySimpleView_(sh);}
-function oraShowTechnicalColumns(){var sh=SpreadsheetApp.getActiveSheet();if(ORA_ORDER_SHEETS.indexOf(sh.getName())<0)return;sh.showColumns(1,ORA_ORDER_HEADERS.length);}
-function oraOpenGuide(){var ss=SpreadsheetApp.getActiveSpreadsheet();ss.setActiveSheet(oraGuideSheet_(ss));}
-function oraOpenProductSearchSidebar(){
-  var ss=SpreadsheetApp.getActiveSpreadsheet(),sh=ss.getActiveSheet();
-  if(ORA_ORDER_SHEETS.indexOf(sh.getName())<0){SpreadsheetApp.getActive().toast("Open CALL CENTER / FACEBOOK / TIKTOK ORDERS first.","O-RA",4);return;}
-  var range=ss.getActiveRange(),row=range?range.getRow():0;
-  if(row<2 || !String(sh.getRange(row,oraHeaderCol_("Order ID")).getDisplayValue()||"").trim()){
-    SpreadsheetApp.getActive().toast("Select the order ITEM row you want to change first.","O-RA",5);return;
-  }
-  var sheetName=sh.getName();
-  var html='<!doctype html><html><head><base target="_top"><style>'+
-    'body{font-family:Arial,sans-serif;margin:0;padding:14px;background:#f8fafc;color:#111827}'+
-    'h3{margin:0 0 4px;font-size:16px}p{font-size:11px;color:#64748b;line-height:1.45}'+
-    'input{width:100%;box-sizing:border-box;padding:10px 11px;border:1px solid #cbd5e1;border-radius:10px;font-size:13px;outline:none}'+
-    '#results{margin-top:10px;display:flex;flex-direction:column;gap:7px;max-height:620px;overflow:auto}'+
-    '.item{width:100%;text-align:left;border:1px solid #e2e8f0;border-radius:10px;background:white;padding:9px;cursor:pointer}'+
-    '.item:hover{border-color:#f97316;background:#fff7ed}.code{font-weight:700;font-size:11px;color:#ea580c}.name{font-weight:700;font-size:12px;margin-top:2px}.meta{font-size:10px;color:#64748b;margin-top:2px}'+
-    '#msg{margin-top:9px;font-size:11px;font-weight:700;color:#0369a1}</style></head><body>'+
-    '<h3>Search / Change Product</h3><p>Selected row: <b>'+row+'</b> • '+sheetName+'<br>Search Item Code, Product Name or Variant. The existing Change Item dropdown and Apply checkbox logic stays unchanged.</p>'+
-    '<input id="q" autofocus placeholder="Type S0004, headphones, purple..." oninput="queueSearch()">'+
-    '<div id="msg"></div><div id="results"></div><script>'+
-    'var timer=null;var sheetName='+JSON.stringify(sheetName)+';var row='+row+';'+
-    'function esc(v){return String(v||"").replace(/[&<>\"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\\\"":"&quot;"}[c]||c;});}'+
-    'function queueSearch(){clearTimeout(timer);timer=setTimeout(runSearch,180);}'+
-    'function runSearch(){var q=document.getElementById("q").value;document.getElementById("msg").textContent="Searching...";google.script.run.withSuccessHandler(render).withFailureHandler(fail).oraSearchProductsForSidebar(q);}'+
-    'function render(rows){var box=document.getElementById("results");box.innerHTML="";document.getElementById("msg").textContent=rows.length?rows.length+" result(s)":"No matching product";rows.forEach(function(r){var b=document.createElement("button");b.className="item";b.innerHTML="<div class=code>"+esc(r.code)+"</div><div class=name>"+esc(r.name)+(r.variant?" - "+esc(r.variant):"")+"</div><div class=meta>Rs. "+esc(r.price)+" • "+esc(r.type)+"</div>";b.onclick=function(){choose(r.label);};box.appendChild(b);});}'+
-    'function choose(label){document.getElementById("msg").textContent="Setting Change Item...";google.script.run.withSuccessHandler(function(r){document.getElementById("msg").textContent=r&&r.ok?"Selected. Check Change Preview, then tick Apply Item Change.":"Could not select product.";}).withFailureHandler(fail).oraSetChangeProductFromSidebar(sheetName,row,label);}'+
-    'function fail(e){document.getElementById("msg").textContent=(e&&e.message)||"Search failed";}runSearch();'+
-    '</script></body></html>';
-  SpreadsheetApp.getUi().showSidebar(HtmlService.createHtmlOutput(html).setTitle("O-RA Product Search"));
-}
-function oraSearchProductsForSidebar(query){
-  var ss=SpreadsheetApp.getActiveSpreadsheet(),rows=oraCatalogRows_(ss),q=String(query||"").trim().toLowerCase(),out=[];
-  for(var i=0;i<rows.length;i++){
-    var r=rows[i],hay=[r.main,r.variantSku,r.name,r.variant,r.type,r.selectLabel].join(" ").toLowerCase();
-    if(q && hay.indexOf(q)<0)continue;
-    if(!r.selectLabel)continue;
-    out.push({label:r.selectLabel,code:r.variantSku||r.main,name:r.name,variant:r.variant,type:r.type,price:Number(r.price||0).toLocaleString()});
-    if(out.length>=60)break;
-  }
-  return out;
-}
-function oraSetChangeProductFromSidebar(sheetName,row,label){
-  var ss=SpreadsheetApp.getActiveSpreadsheet(),sh=ss.getSheetByName(String(sheetName||"")),r=Number(row||0);
-  if(!sh || ORA_ORDER_SHEETS.indexOf(sh.getName())<0 || r<2)throw new Error("Order row is no longer available.");
-  if(!String(sh.getRange(r,oraHeaderCol_("Order ID")).getDisplayValue()||"").trim())throw new Error("Selected row has no Order ID.");
-  var item=oraCatalogFromLabel_(ss,label);if(!item)throw new Error("Product is no longer in PRODUCT CATALOG.");
-  sh.getRange(r,oraHeaderCol_("Change Item To")).setValue(label);
-  oraPreviewProductChange_(ss,sh,r);
-  SpreadsheetApp.flush();
-  return {ok:true};
-}
-function oraShowPendingOnly(){var sh=SpreadsheetApp.getActiveSheet();if(ORA_ORDER_SHEETS.indexOf(sh.getName())<0)return;if(!sh.getFilter())sh.getRange(1,1,Math.max(2,sh.getLastRow()),ORA_ORDER_HEADERS.length).createFilter();sh.getFilter().setColumnFilterCriteria(oraHeaderCol_("Order Action"),SpreadsheetApp.newFilterCriteria().whenTextEqualTo("PENDING").build());}
-function oraShowNoAnswerOnly(){var sh=SpreadsheetApp.getActiveSheet();if(ORA_ORDER_SHEETS.indexOf(sh.getName())<0)return;if(!sh.getFilter())sh.getRange(1,1,Math.max(2,sh.getLastRow()),ORA_ORDER_HEADERS.length).createFilter();sh.getFilter().setColumnFilterCriteria(oraHeaderCol_("Order Action"),SpreadsheetApp.newFilterCriteria().whenTextEqualTo("NO ANSWER").build());}
-function oraShowPendingNoAnswer(){var sh=SpreadsheetApp.getActiveSheet();if(ORA_ORDER_SHEETS.indexOf(sh.getName())<0)return;if(!sh.getFilter())sh.getRange(1,1,Math.max(2,sh.getLastRow()),ORA_ORDER_HEADERS.length).createFilter();sh.getFilter().setColumnFilterCriteria(oraHeaderCol_("Order Action"),SpreadsheetApp.newFilterCriteria().setHiddenValues(["CONFIRM ORDER","CANCEL ENTIRE ORDER"]).build());}
-function oraShowAllOrders(){var sh=SpreadsheetApp.getActiveSheet();if(ORA_ORDER_SHEETS.indexOf(sh.getName())<0)return;if(sh.getFilter())sh.getFilter().removeColumnFilterCriteria(oraHeaderCol_("Order Action"));}
+    sh.setFrozenRows(1);
 
-function oraCatalogRows_(ss) {
-  var sh=oraEnsureSheet_(ss,"PRODUCT CATALOG",ORA_CATALOG_HEADERS),last=sh.getLastRow();
-  if(last<2)return[];
-  return sh.getRange(2,1,last-1,ORA_CATALOG_HEADERS.length).getDisplayValues().map(function(r){return{main:String(r[1]||"").trim().toUpperCase(),variantSku:String(r[2]||"").trim().toUpperCase(),name:String(r[3]||""),variant:String(r[4]||""),type:String(r[5]||""),price:Number(String(r[6]||"0").replace(/,/g,""))||0,stock:Number(String(r[7]||"0").replace(/,/g,""))||0,status:String(r[8]||""),image:String(r[9]||""),selectLabel:String(r[10]||"")};});
-}
-function oraCatalogFromLabel_(ss,label){var key=String(label||"").trim();if(!key)return null;var rows=oraCatalogRows_(ss);for(var i=0;i<rows.length;i++)if(rows[i].selectLabel===key)return rows[i];return null;}
-function oraLastOrderRow_(sheet){
-  var max=Math.max(1,sheet.getMaxRows());
-  var row=sheet.getRange(max,oraHeaderCol_("Order ID")).getNextDataCell(SpreadsheetApp.Direction.UP).getRow();
-  return Math.max(1,row);
-}
-function oraOrderRows_(sheet,orderNo){var last=oraLastOrderRow_(sheet);if(last<2)return[];var vals=sheet.getRange(2,1,last-1,1).getDisplayValues(),key=String(orderNo||"").trim().toUpperCase(),rows=[];for(var i=0;i<vals.length;i++)if(String(vals[i][0]||"").trim().toUpperCase()===key)rows.push(i+2);return rows;}
-function oraCleanBlankOrderRows_(sheet,startRow,endRow){
-  if(!sheet || ORA_ORDER_SHEETS.indexOf(sheet.getName())<0)return 0;
-  var maxRows=sheet.getMaxRows();
-  if(maxRows<2)return 0;
-  var start=Math.max(2,Number(startRow||2));
-  var end=Math.min(maxRows,Number(endRow||maxRows));
-  if(end<start)return 0;
-  var count=end-start+1,idCol=oraHeaderCol_("Order ID"),ids=sheet.getRange(start,idCol,count,1).getDisplayValues();
-  var cleaned=0,runStart=-1;
-  function clearRun_(from,to){
-    if(from<0||to<from)return;
-    var rng=sheet.getRange(from,1,to-from+1,Math.max(ORA_ORDER_HEADERS.length,sheet.getLastColumn()));
-    // Blank order rows must be visually and logically empty. Keep column formatting,
-    // but remove ghost values, dropdowns, checkboxes, notes and other validations.
-    rng.clearContent();
-    rng.clearDataValidations();
-    try{rng.clearNote();}catch(noteErr){}
-    // Remove any order-block border that was left behind when a row was
-    // deleted/shifted upward. This touches borders only, so the intentional
-    // per-column background colors remain. New real/test orders get their
-    // order-group border back from oraStyleOrderGroup_().
-    try{rng.setBorder(false,false,false,false,false,false);}catch(borderErr){}
+    sh.getRange(
+      1,
+      1,
+      1,
+      ORA_ORDER_HEADERS.length
+    )
+      .setFontWeight("bold")
+      .setBackground("#111827")
+      .setFontColor("#ffffff")
+      .setWrap(true);
+
+    var widths = {
+      "Order ID":100,
+      "Customer Name":130,
+      "Phone Number":94,
+      "Address":155,
+      "Item Name":165,
+      "Item Code":92,
+      "Qty":46,
+      "Unit Price (Rs)":86,
+      "Final Total (Rs)":92,
+      "Variant / Color":105,
+      "Item Action":105,
+      "Order Action":120,
+      "Offer":90,
+      "Cancel Reason":125,
+      "Change Item To":155,
+      "Change Preview":165,
+      "Apply Item Change":86,
+      "City":110,
+      "District":110
+    };
+
+    Object.keys(widths).forEach(function(h) {
+      var c = oraCol_(h);
+      if (c > 0) sh.setColumnWidth(c, widths[h]);
+    });
   }
-  for(var i=0;i<ids.length;i++){
-    var blank=!String(ids[i][0]||"").trim();
-    if(blank){
-      cleaned++;
-      if(runStart<0)runStart=start+i;
-    }else if(runStart>=0){
-      clearRun_(runStart,start+i-1);
-      runStart=-1;
-    }
-  }
-  if(runStart>=0)clearRun_(runStart,end);
-  return cleaned;
-}
-function repairOraBlankOrderRows(){
-  var ss=SpreadsheetApp.getActiveSpreadsheet(),total=0;
-  for(var i=0;i<ORA_ORDER_SHEETS.length;i++){
-    var sh=ss.getSheetByName(ORA_ORDER_SHEETS[i]);
-    if(sh)total+=oraCleanBlankOrderRows_(sh,2,sh.getMaxRows());
-  }
-  SpreadsheetApp.flush();
-  SpreadsheetApp.getActive().toast("Blank/ghost order rows cleaned. Future new orders will recreate their own controls automatically.","O-RA",6);
-  return total;
-}
-function oraDeleteOrder_(ss,orderNo,source){
-var sh=oraEnsureSheet_(ss,oraOrderSheetName_(source||oraSourceFromOrder_(orderNo)),ORA_ORDER_HEADERS),rows=oraOrderRows_(sh,orderNo);
-if(!rows.length)return 0;
-for(var i=0;i<rows.length;i++){
-var r=rows[i];
-sh.getRange(r,oraHeaderCol_("Order Action")).setValue("DELETED");
-sh.getRange(r,oraHeaderCol_("Cancel Reason")).setValue("Order deleted from O-RA system");
-sh.getRange(r,oraHeaderCol_("Last Sync")).setValue(new Date());
-}
-SpreadsheetApp.flush();
-return rows.length;
-}
-function oraClearDataRows_(sheet){
-  var maxRows=sheet.getMaxRows();
-  if(maxRows<2)return;
-  var width=Math.max(1,sheet.getLastColumn());
-  var rng=sheet.getRange(2,1,maxRows-1,width);
-  rng.clearContent();
-  // On order sheets, a clear/reset must also remove ghost dropdowns/checkboxes.
-  // New order rows get their controls back from oraApplyRowControls_ when synced.
-  if(ORA_ORDER_SHEETS.indexOf(sheet.getName())>=0){
-    rng.clearDataValidations();
-    try{rng.clearNote();}catch(noteErr){}
-    try{rng.setBorder(false,false,false,false,false,false);}catch(borderErr){}
+
+  if (startRow && count > 0) {
+
+    sh.getRange(
+      startRow,
+      oraCol_("Qty"),
+      count,
+      1
+    ).setNumberFormat("0");
+
+    [
+      "Unit Price (Rs)",
+      "Final Total (Rs)",
+      "Discount (Rs)",
+      "Line Total (Rs)",
+      "Normal Total (Rs)",
+      "Delivery Fee (Rs)"
+    ].forEach(function(h) {
+      sh.getRange(
+        startRow,
+        oraCol_(h),
+        count,
+        1
+      ).setNumberFormat("#,##0.00");
+    });
+
+    [
+      "Phone Number",
+      "WhatsApp Number",
+      "Lead ID"
+    ].forEach(function(h) {
+      sh.getRange(
+        startRow,
+        oraCol_(h),
+        count,
+        1
+      ).setNumberFormat("@");
+    });
   }
 }
 
-function oraDiscountRate_(qty){
-  var cfg={enabled:true,tiers:[{min:2,max:3,rate:5},{min:4,max:5,rate:7.5},{min:6,max:10,rate:10}]};
-  try{var raw=PropertiesService.getDocumentProperties().getProperty("ORA_PRICING");if(raw)cfg=JSON.parse(raw);}catch(e){}
-  if(!cfg||cfg.enabled===false)return 0;
-  for(var i=0;i<(cfg.tiers||[]).length;i++){var t=cfg.tiers[i];if(qty>=Number(t.min||0)&&qty<=Number(t.max||999999))return Math.max(0,Number(t.rate||0));}
-  return 0;
-}
-function oraRecalcOrder_(sheet,orderNo){
-  var rows=oraOrderRows_(sheet,orderNo);if(!rows.length)return;
-  var subtotal=0,totalQty=0,delivery=0;
-  for(var i=0;i<rows.length;i++){
-    var r=rows[i];
-    var cancelled=String(sheet.getRange(r,oraHeaderCol_("Item Action")).getDisplayValue()||"").toLowerCase().indexOf("cancel")>=0;
-    var qty=Math.max(1,Number(sheet.getRange(r,oraHeaderCol_("Qty")).getValue()||1));
-    var unit=Math.max(0,Number(sheet.getRange(r,oraHeaderCol_("Unit Price (Rs)")).getValue()||0));
-    if(i===0) delivery=Math.max(0,Number(sheet.getRange(r,oraHeaderCol_("Delivery Fee (Rs)")).getValue()||0));
-    var line=cancelled?0:Math.round(qty*unit*100)/100;
-    sheet.getRange(r,oraHeaderCol_("Line Total (Rs)")).setValue(line);
-    if(!cancelled){subtotal+=line;totalQty+=qty;}
-  }
-  var rate=oraDiscountRate_(totalQty),discount=Math.round(subtotal*rate)/100,finalTotal=Math.round(Math.max(0,subtotal-discount+delivery)*100)/100,offer=rate>0?("Qty Offer "+rate+"% ("+totalQty+" items)"):"No Qty Offer";
-  for(var j=0;j<rows.length;j++){
-    var rr=rows[j];
-    sheet.getRange(rr,oraHeaderCol_("Normal Total (Rs)")).setValue(subtotal);
-    sheet.getRange(rr,oraHeaderCol_("Offer")).setValue(offer);
-    sheet.getRange(rr,oraHeaderCol_("Discount (Rs)")).setValue(discount);
-    sheet.getRange(rr,oraHeaderCol_("Delivery Fee (Rs)")).setValue(delivery);
-    sheet.getRange(rr,oraHeaderCol_("Final Total (Rs)")).setValue(finalTotal);
-  }
-}
-function oraStyleOrderGroup_(sheet,rows,orderNo){
-  if(!rows||!rows.length)return;
-  var first=rows[0],count=rows.length,visible=Math.min(17,ORA_ORDER_HEADERS.length);
-  // Give each order a clear visual block without merging cells (merge breaks filters/CSV).
-  var sum=0,id=String(orderNo||"");for(var i=0;i<id.length;i++)sum+=id.charCodeAt(i);
-  var shade=(sum%2===0)?"#f8fafc":"#ffffff";
-  sheet.getRange(first,1,count,Math.min(9,visible)).setBackground(shade);
-  var block=sheet.getRange(first,1,count,visible);
-  // One outer border call is much faster than drawing every internal row line.
-  // The alternating order shade + outer border still makes multi-item orders clear.
-  block.setBorder(true,true,true,true,false,false,"#64748b",SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
-  sheet.getRange(first,oraHeaderCol_("Order ID"),1,1).setFontWeight("bold");
-}
-function oraCompactCustomerRows_(sheet,rows){
-  if(!rows||rows.length<2)return;
-  for(var i=1;i<rows.length;i++){
-    sheet.getRange(rows[i],oraHeaderCol_("Customer Name")).clearContent();
-    sheet.getRange(rows[i],oraHeaderCol_("Phone Number")).clearContent();
-    sheet.getRange(rows[i],oraHeaderCol_("Address")).clearContent();
-  }
-}
-function oraRefreshExistingOrderRows_(ss,sheet){
-  var last=oraLastOrderRow_(sheet);if(last<2)return;
-  var ids=sheet.getRange(2,oraHeaderCol_("Order ID"),last-1,1).getDisplayValues(),groups={},order=[];
-  for(var i=0;i<ids.length;i++){var id=String(ids[i][0]||"").trim();if(!id)continue;if(!groups[id]){groups[id]=[];order.push(id);}groups[id].push(i+2);}
-  for(var g=0;g<order.length;g++){var key=order[g],rows=groups[key];for(var j=0;j<rows.length;j++)oraApplyRowControls_(ss,sheet,rows[j]);oraCompactCustomerRows_(sheet,rows);oraStyleOrderGroup_(sheet,rows,key);}
-  oraSetChangeValidation_(ss,sheet,2,last-1);
-  oraForceActionDropdownsForSheet_(sheet);
-}
-function oraSetVariantValidation_(ss,sheet,row){
-  var main=String(sheet.getRange(row,oraHeaderCol_("Main Code")).getDisplayValue()||"").trim().toUpperCase();
-  var rows=oraCatalogRows_(ss),seen={},values=[];
-  for(var i=0;i<rows.length;i++)if(rows[i].main===main&&rows[i].variant){var k=rows[i].variant.toLowerCase();if(!seen[k]){seen[k]=true;values.push(rows[i].variant);}}
-  var cell=sheet.getRange(row,oraHeaderCol_("Variant / Color"));cell.clearDataValidations().clearNote();
-  if(values.length){
-    cell.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(values,true).setAllowInvalid(false).build()).setBackground("#eef2ff").setNote("This item has selectable variants/colors. Changing it auto-updates Item Code, Unit Price and Final Total.");
-  }else{
-    cell.setBackground("#f3f4f6").setNote("This item has no selectable color/variant.");
-  }
-  return values;
-}
-function oraSetChangeValidation_(ss,sheet,startRow,count){
-  if(count<=0)return;
-  var cat=oraEnsureSheet_(ss,"PRODUCT CATALOG",ORA_CATALOG_HEADERS),last=cat.getLastRow();
-  var range=sheet.getRange(startRow,oraHeaderCol_("Change Item To"),count,1);range.clearDataValidations();
-  if(last>1){var source=cat.getRange(2,11,last-1,1);range.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInRange(source,true).setAllowInvalid(false).build());}
-}
+function oraValidationsRange_(ss, sh, start, count) {
 
-function oraActionItemRule_(){
-  return SpreadsheetApp.newDataValidation()
-    .requireValueInList(["KEEP ITEM","CANCEL ITEM"], true)
-    .setAllowInvalid(false)
-    .build();
-}
-function oraActionOrderRule_(){
-  return SpreadsheetApp.newDataValidation()
-    .requireValueInList(["PENDING","NO ANSWER","CONFIRM ORDER","CANCEL ENTIRE ORDER"], true)
-    .setAllowInvalid(false)
-    .build();
-}
+  if (count <= 0) return;
 
-// Google Apps Script cannot create per-option custom chip colors directly.
-// The owner has already configured the desired colored-chip rules in
-// CALL CENTER ORDERS row 2. We capture those exact validation rules once into
-// a hidden master template, then clone them to every current/future order row.
-// This preserves the owner's exact custom chip colors without touching values.
-function oraGetUiTemplateSheet_(ss,createIfMissing){
-  var sh=ss.getSheetByName(ORA_UI_TEMPLATE_SHEET);
-  if(!sh && createIfMissing){
-    sh=ss.insertSheet(ORA_UI_TEMPLATE_SHEET);
-    sh.getRange("A1").setNote("Item Action dropdown template");
-    sh.getRange("B1").setNote("Order Action colored-chip dropdown template");
-    try{sh.hideSheet();}catch(err){}
-  }
-  return sh;
-}
-function oraSeedUiTemplatesFromCallCenter_(ss){
-  var source=ss.getSheetByName("CALL CENTER ORDERS");
-  if(!source)throw new Error("CALL CENTER ORDERS sheet not found");
-  var template=oraGetUiTemplateSheet_(ss,true);
-  // Row 2 is the owner's MASTER colored-chip row. One dropdown cell stores
-  // the colors for every option in that dropdown rule.
-  var itemSrc=source.getRange(2,oraHeaderCol_("Item Action"));
-  var orderSrc=source.getRange(2,oraHeaderCol_("Order Action"));
-  if(!itemSrc.getDataValidation())throw new Error("CALL CENTER ORDERS!K2 Item Action dropdown is missing.");
-  if(!orderSrc.getDataValidation())throw new Error("CALL CENTER ORDERS!L2 Order Action dropdown is missing.");
-  // IMPORTANT: use PASTE_NORMAL, not PASTE_DATA_VALIDATION. Google does not
-  // expose per-option dropdown chip colors through Apps Script, but a normal
-  // in-sheet copy preserves the full editor-created dropdown presentation.
-  // This is what keeps CHIP mode + the owner's custom option colors.
-  template.getRange("A1:B1").clear();
-  itemSrc.copyTo(template.getRange("A1"),SpreadsheetApp.CopyPasteType.PASTE_NORMAL,false);
-  orderSrc.copyTo(template.getRange("B1"),SpreadsheetApp.CopyPasteType.PASTE_NORMAL,false);
-  try{template.hideSheet();}catch(err){}
-  return template;
-}
-function oraApplyActionValidations_(ss,sheet,row){
-  var template=oraGetUiTemplateSheet_(ss,false);
-  var itemCell=sheet.getRange(row,oraHeaderCol_("Item Action"));
-  var orderCell=sheet.getRange(row,oraHeaderCol_("Order Action"));
-  var itemValue=itemCell.getValue(), orderValue=orderCell.getValue();
+  sh.getRange(
+    start,
+    oraCol_("Qty"),
+    count,
+    1
+  )
+    .setDataValidation(
+      SpreadsheetApp
+        .newDataValidation()
+        .requireNumberBetween(1, 99)
+        .setAllowInvalid(false)
+        .build()
+    )
+    .setNote(
+      "Type a whole Qty from 1 to 99. Final Total updates automatically."
+    );
 
-  // PASTE_NORMAL is required to carry Google Sheets' editor-created CHIP
-  // presentation + per-option colors. But it also carries the source cell's
-  // border/font/background. clearFormat() removes only that copied cell format
-  // while leaving the copied data-validation rule (and its CHIP metadata) in place.
-  if(template && template.getRange("A1").getDataValidation()){
-    template.getRange("A1").copyTo(itemCell,SpreadsheetApp.CopyPasteType.PASTE_NORMAL,false);
-    itemCell.clearFormat();
-    itemCell.setValue(itemValue||"KEEP ITEM").setBackground("#fff7ed").setFontColor("#000000").setFontWeight("normal");
-  }else{
-    itemCell.setDataValidation(oraActionItemRule_()).setFontColor("#000000").setFontWeight("normal");
-  }
-  if(template && template.getRange("B1").getDataValidation()){
-    template.getRange("B1").copyTo(orderCell,SpreadsheetApp.CopyPasteType.PASTE_NORMAL,false);
-    orderCell.clearFormat();
-    orderCell.setValue(orderValue||"PENDING").setBackground("#ecfdf5").setFontColor("#000000").setFontWeight("normal");
-  }else{
-    orderCell.setDataValidation(oraActionOrderRule_()).setFontColor("#000000").setFontWeight("normal");
-  }
-}
-function oraStyleActionCell_(cell){
-  // IMPORTANT: the dropdown CHIP owns the status color.
-  // Keep the letters themselves black so CONFIRM/CANCEL/NO ANSWER colors
-  // appear on the chip/pill only, never as colored text.
-  if(!cell)return;
-  cell.setFontColor("#000000").setFontWeight("normal");
-}
-function oraStyleActionRow_(sheet,row){
-  oraStyleActionCell_(sheet.getRange(row,oraHeaderCol_("Item Action")));
-  oraStyleActionCell_(sheet.getRange(row,oraHeaderCol_("Order Action")));
-}
-function captureOraCustomChipColors(){
-  var ss=SpreadsheetApp.getActiveSpreadsheet();
-  // Capture the exact custom chip rules currently configured by the owner in
-  // CALL CENTER ORDERS!K2:L2 BEFORE applying anything elsewhere.
-  oraSeedUiTemplatesFromCallCenter_(ss);
-  var total=0;
-  for(var i=0;i<ORA_ORDER_SHEETS.length;i++){
-    var sh=ss.getSheetByName(ORA_ORDER_SHEETS[i]);
-    if(!sh)continue;
-    var last=oraLastOrderRow_(sh);
-    if(last<2)continue;
-    var ids=sh.getRange(2,oraHeaderCol_("Order ID"),last-1,1).getDisplayValues();
-    for(var r=0;r<ids.length;r++){
-      if(!String(ids[r][0]||"").trim())continue;
-      var row=r+2;
-      oraApplyActionValidations_(ss,sh,row);
-      oraStyleActionRow_(sh,row);
-      total++;
-    }
-  }
-  SpreadsheetApp.flush();
-  SpreadsheetApp.getActive().toast("Chip style/color MASTER saved and applied to "+total+" order rows.","O-RA",6);
-  return total;
-}
-// Repair ONLY the accidental K/L border/style copying from V12.6.6.
-// Uses the already-saved hidden MASTER chip template, preserves current values,
-// then reapplies the intended order-group borders once per order block.
-function repairOraChipBorders(){
-  var ss=SpreadsheetApp.getActiveSpreadsheet();
-  var template=oraGetUiTemplateSheet_(ss,false);
-  if(!template || !template.getRange("A1").getDataValidation() || !template.getRange("B1").getDataValidation()){
-    throw new Error("Chip MASTER template not found. Run saveOraChipTemplate once after K2/L2 are manually colored.");
-  }
-  var total=0;
-  for(var i=0;i<ORA_ORDER_SHEETS.length;i++){
-    var sh=ss.getSheetByName(ORA_ORDER_SHEETS[i]);
-    if(!sh)continue;
-    var last=oraLastOrderRow_(sh);
-    if(last<2)continue;
-    var ids=sh.getRange(2,oraHeaderCol_("Order ID"),last-1,1).getDisplayValues();
-    var groups={}, order=[];
-    for(var r=0;r<ids.length;r++){
-      var id=String(ids[r][0]||"").trim();
-      if(!id)continue;
-      var row=r+2;
-      oraApplyActionValidations_(ss,sh,row);
-      oraStyleActionRow_(sh,row);
-      if(!groups[id]){groups[id]=[];order.push(id);}
-      groups[id].push(row);
-      total++;
-    }
-    // After copied formatting is stripped, restore only O-RA's intended
-    // order-block borders/grouping — no repeated template borders per row.
-    for(var g=0;g<order.length;g++)oraStyleOrderGroup_(sh,groups[order[g]],order[g]);
-  }
-  SpreadsheetApp.flush();
-  SpreadsheetApp.getActive().toast("Chip colors preserved; accidental copied borders cleaned for "+total+" rows.","O-RA",6);
-  return total;
-}
+  sh.getRange(
+    start,
+    oraCol_("Item Action"),
+    count,
+    1
+  )
+    .setDataValidation(
+      SpreadsheetApp
+        .newDataValidation()
+        .requireValueInList(
+          ["KEEP ITEM", "CANCEL ITEM"],
+          true
+        )
+        .setAllowInvalid(false)
+        .build()
+    );
 
-// Backward-compatible menu/function names. They now use the MASTER colored chips.
-function saveOraChipTemplate(){return captureOraCustomChipColors();}
-function repairOraActionVisuals(){return captureOraCustomChipColors();}
-function repairOraColoredActionChips(){return captureOraCustomChipColors();}
-function oraForceActionDropdownsForSheet_(sheet){
-  if(!sheet || ORA_ORDER_SHEETS.indexOf(sheet.getName())<0) return 0;
-  var last=oraLastOrderRow_(sheet);
-  if(last<2) return 0;
-  var idCol=oraHeaderCol_("Order ID");
-  var ids=sheet.getRange(2,idCol,last-1,1).getDisplayValues();
-  var count=0, ss=sheet.getParent();
-  for(var i=0;i<ids.length;i++){
-    if(!String(ids[i][0]||"").trim()) continue;
-    var row=i+2;
-    oraApplyActionValidations_(ss,sheet,row);
-    oraStyleActionRow_(sheet,row);
-    count++;
-  }
-  return count;
-}
-function repairOraActionDropdowns(){
-  var ss=SpreadsheetApp.getActiveSpreadsheet(), total=0;
-  for(var i=0;i<ORA_ORDER_SHEETS.length;i++){
-    total+=oraForceActionDropdownsForSheet_(ss.getSheetByName(ORA_ORDER_SHEETS[i]));
-  }
-  SpreadsheetApp.flush();
-  SpreadsheetApp.getActive().toast("Item Action / Order Action dropdowns repaired for "+total+" order rows.","O-RA",5);
-  return total;
-}
+  sh.getRange(
+    start,
+    oraCol_("Order Action"),
+    count,
+    1
+  )
+    .setDataValidation(
+      SpreadsheetApp
+        .newDataValidation()
+        .requireValueInList(
+          [
+            "PENDING",
+            "NO ANSWER",
+            "CONFIRM ORDER",
+            "CANCEL ENTIRE ORDER"
+          ],
+          true
+        )
+        .setAllowInvalid(false)
+        .build()
+    );
 
-function oraApplyRowControls_(ss,sheet,row){
-  var qtyCell=sheet.getRange(row,oraHeaderCol_("Qty")),qtyRef=qtyCell.getA1Notation();
-  qtyCell.setDataValidation(SpreadsheetApp.newDataValidation().requireFormulaSatisfied("=AND(ISNUMBER("+qtyRef+"),"+qtyRef+"=INT("+qtyRef+"),"+qtyRef+">=1,"+qtyRef+"<=99)").setAllowInvalid(false).build()).setNote("Type a whole Qty from 1 to 99. Final Total and Offer update automatically.");
-  oraApplyActionValidations_(ss,sheet,row);
-  var applyCell=sheet.getRange(row,oraHeaderCol_("Apply Item Change"));
-  applyCell.setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
-  if(applyCell.getValue()==="")applyCell.setValue(false);
-  oraSetVariantValidation_(ss,sheet,row);
-  oraSetChangeValidation_(ss,sheet,row,1);
-}
-function oraApplyItemFromCatalog_(sheet,row,item){
-  sheet.getRange(row,oraHeaderCol_("Item Name")).setValue(item.name);
-  sheet.getRange(row,oraHeaderCol_("Variant / Color")).setValue(item.variant||"");
-  sheet.getRange(row,oraHeaderCol_("Unit Price (Rs)")).setValue(Number(item.price||0));
-  sheet.getRange(row,oraHeaderCol_("Main Code")).setValue(item.main);
-  sheet.getRange(row,oraHeaderCol_("Item Code")).setValue(item.variantSku||item.main);
-}
-function oraPreviewProductChange_(ss,sheet,row){var item=oraCatalogFromLabel_(ss,sheet.getRange(row,oraHeaderCol_("Change Item To")).getDisplayValue());var old=String(sheet.getRange(row,oraHeaderCol_("Item Name")).getDisplayValue()||"")+" ["+String(sheet.getRange(row,oraHeaderCol_("Item Code")).getDisplayValue()||"")+"]";var cell=sheet.getRange(row,oraHeaderCol_("Change Preview"));cell.setBackground("#ffffff").setFontColor("#111827").setFontWeight("normal").clearNote().setValue(item?(old+"  →  "+item.name+(item.variant?" - "+item.variant:"")+" ["+item.variantSku+"] @ Rs. "+Number(item.price||0).toLocaleString()):"");}
-function oraApplyProductChange_(ss,sheet,row){var item=oraCatalogFromLabel_(ss,sheet.getRange(row,oraHeaderCol_("Change Item To")).getDisplayValue());var applyCell=sheet.getRange(row,oraHeaderCol_("Apply Item Change"));if(!item){applyCell.setValue(false);SpreadsheetApp.getActive().toast("Select a valid product before Apply Item Change.","O-RA Item Change",4);return;}var itemNameCell=sheet.getRange(row,oraHeaderCol_("Item Name")),previewCell=sheet.getRange(row,oraHeaderCol_("Change Preview"));var oldName=String(itemNameCell.getDisplayValue()||"").trim(),oldCode=String(sheet.getRange(row,oraHeaderCol_("Item Code")).getDisplayValue()||"").trim();oraApplyItemFromCatalog_(sheet,row,item);var newName=String(itemNameCell.getDisplayValue()||item.name||"").trim(),newCode=String(sheet.getRange(row,oraHeaderCol_("Item Code")).getDisplayValue()||item.variantSku||item.main||"").trim();sheet.getRange(row,oraHeaderCol_("Change Item To")).clearContent();applyCell.setValue(false);itemNameCell.setBackground("#fed7aa").setFontWeight("bold").setNote("ITEM CHANGED: "+oldName+(oldCode?" ["+oldCode+"]":"")+" → "+newName+(newCode?" ["+newCode+"]":""));previewCell.setValue("✓ ITEM CHANGED").setBackground("#dcfce7").setFontColor("#166534").setFontWeight("bold").setNote(oldName+(oldCode?" ["+oldCode+"]":"")+" → "+newName+(newCode?" ["+newCode+"]":""));oraSetVariantValidation_(ss,sheet,row);oraRecalcOrder_(sheet,sheet.getRange(row,oraHeaderCol_("Order ID")).getDisplayValue());SpreadsheetApp.getActive().toast("Item changed successfully: "+newName,"O-RA Item Change",4);}
-function oraRefreshVariant_(ss,sheet,row,oldValue){
-  var main=String(sheet.getRange(row,oraHeaderCol_("Main Code")).getDisplayValue()||"").trim().toUpperCase(),variant=String(sheet.getRange(row,oraHeaderCol_("Variant / Color")).getDisplayValue()||"").trim().toLowerCase(),all=oraCatalogRows_(ss),found=null,options=[];
-  for(var i=0;i<all.length;i++)if(all[i].main===main&&all[i].variant){options.push(all[i]);if(String(all[i].variant||"").trim().toLowerCase()===variant)found=all[i];}
-  if(!options.length){sheet.getRange(row,oraHeaderCol_("Variant / Color")).setValue(String(oldValue||sheet.getRange(row,oraHeaderCol_("Original Variant / Color")).getDisplayValue()||""));SpreadsheetApp.getActive().toast("This item has no selectable Color / Variant.","O-RA",4);return;}
-  if(!found){sheet.getRange(row,oraHeaderCol_("Variant / Color")).setValue(String(oldValue||options[0].variant||""));oraSetVariantValidation_(ss,sheet,row);SpreadsheetApp.getActive().toast("Select a Color / Variant from the dropdown.","O-RA",4);return;}
-  oraApplyItemFromCatalog_(sheet,row,found);
-  oraSetVariantValidation_(ss,sheet,row);
-  oraRecalcOrder_(sheet,sheet.getRange(row,oraHeaderCol_("Order ID")).getDisplayValue());
-}
-function oraRestoreLockedEdit_(e){if(!e||!e.range||e.range.getNumRows()!==1||e.range.getNumColumns()!==1)return false;var header=String(e.range.getSheet().getRange(1,e.range.getColumn()).getDisplayValue()||"");if(ORA_EDITABLE_HEADERS.indexOf(header)>=0)return false;if(typeof e.oldValue!=="undefined")e.range.setValue(e.oldValue);else e.range.clearContent();SpreadsheetApp.getActive().toast("Protected AUTO field. Edit only Qty, Color, Item Action, Change Item To, Apply Item Change, Order Action or Cancel Reason.","O-RA Safe Edit",5);return true;}
-function oraValidateQtyEdit_(e){var n=Number(e&&e.value);if(Number.isFinite(n)&&n>=1&&n<=99&&Math.floor(n)===n)return true;if(typeof e.oldValue!=="undefined"&&String(e.oldValue)!=="")e.range.setValue(e.oldValue);else e.range.setValue(1);SpreadsheetApp.getActive().toast("Qty must be a whole number from 1 to 99.","O-RA Qty",4);return false;}
-function oraOwnerEditTrigger(e){
-  try{
-    if(!e||!e.range)return;var sheet=e.range.getSheet();if(ORA_ORDER_SHEETS.indexOf(sheet.getName())<0)return;var row=e.range.getRow();if(row<2)return;if(oraRestoreLockedEdit_(e))return;
-    var ss=sheet.getParent(),header=String(sheet.getRange(1,e.range.getColumn()).getDisplayValue()||""),orderNo=sheet.getRange(row,oraHeaderCol_("Order ID")).getDisplayValue();
-    if(header==="Variant / Color")oraRefreshVariant_(ss,sheet,row,e.oldValue);
-    if(header==="Change Item To")oraPreviewProductChange_(ss,sheet,row);
-    if(header==="Apply Item Change"&&String(e.value||"").toUpperCase()==="TRUE")oraApplyProductChange_(ss,sheet,row);
-    if(header==="Order Action"){var rows=oraOrderRows_(sheet,orderNo),vals=[];for(var i=0;i<rows.length;i++)vals.push([String(e.value||"PENDING")]);for(var j=0;j<rows.length;j++){var oc=sheet.getRange(rows[j],oraHeaderCol_("Order Action"));oc.setValue(vals[j][0]);oraStyleActionCell_(oc);}}
-    if(header==="Item Action")oraStyleActionCell_(sheet.getRange(row,oraHeaderCol_("Item Action")));
-    if(header==="Qty"&&!oraValidateQtyEdit_(e))return;
-    if(["Qty","Item Action"].indexOf(header)>=0)oraRecalcOrder_(sheet,orderNo);
-  }catch(err){console.log(err);}
-}
+  sh.getRange(
+    start,
+    oraCol_("Apply Item Change"),
+    count,
+    1
+  )
+    .setDataValidation(
+      SpreadsheetApp
+        .newDataValidation()
+        .requireCheckbox()
+        .build()
+    );
 
+  var cat = oraEnsureSheet_(
+    ss,
+    "PRODUCT CATALOG",
+    ORA_CATALOG_HEADERS
+  );
 
-// ============================================================
-// V13 FINAL PERFORMANCE LAYER
-// - Incoming orders are appended in one setValues() block per source sheet.
-// - Basic controls are applied by range, not row-by-row.
-// - Heavy per-row variant/custom-chip/border work runs in a small background
-//   worker so the Web App response and open Google Sheet stay responsive.
-// ============================================================
-function oraSetVariantValidationCached_(sheet,row,catalogRows){
-  var main=String(sheet.getRange(row,oraHeaderCol_("Main Code")).getDisplayValue()||"").trim().toUpperCase();
-  var seen={},values=[];
-  for(var i=0;i<(catalogRows||[]).length;i++){
-    var c=catalogRows[i];
-    if(c.main===main&&c.variant){
-      var k=String(c.variant||"").toLowerCase();
-      if(!seen[k]){seen[k]=true;values.push(c.variant);}
-    }
-  }
-  var cell=sheet.getRange(row,oraHeaderCol_("Variant / Color"));
-  cell.clearDataValidations().clearNote();
-  if(values.length){
-    cell.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(values,true).setAllowInvalid(false).build())
-      .setBackground("#eef2ff")
-      .setNote("This item has selectable variants/colors. Changing it auto-updates Item Code, Unit Price and Final Total.");
-  }else{
-    cell.setBackground("#f3f4f6").setNote("This item has no selectable color/variant.");
-  }
-}
-function oraApplyActionValidationRange_(ss,sheet,start,count){
-  if(count<=0)return;
-  var template=oraGetUiTemplateSheet_(ss,false);
-  var itemRange=sheet.getRange(start,oraHeaderCol_("Item Action"),count,1);
-  var orderRange=sheet.getRange(start,oraHeaderCol_("Order Action"),count,1);
-  var itemValues=itemRange.getValues();
-  var orderValues=orderRange.getValues();
+  var clr = cat.getLastRow();
 
-  if(template && template.getRange("A1").getDataValidation()){
-    template.getRange("A1").copyTo(itemRange,SpreadsheetApp.CopyPasteType.PASTE_NORMAL,false);
-    itemRange.clearFormat();
-    for(var i=0;i<itemValues.length;i++)if(!String(itemValues[i][0]||"").trim())itemValues[i][0]="KEEP ITEM";
-    itemRange.setValues(itemValues).setBackground("#fff7ed").setFontColor("#000000").setFontWeight("normal");
-  }else{
-    itemRange.setDataValidation(oraActionItemRule_()).setFontColor("#000000").setFontWeight("normal");
-  }
+  var changeRange = sh.getRange(
+    start,
+    oraCol_("Change Item To"),
+    count,
+    1
+  );
 
-  if(template && template.getRange("B1").getDataValidation()){
-    template.getRange("B1").copyTo(orderRange,SpreadsheetApp.CopyPasteType.PASTE_NORMAL,false);
-    orderRange.clearFormat();
-    for(var j=0;j<orderValues.length;j++)if(!String(orderValues[j][0]||"").trim())orderValues[j][0]="PENDING";
-    orderRange.setValues(orderValues).setBackground("#ecfdf5").setFontColor("#000000").setFontWeight("normal");
-  }else{
-    orderRange.setDataValidation(oraActionOrderRule_()).setFontColor("#000000").setFontWeight("normal");
-  }
-}
-
-function oraApplyFastBatchControls_(ss,sheet,start,count){
-  if(count<=0)return;
-
-  // Qty validation in one range operation.
-  var qtyRule=SpreadsheetApp.newDataValidation().requireNumberBetween(1,99).setAllowInvalid(false)
-    .setHelpText("Type a whole Qty from 1 to 99. Final Total and Offer update automatically.").build();
-  sheet.getRange(start,oraHeaderCol_("Qty"),count,1)
-    .setDataValidation(qtyRule)
-    .setNote("Type a whole Qty from 1 to 99. Final Total and Offer update automatically.");
-
-  // Owner-created colored CHIP rules copied to the full Item/Order Action ranges.
-  oraApplyActionValidationRange_(ss,sheet,start,count);
-  sheet.getRange(start,oraHeaderCol_("Apply Item Change"),count,1)
-    .setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
-
-  // Change Item dropdown - one shared range rule.
-  var cat=oraEnsureSheet_(ss,"PRODUCT CATALOG",ORA_CATALOG_HEADERS),last=cat.getLastRow();
-  var changeRange=sheet.getRange(start,oraHeaderCol_("Change Item To"),count,1);
   changeRange.clearDataValidations();
-  if(last>1){
+
+  if (clr > 1) {
     changeRange.setDataValidation(
-      SpreadsheetApp.newDataValidation().requireValueInRange(cat.getRange(2,11,last-1,1),true).setAllowInvalid(false).build()
+      SpreadsheetApp
+        .newDataValidation()
+        .requireValueInRange(
+          cat.getRange(2, 11, clr - 1, 1),
+          true
+        )
+        .setAllowInvalid(false)
+        .build()
     );
   }
 
-  // Variant/Color rules for every incoming row in ONE setDataValidations call.
-  var catalogRows=oraCatalogRows_(ss),byMain={};
-  for(var c=0;c<catalogRows.length;c++){
-    var row=catalogRows[c],main=String(row.main||"").trim().toUpperCase(),variant=String(row.variant||"").trim();
-    if(!main||!variant)continue;
-    if(!byMain[main])byMain[main]=[];
-    if(byMain[main].indexOf(variant)<0)byMain[main].push(variant);
-  }
-  var mains=sheet.getRange(start,oraHeaderCol_("Main Code"),count,1).getDisplayValues();
-  var rules=[],notes=[];
-  for(var i=0;i<count;i++){
-    var values=byMain[String(mains[i][0]||"").trim().toUpperCase()]||[];
-    rules.push([values.length?SpreadsheetApp.newDataValidation().requireValueInList(values,true).setAllowInvalid(false).build():null]);
-    notes.push([values.length?"This item has selectable variants/colors. Changing it auto-updates Item Code, Unit Price and Final Total.":"This item has no selectable color/variant."]);
-  }
-  var variantRange=sheet.getRange(start,oraHeaderCol_("Variant / Color"),count,1);
-  variantRange.setDataValidations(rules).setNotes(notes);
+  var mains = sh.getRange(
+    start,
+    oraCol_("Main Code"),
+    count,
+    1
+  ).getDisplayValues();
 
-  // Fast visual grouping: alternating order blocks with one background matrix
-  // instead of hundreds of per-row formatting calls.
-  var ids=sheet.getRange(start,oraHeaderCol_("Order ID"),count,1).getDisplayValues();
-  var left=[],right=[],weights=[],lastId="",shade="#ffffff",toggle=false;
-  for(var r=0;r<count;r++){
-    var id=String(ids[r][0]||"").trim();
-    if(id!==lastId){toggle=!toggle;shade=toggle?"#f8fafc":"#ffffff";lastId=id;}
-    left.push(new Array(10).fill(shade));
-    right.push(new Array(5).fill(shade));
-    weights.push([r===0||String(ids[r-1][0]||"").trim()!==id?"bold":"normal"]);
-  }
-  sheet.getRange(start,1,count,10).setBackgrounds(left);
-  sheet.getRange(start,13,count,5).setBackgrounds(right);
-  sheet.getRange(start,oraHeaderCol_("Order ID"),count,1).setFontWeights(weights);
+  var byMain = {};
 
-  // Small website/test orders can afford the exact bordered-group styling now.
-  // Large FB/TikTok batches intentionally skip per-order border loops to keep
-  // 100-500+ order uploads responsive; alternating blocks still group them clearly.
-  if(count<=20){
-    var groups={},order=[];
-    for(var g=0;g<count;g++){
-      var key=String(ids[g][0]||"").trim();if(!key)continue;
-      if(!groups[key]){groups[key]=[];order.push(key);}groups[key].push(start+g);
-    }
-    for(var z=0;z<order.length;z++)oraStyleOrderGroup_(sheet,groups[order[z]],order[z]);
-  }
-}
-function oraDeleteUiWorkerTriggers_(){
-  var triggers=ScriptApp.getProjectTriggers();
-  for(var i=0;i<triggers.length;i++){
-    if(triggers[i].getHandlerFunction()===ORA_UI_WORKER){
-      try{ScriptApp.deleteTrigger(triggers[i]);}catch(e){}
-    }
-  }
-}
-function oraEnsureUiWorkerTrigger_(){
-  var triggers=ScriptApp.getProjectTriggers();
-  for(var i=0;i<triggers.length;i++) if(triggers[i].getHandlerFunction()===ORA_UI_WORKER) return;
-  ScriptApp.newTrigger(ORA_UI_WORKER).timeBased().after(1000).create();
-}
-function oraQueueUiWork_(ss,sheetName,start,count){
-  if(count<=0)return;
-  var props=PropertiesService.getDocumentProperties(),queue=[];
-  try{queue=JSON.parse(props.getProperty(ORA_UI_QUEUE_KEY)||"[]");}catch(e){queue=[];}
-  var last=queue.length?queue[queue.length-1]:null;
-  if(last&&last.sheet===sheetName&&Number(last.start)+Number(last.count)===Number(start)){
-    last.count=Number(last.count)+Number(count);
-  }else{
-    queue.push({sheet:sheetName,start:Number(start),count:Number(count),tries:0});
-  }
-  if(queue.length>100)queue=queue.slice(queue.length-100);
-  props.setProperty(ORA_UI_QUEUE_KEY,JSON.stringify(queue));
-  oraEnsureUiWorkerTrigger_();
-}
-function oraApplyUiChunk_(ss,sheet,start,count){
-  if(count<=0)return 0;
-  var ids=sheet.getRange(start,oraHeaderCol_("Order ID"),count,1).getDisplayValues();
-  var catalogRows=oraCatalogRows_(ss),groups={},order=[];
-  var cat=oraEnsureSheet_(ss,"PRODUCT CATALOG",ORA_CATALOG_HEADERS),last=cat.getLastRow();
-  var changeRange=sheet.getRange(start,oraHeaderCol_("Change Item To"),count,1);
-  changeRange.clearDataValidations();
-  if(last>1){
-    changeRange.setDataValidation(
-      SpreadsheetApp.newDataValidation().requireValueInRange(cat.getRange(2,11,last-1,1),true).setAllowInvalid(false).build()
-    );
-  }
-  var done=0;
-  for(var i=0;i<ids.length;i++){
-    var id=String(ids[i][0]||"").trim();
-    if(!id)continue;
-    var row=start+i;
-    oraStyleActionRow_(sheet,row);
-    oraSetVariantValidationCached_(sheet,row,catalogRows);
-    if(!groups[id]){groups[id]=[];order.push(id);}
-    groups[id].push(row);
-    done++;
-  }
-  for(var g=0;g<order.length;g++)oraStyleOrderGroup_(sheet,groups[order[g]],order[g]);
-  return done;
-}
-function oraProcessPendingUiWorker(){
-  oraDeleteUiWorkerTriggers_();
-  var lock=LockService.getDocumentLock();
-  if(!lock.tryLock(5000)){oraEnsureUiWorkerTrigger_();return;}
-  var queue=[],props=PropertiesService.getDocumentProperties(),needsMore=false,job=null;
-  try{
-    try{queue=JSON.parse(props.getProperty(ORA_UI_QUEUE_KEY)||"[]");}catch(e){queue=[];}
-    if(!queue.length){props.deleteProperty(ORA_UI_QUEUE_KEY);return;}
-    job=queue.shift();
-    var ss=SpreadsheetApp.getActiveSpreadsheet();
-    var sheet=ss.getSheetByName(String(job.sheet||""));
-    if(!sheet)throw new Error("UI worker sheet missing: "+job.sheet);
-    var take=Math.min(Math.max(1,Number(job.count||0)),ORA_UI_WORKER_ROWS);
-    oraApplyUiChunk_(ss,sheet,Number(job.start||2),take);
-    if(Number(job.count||0)>take){
-      queue.unshift({sheet:job.sheet,start:Number(job.start||2)+take,count:Number(job.count||0)-take,tries:0});
-    }
-    if(queue.length)props.setProperty(ORA_UI_QUEUE_KEY,JSON.stringify(queue));else props.deleteProperty(ORA_UI_QUEUE_KEY);
-    needsMore=queue.length>0;
-  }catch(err){
-    try{
-      if(job){
-        job.tries=Number(job.tries||0)+1;
-        if(job.tries<=3)queue.unshift(job);
+  if (clr > 1) {
+
+    var catVals = cat.getRange(
+      2,
+      2,
+      clr - 1,
+      4
+    ).getDisplayValues();
+
+    for (var i = 0; i < catVals.length; i++) {
+
+      var m = String(
+        catVals[i][0] || ""
+      ).trim().toUpperCase();
+
+      var v = String(
+        catVals[i][3] || ""
+      ).trim();
+
+      if (!m || !v) continue;
+
+      if (!byMain[m]) byMain[m] = [];
+
+      if (byMain[m].indexOf(v) < 0) {
+        byMain[m].push(v);
       }
-      if(queue.length)props.setProperty(ORA_UI_QUEUE_KEY,JSON.stringify(queue));else props.deleteProperty(ORA_UI_QUEUE_KEY);
-      needsMore=queue.length>0;
-    }catch(ignore){}
-    console.log("O-RA UI worker: "+String(err&&err.message||err));
-  }finally{
-    try{lock.releaseLock();}catch(e){}
-  }
-  if(needsMore)oraEnsureUiWorkerTrigger_();
-}
-function oraBuildOrderRows_(data){
-  var orderNo=String(data.orderId||data.order_id||data.order_number||"").trim();
-  if(!orderNo)throw new Error("Order ID missing");
-  var source=String(data.source||data.order_source||"Website");
-  var items=Array.isArray(data.items)?data.items:[];
-  if(!items.length)throw new Error("No order items for "+orderNo);
-  var normal=Number(data.normalTotal??data.subtotal??0),discount=Number(data.discount??data.special_offer_discount??0),delivery=Number(data.deliveryFee??data.delivery_fee??0),
-      finalTotal=Number(data.finalTotal??data.total_amount??0),offer=String(data.offer??data.offer_label??""),out=[];
-  for(var i=0;i<items.length;i++){
-    var it=items[i]||{},qty=Math.max(1,Number(it.qty??it.quantity??1)),unit=Number(it.unitPrice??it.unit_price??0),
-        line=Math.round(Number((it.lineTotal??(qty*unit))||0)*100)/100,main=String(it.mainCode??it.main_sku??it.sku??""),
-        variant=String(it.variant??it.variant_name??""),sku=String(it.itemCode??it.sku??""),
-        itemName=String(it.itemName??it.product_name??""),row={};
-    row["Order ID"]=orderNo;
-    row["Customer Name"]=i===0?String(data.customerName??data.customer_name??""):"";
-    row["Phone Number"]=i===0?String(data.phoneNumber??data.phone??""):"";
-    row["Address"]=i===0?String(data.address??""):"";
-    row["City"]=i===0?String(data.city??""):"";
-    row["District"]=i===0?String(data.district??""):"";
-    row["Item Name"]=itemName;
-    row["Variant / Color"]=variant;
-    row["Qty"]=qty;
-    row["Unit Price (Rs)"]=unit;
-    row["Item Action"]="KEEP ITEM";
-    row["Change Item To"]="";
-    row["Change Preview"]="";
-    row["Apply Item Change"]=false;
-    row["Order Action"]=i===0?"PENDING":"";
-    row["Cancel Reason"]="";
-    row["Final Total (Rs)"]=finalTotal;
-    row["Offer"]=offer;
-    row["Discount (Rs)"]=discount;
-    row["Source"]=source;
-    row["Main Code"]=main;
-    row["Item Code"]=sku;
-    row["Line Total (Rs)"]=line;
-    row["Normal Total (Rs)"]=normal;
-    row["Delivery Fee (Rs)"]=delivery;
-    row["WhatsApp Number"]=String(data.whatsAppNumber??data.whatsapp??data.phoneNumber??data.phone??"");
-    row["Original Main Code"]=main;
-    row["Original Variant / Color"]=variant;
-    row["Original Item Code"]=sku;
-    row["Original Item Name"]=itemName;
-    row["Original Qty"]=qty;
-    row["Order Time"]=String(data.orderTime??data.created_at??"");
-    row["Lead ID"]=String(data.leadId??data.platform_lead_id??"");
-    row["Imported Status"]=String(data.importedStatus??data.call_center_status??"Pending");
-    row["Last Sync"]=new Date();
-    out.push(ORA_ORDER_HEADERS.map(function(h){return typeof row[h]==="undefined"?"":row[h];}));
-  }
-  return out;
-}
-function oraSyncOrderBatch_(ss,orders){
-  var incoming=Array.isArray(orders)?orders:[];
-  if(!incoming.length)return {status:"orders_batch_synced",synced:0,existing:0,rows:0};
-  var lock=LockService.getDocumentLock();
-  lock.waitLock(15000);
-  try{
-    var bySheet={};
-    for(var i=0;i<incoming.length;i++){
-      var data=incoming[i]||{},orderNo=String(data.order_id||data.order_number||"").trim();
-      if(!orderNo)continue;
-      var sheetName=oraOrderSheetName_(data.order_source||oraSourceFromOrder_(orderNo));
-      if(!bySheet[sheetName])bySheet[sheetName]=[];
-      bySheet[sheetName].push(data);
     }
-    var synced=0,existing=0,totalRows=0,sheets=[];
-    var names=Object.keys(bySheet);
-    for(var n=0;n<names.length;n++){
-      var name=names[n],sheet=oraEnsureSheet_(ss,name,ORA_ORDER_HEADERS),last=oraLastOrderRow_(sheet),existingIds={};
-      if(last>=2){
-        var idVals=sheet.getRange(2,oraHeaderCol_("Order ID"),last-1,1).getDisplayValues();
-        for(var x=0;x<idVals.length;x++){
-          var exId=String(idVals[x][0]||"").trim().toUpperCase();
-          if(exId)existingIds[exId]=true;
+  }
+
+  var rules = [];
+
+  for (var r = 0; r < count; r++) {
+
+    var vals =
+      byMain[
+        String(
+          mains[r][0] || ""
+        ).trim().toUpperCase()
+      ] || [];
+
+    rules.push([
+      vals.length
+        ? SpreadsheetApp
+            .newDataValidation()
+            .requireValueInList(vals, true)
+            .setAllowInvalid(false)
+            .build()
+        : null
+    ]);
+  }
+
+  sh.getRange(
+    start,
+    oraCol_("Variant / Color"),
+    count,
+    1
+  ).setDataValidations(rules);
+
+  oraApplyCityDropdown_(
+    ss,
+    sh,
+    start,
+    count
+  );
+}
+
+function oraEnsureCityTab_(ss) {
+
+  var sh = ss.getSheetByName(
+    ORA_CITY_TAB
+  );
+
+  if (!sh) {
+    sh = ss.insertSheet(ORA_CITY_TAB);
+  }
+
+  if (
+    String(
+      sh.getRange(1, 1).getDisplayValue() || ""
+    ) !== "City"
+  ) {
+
+    sh.getRange(1, 1)
+      .setValue("City");
+
+    sh.getRange(1, 2)
+      .setValue("District");
+
+    sh.getRange(1, 3)
+      .setValue("City • District (auto)");
+
+    sh.getRange(
+      1,
+      1,
+      1,
+      3
+    )
+      .setFontWeight("bold")
+      .setBackground("#111827")
+      .setFontColor("#ffffff");
+
+    sh.setColumnWidth(1, 160);
+    sh.setColumnWidth(2, 140);
+    sh.setColumnWidth(3, 240);
+  }
+
+  return sh;
+}
+
+function oraEnsureCombined_(ss) {
+
+  try {
+
+    var cityTab =
+      ss.getSheetByName(
+        ORA_CITY_TAB
+      );
+
+    if (!cityTab) return;
+
+    var last =
+      cityTab.getLastRow();
+
+    if (last < 2) return;
+
+    var a =
+      cityTab
+        .getRange(
+          2,
+          1,
+          last - 1,
+          1
+        )
+        .getDisplayValues();
+
+    var b =
+      cityTab
+        .getRange(
+          2,
+          2,
+          last - 1,
+          1
+        )
+        .getDisplayValues();
+
+    var combined = [];
+
+    for (var i = 0; i < a.length; i++) {
+
+      var c =
+        String(
+          a[i][0] || ""
+        ).trim();
+
+      var d =
+        String(
+          b[i][0] || ""
+        ).trim();
+
+      combined.push([
+        c
+          ? (
+              c +
+              (
+                d
+                  ? " • " + d
+                  : ""
+              )
+            )
+          : ""
+      ]);
+    }
+
+    var cRange =
+      cityTab.getRange(
+        2,
+        3,
+        Math.max(
+          1,
+          cityTab.getMaxRows() - 1
+        ),
+        1
+      );
+
+    cRange.clearContent();
+
+    if (combined.length) {
+      cityTab
+        .getRange(
+          2,
+          3,
+          combined.length,
+          1
+        )
+        .setValues(combined);
+    }
+
+  } catch (e) {}
+}
+
+function oraApplyCityDropdown_(
+  ss,
+  sh,
+  startRow,
+  count
+) {
+
+  try {
+
+    var cityTab =
+      ss.getSheetByName(
+        ORA_CITY_TAB
+      );
+
+    if (
+      !cityTab ||
+      !sh ||
+      !startRow ||
+      !count
+    ) return;
+
+    var last =
+      cityTab.getLastRow();
+
+    if (last < 2) return;
+
+    var useCol = 3;
+
+    if (
+      cityTab.getLastColumn() < 3 ||
+      !String(
+        cityTab
+          .getRange(2, 3)
+          .getDisplayValue() || ""
+      ).trim()
+    ) {
+      useCol = 1;
+    }
+
+    var src =
+      cityTab.getRange(
+        2,
+        useCol,
+        last - 1,
+        1
+      );
+
+    var rng =
+      sh.getRange(
+        startRow,
+        oraCol_("City"),
+        count,
+        1
+      );
+
+    rng.clearDataValidations();
+
+    rng.setDataValidation(
+      SpreadsheetApp
+        .newDataValidation()
+        .requireValueInRange(
+          src,
+          true
+        )
+        .setAllowInvalid(true)
+        .build()
+    );
+
+  } catch (e) {}
+}
+
+function oraRebuildCityDropdowns() {
+
+  var ss =
+    SpreadsheetApp.getActiveSpreadsheet();
+
+  oraEnsureCityTab_(ss);
+  oraEnsureCombined_(ss);
+
+  var total = 0;
+
+  for (
+    var i = 0;
+    i < ORA_ORDER_SHEETS.length;
+    i++
+  ) {
+
+    var sh =
+      ss.getSheetByName(
+        ORA_ORDER_SHEETS[i]
+      );
+
+    if (!sh) continue;
+
+    var lr =
+      sh.getLastRow();
+
+    if (lr >= 2) {
+
+      oraApplyCityDropdown_(
+        ss,
+        sh,
+        2,
+        lr - 1
+      );
+
+      total += lr - 1;
+    }
+  }
+
+  SpreadsheetApp
+    .getActive()
+    .toast(
+      "City dropdowns rebuilt from CITY LIST tab (" +
+      total +
+      " rows).",
+      "O-RA",
+      4
+    );
+}
+
+function oraSearchCitiesFromTab_(q) {
+
+  try {
+
+    var ss =
+      SpreadsheetApp.getActiveSpreadsheet();
+
+    var cityTab =
+      ss.getSheetByName(
+        ORA_CITY_TAB
+      );
+
+    if (!cityTab) return [];
+
+    var last =
+      cityTab.getLastRow();
+
+    if (last < 2) return [];
+
+    var vals =
+      cityTab
+        .getRange(
+          2,
+          1,
+          last - 1,
+          2
+        )
+        .getDisplayValues();
+
+    var query =
+      String(q || "")
+        .trim()
+        .toLowerCase();
+
+    if (query.length < 3) return [];
+
+    var out = [];
+
+    for (
+      var i = 0;
+      i < vals.length &&
+      out.length < 200;
+      i++
+    ) {
+
+      var city =
+        String(
+          vals[i][0] || ""
+        ).trim();
+
+      var district =
+        String(
+          vals[i][1] || ""
+        ).trim();
+
+      if (!city) continue;
+
+      if (
+        city
+          .toLowerCase()
+          .indexOf(query) < 0
+      ) continue;
+
+      out.push({
+        city: city,
+        district: district
+      });
+    }
+
+    return out;
+
+  } catch (e) {
+    return [];
+  }
+}
+
+function oraAppendOrders_(ss, orders) {
+
+  var bySheet = {
+    "CALL CENTER ORDERS": [],
+    "FACEBOOK ORDERS": [],
+    "TIKTOK ORDERS": []
+  };
+
+  for (
+    var i = 0;
+    i < orders.length;
+    i++
+  ) {
+
+    var o = orders[i] || {};
+
+    var id =
+      String(
+        oraPick_(
+          o,
+          [
+            "orderId",
+            "order_id",
+            "order_number",
+            "orderNo"
+          ]
+        )
+      ).trim();
+
+    if (!id) continue;
+
+    bySheet[
+      oraOrderSheetName_(
+        oraPick_(
+          o,
+          [
+            "source",
+            "order_source"
+          ]
+        )
+      )
+    ].push(o);
+  }
+
+  var summary = {
+    synced: 0,
+    existing: 0,
+    rows: 0
+  };
+
+  for (var sName in bySheet) {
+
+    var list =
+      bySheet[sName];
+
+    if (!list.length) continue;
+
+    var sh =
+      oraEnsureSheet_(
+        ss,
+        sName,
+        ORA_ORDER_HEADERS
+      );
+
+    var existing = {};
+
+    var lr =
+      sh.getLastRow();
+
+    if (lr >= 2) {
+
+      var ids =
+        sh
+          .getRange(
+            2,
+            oraCol_("Order ID"),
+            lr - 1,
+            1
+          )
+          .getDisplayValues();
+
+      for (
+        var x = 0;
+        x < ids.length;
+        x++
+      ) {
+
+        var k =
+          String(
+            ids[x][0] || ""
+          )
+            .trim()
+            .toUpperCase();
+
+        if (k) {
+          existing[k] = true;
         }
       }
-      var out=[],seen={};
-      var list=bySheet[name];
-      for(var j=0;j<list.length;j++){
-        var d=list[j]||{},id=String(d.order_id||d.order_number||"").trim(),key=id.toUpperCase();
-        if(!id||seen[key])continue;
-        seen[key]=true;
-        if(existingIds[key]){existing++;continue;}
-        var rows=oraBuildOrderRows_(d);
-        for(var r=0;r<rows.length;r++)out.push(rows[r]);
-        existingIds[key]=true;
-        synced++;
+    }
+
+    var rows = [];
+    var seen = {};
+
+    for (
+      var j = 0;
+      j < list.length;
+      j++
+    ) {
+
+      var ob =
+        list[j];
+
+      var oid =
+        String(
+          oraPick_(
+            ob,
+            [
+              "orderId",
+              "order_id",
+              "order_number",
+              "orderNo"
+            ]
+          )
+        ).trim();
+
+      var key =
+        oid.toUpperCase();
+
+      if (
+        existing[key] ||
+        seen[key]
+      ) {
+        summary.existing++;
+        continue;
       }
-      if(out.length){
-        var start=last+1;
-        sheet.getRange(start,1,out.length,ORA_ORDER_HEADERS.length).setValues(out);
-        oraApplyFastBatchControls_(ss,sheet,start,out.length);
-        // Rows, dropdowns, variant rules and fast grouping are committed together.
-        // No second UI-hydration request is required.
-        totalRows+=out.length;
-        sheets.push({sheet:name,start:start,rows:out.length});
+
+      seen[key] = true;
+
+      var items =
+        (
+          Array.isArray(ob.items) &&
+          ob.items.length
+        )
+          ? ob.items
+          : [{}];
+
+      var cust =
+        String(
+          oraPick_(
+            ob,
+            [
+              "customerName",
+              "customer_name"
+            ]
+          )
+        );
+
+      var phone =
+        String(
+          oraPick_(
+            ob,
+            [
+              "phoneNumber",
+              "phone_number",
+              "phone"
+            ]
+          )
+        );
+
+      var addr =
+        String(
+          oraPick_(
+            ob,
+            ["address"]
+          )
+        );
+
+      var offer =
+        String(
+          oraPick_(
+            ob,
+            [
+              "offer",
+              "offer_label"
+            ]
+          )
+        ) ||
+        "No Qty Offer";
+
+      var discount =
+        oraNum_(
+          oraPick_(
+            ob,
+            [
+              "discount",
+              "discount_amount",
+              "special_offer_discount"
+            ]
+          )
+        );
+
+      var delivery =
+        oraNum_(
+          oraPick_(
+            ob,
+            [
+              "deliveryFee",
+              "delivery_fee"
+            ]
+          )
+        );
+
+      var normalTotal =
+        oraNum_(
+          oraPick_(
+            ob,
+            [
+              "normalTotal",
+              "normal_total",
+              "subtotal"
+            ]
+          )
+        );
+
+      var finalTotal =
+        oraNum_(
+          oraPick_(
+            ob,
+            [
+              "finalTotal",
+              "final_total",
+              "total_amount"
+            ]
+          )
+        );
+
+      var orderTime =
+        String(
+          oraPick_(
+            ob,
+            [
+              "orderTime",
+              "order_time",
+              "created_at"
+            ]
+          )
+        ) ||
+        new Date();
+
+      var leadId =
+        String(
+          oraPick_(
+            ob,
+            [
+              "leadId",
+              "lead_id",
+              "platform_lead_id"
+            ]
+          )
+        );
+
+      var impStatus =
+        String(
+          oraPick_(
+            ob,
+            [
+              "importedStatus",
+              "imported_status"
+            ]
+          )
+        ) ||
+        "New";
+
+      var city =
+        String(
+          oraPick_(
+            ob,
+            ["city"]
+          )
+        );
+
+      var district =
+        String(
+          oraPick_(
+            ob,
+            ["district"]
+          )
+        );
+
+      var whatsapp =
+        String(
+          oraPick_(
+            ob,
+            [
+              "whatsAppNumber",
+              "whatsapp_number",
+              "phone"
+            ]
+          )
+        );
+
+      var source =
+        String(
+          oraPick_(
+            ob,
+            [
+              "source",
+              "order_source"
+            ]
+          )
+        ) ||
+        "Website";
+
+      for (
+        var it = 0;
+        it < items.length;
+        it++
+      ) {
+
+        var itm =
+          items[it] || {};
+
+        var mainCode =
+          String(
+            oraPick_(
+              itm,
+              [
+                "mainCode",
+                "main_code",
+                "main_sku",
+                "sku"
+              ]
+            )
+          );
+
+        var variant =
+          String(
+            oraPick_(
+              itm,
+              [
+                "variant",
+                "variant_name",
+                "variantColor"
+              ]
+            )
+          );
+
+        var itemCode =
+          String(
+            oraPick_(
+              itm,
+              [
+                "itemCode",
+                "item_code",
+                "sku"
+              ]
+            )
+          );
+
+        var itemName =
+          String(
+            oraPick_(
+              itm,
+              [
+                "itemName",
+                "item_name",
+                "product_name"
+              ]
+            )
+          );
+
+        var qty =
+          Math.max(
+            1,
+            Math.round(
+              oraNum_(
+                oraPick_(
+                  itm,
+                  [
+                    "qty",
+                    "quantity"
+                  ]
+                )
+              )
+            )
+          );
+
+        var unit =
+          oraNum_(
+            oraPick_(
+              itm,
+              [
+                "unitPrice",
+                "unit_price"
+              ]
+            )
+          );
+
+        var line =
+          Math.round(
+            qty * unit * 100
+          ) / 100;
+
+        var first =
+          it === 0;
+
+        rows.push([
+          oid,
+          first ? cust : "",
+          first ? phone : "",
+          first ? addr : "",
+          itemName,
+          itemCode,
+          qty,
+          unit,
+          first ? finalTotal : "",
+          variant,
+          "KEEP ITEM",
+          first ? "PENDING" : "",
+          offer,
+          "",
+          "",
+          "",
+          false,
+          discount,
+          source,
+          mainCode,
+          line,
+          normalTotal,
+          delivery,
+          whatsapp,
+          mainCode,
+          variant,
+          itemCode,
+          itemName,
+          qty,
+          orderTime,
+          leadId,
+          impStatus,
+          new Date(),
+          first ? city : "",
+          first ? district : ""
+        ]);
       }
+
+      summary.synced++;
+      summary.rows += items.length;
     }
-    return {status:"orders_batch_synced",synced:synced,existing:existing,rows:totalRows,sheets:sheets};
-  }finally{
-    try{lock.releaseLock();}catch(e){}
-  }
-}
 
-function oraSyncCatalog_(ss,products,pricing){
-  var sh=oraEnsureSheet_(ss,"PRODUCT CATALOG",ORA_CATALOG_HEADERS),last=sh.getLastRow();
-  if(last>1)sh.getRange(2,1,last-1,ORA_CATALOG_HEADERS.length).clearContent();
-  if(pricing)PropertiesService.getDocumentProperties().setProperty("ORA_PRICING",JSON.stringify(pricing));
-  var rows=[];
-  for(var i=0;i<(products||[]).length;i++){
-    var p=products[i]||{},image=String(p.image||""),label=String(p.variant_sku||p.main_sku||"")+" | "+String(p.main_sku||"")+" | "+String(p.name||"")+(p.variant_name?" | "+String(p.variant_name):"");
-    var rowNumber=i+2;
-    rows.push([image?'=IFERROR(IMAGE(J'+rowNumber+',4,60,60),"")':"",String(p.main_sku||""),String(p.variant_sku||p.main_sku||""),String(p.name||""),String(p.variant_name||""),String(p.type||"Normal"),Number(p.unit_price||0),Number(p.stock_quantity||0),p.active===false?"Inactive":"Active",image,label,new Date()]);
-  }
-  if(rows.length){sh.getRange(2,1,rows.length,ORA_CATALOG_HEADERS.length).setValues(rows);sh.setRowHeights(2,rows.length,64);}
-  // Product catalog updates used to re-style EVERY existing order row synchronously,
-  // which could freeze an open Sheet. Refresh only the shared Change Item dropdown now;
-  // per-row variant rules are refreshed by the lightweight background UI worker.
-  for(var s=0;s<ORA_ORDER_SHEETS.length;s++){
-    var os=oraEnsureSheet_(ss,ORA_ORDER_SHEETS[s],ORA_ORDER_HEADERS),lr=oraLastOrderRow_(os);
-    if(lr>1){
-      // One shared range rule is enough here. Existing action chips and row styling
-      // are left untouched; new orders always receive the latest variant rules.
-      oraSetChangeValidation_(ss,os,2,lr-1);
+    if (!rows.length) continue;
+
+    var startRow =
+      Math.max(
+        2,
+        sh.getLastRow() + 1
+      );
+
+    sh.getRange(
+      startRow,
+      1,
+      rows.length,
+      ORA_ORDER_HEADERS.length
+    ).setValues(rows);
+
+    sh.getRange(
+      startRow,
+      1,
+      rows.length,
+      ORA_ORDER_HEADERS.length
+    ).setBorder(
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      "#94a3b8",
+      SpreadsheetApp.BorderStyle.SOLID
+    );
+
+    var shades = [];
+    var weights = [];
+    var prevKey = "";
+
+    for (
+      var b = 0;
+      b < rows.length;
+      b++
+    ) {
+
+      var rk =
+        String(rows[b][0])
+          .trim()
+          .toUpperCase();
+
+      var cont =
+        rk === prevKey;
+
+      prevKey = rk;
+
+      var base =
+        cont
+          ? "#ffffff"
+          : "#f8fafc";
+
+      var itemAct =
+        String(
+          rows[b][10] || ""
+        );
+
+      var orderAct =
+        String(
+          rows[b][11] || ""
+        );
+
+      var arr = [];
+
+      for (
+        var c = 0;
+        c < ORA_ORDER_HEADERS.length;
+        c++
+      ) {
+
+        if (c === 10) {
+          arr.push(
+            oraItemActionColor_(
+              itemAct
+            )
+          );
+        } else if (c === 11) {
+          arr.push(
+            oraOrderActionColor_(
+              orderAct
+            )
+          );
+        } else {
+          arr.push(base);
+        }
+      }
+
+      shades.push(arr);
+
+      weights.push([
+        cont
+          ? "normal"
+          : "bold"
+      ]);
     }
+
+    sh.getRange(
+      startRow,
+      1,
+      rows.length,
+      ORA_ORDER_HEADERS.length
+    ).setBackgrounds(shades);
+
+    sh.getRange(
+      startRow,
+      oraCol_("Order ID"),
+      rows.length,
+      1
+    ).setFontWeights(weights);
+
+    oraFormatOrderSheet_(
+      sh,
+      startRow,
+      rows.length
+    );
+
+    oraValidationsRange_(
+      ss,
+      sh,
+      startRow,
+      rows.length
+    );
   }
-  SpreadsheetApp.flush();
-  return rows.length;
-}
-function oraSyncOrder_(ss,data){
-  var source=String(data.order_source||"Website"),sheet=oraEnsureSheet_(ss,oraOrderSheetName_(source),ORA_ORDER_HEADERS),orderNo=String(data.order_id||data.order_number||"").trim();
-  if(!orderNo)throw new Error("Order ID missing");
-  var existing=oraOrderRows_(sheet,orderNo);
-  if(existing.length){
-    for(var ex=0;ex<existing.length;ex++){
-      var r=existing[ex];
-      sheet.getRange(r,oraHeaderCol_("Normal Total (Rs)")).setValue(Number(data.subtotal||0));
-      sheet.getRange(r,oraHeaderCol_("Offer")).setValue(String(data.offer_label||""));
-      sheet.getRange(r,oraHeaderCol_("Discount (Rs)")).setValue(Number(data.special_offer_discount||0));
-      sheet.getRange(r,oraHeaderCol_("Delivery Fee (Rs)")).setValue(Number(data.delivery_fee||0));
-      sheet.getRange(r,oraHeaderCol_("Final Total (Rs)")).setValue(Number(data.total_amount||0));
-      sheet.getRange(r,oraHeaderCol_("Imported Status")).setValue(String(data.call_center_status||"Pending"));
-      sheet.getRange(r,oraHeaderCol_("Last Sync")).setValue(new Date());
-    }
-    for(var ec=0;ec<existing.length;ec++)oraApplyRowControls_(ss,sheet,existing[ec]);
-    oraCompactCustomerRows_(sheet,existing);oraStyleOrderGroup_(sheet,existing,orderNo);oraForceActionDropdownsForSheet_(sheet);
-    return {status:"order_existing_preserved",order_id:orderNo,sheet:sheet.getName(),rows:existing.length};
-  }
-  var items=Array.isArray(data.items)?data.items:[];if(!items.length)throw new Error("No order items");
-  var normal=Number(data.subtotal||0),discount=Number(data.special_offer_discount||0),delivery=Number(data.delivery_fee||0),finalTotal=Number(data.total_amount||0),offer=String(data.offer_label||""),out=[];
-  for(var i=0;i<items.length;i++){
-    var it=items[i]||{},qty=Math.max(1,Number(it.quantity||1)),unit=Number(it.unit_price||0),line=Math.round(qty*unit*100)/100,main=String(it.main_sku||it.sku||""),variant=String(it.variant_name||""),sku=String(it.sku||""),row={};
-    row["Order ID"]=orderNo;row["Customer Name"]=i===0?String(data.customer_name||""):"";row["Phone Number"]=i===0?String(data.phone||""):"";row["Address"]=i===0?(String(data.address||"")+(data.city?", "+String(data.city):"")):"";row["Item Name"]=String(it.product_name||"");row["Variant / Color"]=variant;row["Qty"]=qty;row["Unit Price (Rs)"]=unit;row["Item Action"]="KEEP ITEM";row["Change Item To"]="";row["Change Preview"]="";row["Apply Item Change"]=false;row["Order Action"]=i===0?"PENDING":"";row["Cancel Reason"]="";row["Final Total (Rs)"]=finalTotal;row["Offer"]=offer;row["Discount (Rs)"]=discount;row["Source"]=source;row["Main Code"]=main;row["Item Code"]=sku;row["Line Total (Rs)"]=line;row["Normal Total (Rs)"]=normal;row["Delivery Fee (Rs)"]=delivery;row["WhatsApp Number"]=String(data.whatsapp||data.phone||"");row["Original Main Code"]=main;row["Original Variant / Color"]=variant;row["Original Item Code"]=sku;row["Original Item Name"]=String(it.product_name||"");row["Original Qty"]=qty;row["Order Time"]=String(data.created_at||"");row["Lead ID"]=String(data.platform_lead_id||"");row["Imported Status"]=String(data.call_center_status||"Pending");row["Last Sync"]=new Date();
-    out.push(ORA_ORDER_HEADERS.map(function(h){return typeof row[h]==="undefined"?"":row[h];}));
-  }
-  var start=oraLastOrderRow_(sheet)+1;sheet.getRange(start,1,out.length,ORA_ORDER_HEADERS.length).setValues(out);
-  // Keep the call-center dropdowns, but do NOT recalculate the whole order here.
-  // O-RA already sends the final totals, and recalculation/flush can delay the Web App response.
-  for(var rr=start;rr<start+out.length;rr++)oraApplyRowControls_(ss,sheet,rr);
-  var newRows=[];for(var nr=start;nr<start+out.length;nr++)newRows.push(nr);
-  oraCompactCustomerRows_(sheet,newRows);
-  oraStyleOrderGroup_(sheet,newRows,orderNo);
-  oraForceActionDropdownsForSheet_(sheet);
-  return {status:"order_synced",order_id:orderNo,sheet:sheet.getName(),rows:out.length};
-}
-function oraCheckOrder_(ss,orderNo,source){
-  var id=String(orderNo||"").trim();
-  if(!id)return {status:"order_missing",order_id:""};
-  var sh=oraEnsureSheet_(ss,oraOrderSheetName_(source||oraSourceFromOrder_(id)),ORA_ORDER_HEADERS);
-  var rows=oraOrderRows_(sh,id);
-  return rows.length?{status:"order_exists",order_id:id,sheet:sh.getName(),rows:rows.length}:{status:"order_missing",order_id:id,sheet:sh.getName(),rows:0};
-}
 
-function oraHydrateUiChunkRequest_(ss,data){
-  var sheetName=String(data.sheet||"").trim();
-  var start=Math.max(2,Number(data.start||2));
-  var count=Math.min(120,Math.max(0,Number(data.count||0)));
-  if(ORA_ORDER_SHEETS.indexOf(sheetName)<0 || count<=0)return {status:"ui_chunk_skipped",rows:0};
-  var sheet=ss.getSheetByName(sheetName);
-  if(!sheet)return {status:"ui_chunk_skipped",rows:0};
-  var done=oraApplyUiChunk_(ss,sheet,start,count);
-  SpreadsheetApp.flush();
-  return {status:"ui_chunk_styled",rows:done,sheet:sheetName,start:start};
+  return summary;
 }
+// ============================================================
+// PART 2/3
+// O-RA STORE - GOOGLE SHEET SYNC V15.5
+// ============================================================
 
-function activateOraFastSyncV143(){
-  var ss=SpreadsheetApp.getActiveSpreadsheet();
-  oraDeleteUiWorkerTriggers_();
-  PropertiesService.getDocumentProperties().deleteProperty(ORA_UI_QUEUE_KEY);
-  oraEnsureCoreSheets_(ss);
-  SpreadsheetApp.getActive().toast("V14.3 server-fast Sheet sync activated. Existing data was not deleted.","O-RA",5);
-  return "O-RA V14.3 FAST SYNC READY";
-}
+function doGet(e) {
 
-function activateOraV149Safe(){
-  onOpen();
-  SpreadsheetApp.getActive().toast("V14.9 safe item-change feedback activated. Existing Sheet data, dropdown colors and rules were not reset.","O-RA",6);
-  return "O-RA V14.9 READY - NO DATA RESET";
-}
-
-function doPost(e){
-  try{
-    var data={};try{data=JSON.parse(e&&e.postData&&e.postData.contents?e.postData.contents:"{}");}catch(parseErr){throw new Error("Invalid JSON payload");}
-    var ss=SpreadsheetApp.getActiveSpreadsheet();
-    var type=String(data.payload_type||"");
-    if(type==="catalog_sync")return oraJson_({status:"catalog_synced",count:oraSyncCatalog_(ss,Array.isArray(data.products)?data.products:[],data.pricing)});
-    if(type==="operational_clear"){for(var i=0;i<ORA_ORDER_SHEETS.length;i++)oraClearDataRows_(oraEnsureSheet_(ss,ORA_ORDER_SHEETS[i],ORA_ORDER_HEADERS));SpreadsheetApp.flush();return oraJson_({status:"operational_cleared"});}
-    if(type==="live_start_clear"){for(var j=0;j<ORA_ORDER_SHEETS.length;j++)oraClearDataRows_(oraEnsureSheet_(ss,ORA_ORDER_SHEETS[j],ORA_ORDER_HEADERS));oraClearDataRows_(oraEnsureSheet_(ss,"PRODUCT CATALOG",ORA_CATALOG_HEADERS));SpreadsheetApp.flush();return oraJson_({status:"live_start_cleared"});}
-    if(type==="order_delete" || data.action==="deleteOrder"){var removed=oraDeleteOrder_(ss,data.orderNo||data.orderId||data.order_number||data.order_id,data.order_source);return oraJson_({status:"order_deleted",removed:removed});}
-    if(type==="order_check")return oraJson_(oraCheckOrder_(ss,data.order_number||data.order_id,data.order_source));
-    if(type==="order_batch_sync")return oraJson_(oraSyncOrderBatch_(ss,Array.isArray(data.orders)?data.orders:[]));
-    if(type==="ui_style_chunk")return oraJson_(oraHydrateUiChunkRequest_(ss,data));
-    if(type==="order_sync"){var result=oraSyncOrder_(ss,data);return oraJson_(result);}
-    return oraJson_({status:"error",message:"Unknown payload_type: "+type});
-  }catch(err){return oraJson_({status:"error",message:String(err&&err.message||err)});}
-}
-function doGet(){return oraJson_({status:"ok",service:"O-RA Google Sheet Sync V14.9 Final"});}`;
-
-const proxyPost = async (webhookUrl:string,payload:any) => {
-  const response=await fetch('/api/google-sheets/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({webhookUrl,payload})});
-  const result=await response.json().catch(()=>({}));
-  if(!response.ok || !result?.ok) throw new Error(result?.error || `Google Sheet request failed (${response.status}).`);
-  return result;
-};
-
-const scheduleSheetUiHydration = (webhookUrl:string,sheets:any[]) => {
-  const jobs:Array<{sheet:string;start:number;count:number}>=[];
-  for(const raw of Array.isArray(sheets)?sheets:[]){
-    const sheet=String(raw?.sheet||'');
-    let start=Math.max(2,Number(raw?.start||2));
-    let remaining=Math.max(0,Number(raw?.rows||0));
-    while(remaining>0){
-      const count=Math.min(80,remaining);
-      jobs.push({sheet,start,count});
-      start+=count;remaining-=count;
-    }
-  }
-  jobs.forEach((job,index)=>{
-    window.setTimeout(()=>{
-      void proxyPost(webhookUrl,{payload_type:'ui_style_chunk',...job}).catch(()=>undefined);
-    },300+index*350);
+  return oraJson_({
+    ok: true,
+    service: "O-RA Google Sheet Sync",
+    version: ORA_VERSION,
+    timestamp: new Date().toISOString()
   });
-};
+}
 
-const orderOfferLabel = (order:Order,settings?:StoreSettings) => {
-  const qty=(order.items||[]).reduce((sum,it)=>sum+Math.max(1,Number(it.quantity||1)),0);
-  const discount=Math.max(0,Number(order.special_offer_discount||0));
-  if(discount<=0) return 'No Qty Offer';
-  if(settings?.multi_buy_discount_enabled){
-    const tiers=[
-      {min:Number(settings.multi_buy_tier1_min??2),max:Number(settings.multi_buy_tier1_max??3),rate:Number(settings.multi_buy_tier1_rate??5)},
-      {min:Number(settings.multi_buy_tier2_min??4),max:Number(settings.multi_buy_tier2_max??5),rate:Number(settings.multi_buy_tier2_rate??7.5)},
-      {min:Number(settings.multi_buy_tier3_min??6),max:Number(settings.multi_buy_tier3_max??10),rate:Number(settings.multi_buy_tier3_rate??10)},
-    ];
-    const tier=tiers.find(t=>qty>=t.min&&qty<=t.max&&t.rate>0);
-    if(tier) return `Qty Offer ${tier.rate}% (${qty} items)`;
+function doPost(e) {
+
+  try {
+
+    if (
+      !e ||
+      !e.postData ||
+      !e.postData.contents
+    ) {
+      return oraJson_({
+        ok: false,
+        error: "Missing POST body"
+      });
+    }
+
+    var body =
+      JSON.parse(
+        e.postData.contents
+      );
+          console.log("ORA_DEBUG", JSON.stringify(body).slice(0, 3000));
+
+
+    var action =
+      String(
+        body.action ||
+        body.type ||
+        ""
+      ).trim();
+          // ORA FIX: accept server payload_type format (no column changes)
+    if (!action && body.payload_type) {
+        var pt = String(body.payload_type || "").trim();
+        if (pt === "orders_sync" || pt === "order_batch_sync" || pt === "order_sync") {
+            action = "order_batch_sync";
+        } else {
+            action = pt;
+        }
+    }
+    if (body.order) { body.orders = [body.order]; }
+        var rawOrders = [];
+    if (Array.isArray(body.orders)) { rawOrders = body.orders; }
+    else if (body.order) { rawOrders = [body.order]; }
+    else if (Array.isArray(body.order_rows)) { rawOrders = body.order_rows; }
+    else if (body.order_row) { rawOrders = [body.order_row]; }
+    else if (body.groups) { for (var gk in body.groups) { if (Array.isArray(body.groups[gk])) rawOrders = rawOrders.concat(body.groups[gk]); } }
+    var normOrders = [];
+    for (var ni = 0; ni < rawOrders.length; ni++) {
+        var src = rawOrders[ni] || {};
+        var id = src.order_id || src.order_number || src.orderId || src.orderNo || src['Order ID'] || '';
+        if (!id) continue;
+        var items = src.items || [];
+        if (!items.length) {
+            items = [{
+                itemName: src['Item Name'] || src.item_name || src.product_name || src.name || '',
+                itemCode: src['Item Code'] || src.item_code || src.sku || '',
+                qty: src['Qty'] || src.qty || src.quantity || 1,
+                unitPrice: src['Unit Price (Rs)'] || src.unit_price || src.price || 0,
+                variantName: src['Variant / Color'] || src.variant_name || ''
+            }];
+        }
+        for (var ii = 0; ii < items.length; ii++) {
+            var it = items[ii] || {};
+            var itemName = it.itemName || it.item_name || it.product_name || it.name || it['Item Name'] || '';
+            var itemCode = it.itemCode || it.item_code || it.sku || it['Item Code'] || '';
+            var qty = Number(it.qty || it.quantity || it['Qty'] || 1) || 1;
+            var unitPrice = Number(it.unitPrice || it.unit_price || it.price || it['Unit Price (Rs)'] || 0) || 0;
+            var lineTotal = Number(it.lineTotal || it.line_total || it['Line Total (Rs)'] || (qty * unitPrice)) || 0;
+            var variantName = it.variantName || it.variant_name || it['Variant / Color'] || src['Variant / Color'] || '';
+            normOrders.push({
+                order_id: id,
+                order_number: id,
+                source: src.source || src.order_source || src['Source'] || 'Website',
+                customer_name: src.customer_name || src.customerName || src['Customer Name'] || '',
+                phone: src.phone || src.phone_number || src.phoneNumber || src['Phone Number'] || '',
+                whatsapp: src.whatsapp || src.whatsAppNumber || src['WhatsApp Number'] || '',
+                address: src.address || src['Address'] || '',
+                city: src.city || src['City'] || '',
+                district: src.district || src['District'] || '',
+                itemName: itemName, item_name: itemName, 'Item Name': itemName, product_name: itemName, name: itemName,
+                itemCode: itemCode, item_code: itemCode, sku: itemCode, 'Item Code': itemCode,
+                qty: qty, quantity: qty, 'Qty': qty,
+                unitPrice: unitPrice, unit_price: unitPrice, price: unitPrice, 'Unit Price (Rs)': unitPrice,
+                variantName: variantName, variant_name: variantName, 'Variant / Color': variantName,
+                lineTotal: lineTotal, line_total: lineTotal, 'Line Total (Rs)': lineTotal,
+                total_amount: src.total_amount || src.total || src.finalTotal || src['Final Total (Rs)'] || lineTotal,
+                final_total: src.total_amount || src.total || src.finalTotal || src['Final Total (Rs)'] || lineTotal,
+                subtotal: src.subtotal || src.normalTotal || src['Normal Total (Rs)'] || 0,
+                discount: src.discount || src['Discount (Rs)'] || 0,
+                delivery_fee: src.delivery_fee || src.deliveryFee || src['Delivery Fee (Rs)'] || 0,
+                created_at: src.created_at || src.orderTime || src['Order Time'] || '',
+                order_time: src.created_at || src.orderTime || src['Order Time'] || '',
+                call_center_status: src.call_center_status || src.importedStatus || src['Imported Status'] || 'Pending',
+                imported_status: src.call_center_status || src.importedStatus || src['Imported Status'] || 'Pending',
+                items: [{ itemName: itemName, item_name: itemName, product_name: itemName, name: itemName, itemCode: itemCode, item_code: itemCode, sku: itemCode, qty: qty, quantity: qty, unitPrice: unitPrice, unit_price: unitPrice, price: unitPrice, lineTotal: lineTotal, line_total: lineTotal, variant_name: variantName }]
+            });
+        }
+    }
+    body.orders = normOrders;
+    if (!action && normOrders.length) { action = "order_batch_sync"; }
+    console.log("ORA_DEBUG", SpreadsheetApp.getActiveSpreadsheet().getName(), JSON.stringify(body).slice(0, 3000));
+    var ss =
+      SpreadsheetApp
+        .getActiveSpreadsheet();
+
+    // --------------------------------------------------------
+    // ORDER BATCH SYNC
+    // --------------------------------------------------------
+
+    if (
+      action === "order_batch_sync" ||
+      action === "orders_batch_sync" ||
+      action === "sync_orders"
+    ) {
+
+      var orders =
+        Array.isArray(body.orders)
+          ? body.orders
+          : [];
+
+      if (!orders.length) {
+        return oraJson_({
+          ok: true,
+          status: "orders_synced",
+          synced: 0,
+          rows: 0
+        });
+      }
+
+      var result =
+        oraAppendOrders_(
+          ss,
+          orders
+        );
+
+      return oraJson_({
+        ok: true,
+        status: "orders_synced",
+        synced: result.synced,
+        existing: result.existing,
+        rows: result.rows,
+        timestamp:
+          new Date().toISOString()
+      });
+    }
+
+    // --------------------------------------------------------
+    // SINGLE ORDER SYNC
+    // --------------------------------------------------------
+
+    if (
+      action === "order_sync" ||
+      action === "sync_order"
+    ) {
+
+      var one =
+        body.order ||
+        body.data ||
+        body;
+
+      var resultOne =
+        oraAppendOrders_(
+          ss,
+          [one]
+        );
+
+      return oraJson_({
+        ok: true,
+        status: "orders_synced",
+        synced: resultOne.synced,
+        existing: resultOne.existing,
+        rows: resultOne.rows,
+        timestamp:
+          new Date().toISOString()
+      });
+    }
+
+    // --------------------------------------------------------
+    // CITY SEARCH
+    // --------------------------------------------------------
+
+    if (
+      action === "city_search" ||
+      action === "search_city"
+    ) {
+
+      var q =
+        String(
+          body.query ||
+          body.q ||
+          body.city ||
+          ""
+        );
+
+      return oraJson_({
+        ok: true,
+        status: "city_search",
+        results:
+          oraSearchCitiesFromTab_(q)
+      });
+    }
+
+    // --------------------------------------------------------
+    // CITY DROPDOWN REBUILD
+    // --------------------------------------------------------
+
+    if (
+      action === "rebuild_city_dropdowns"
+    ) {
+
+      oraRebuildCityDropdowns();
+
+      return oraJson_({
+        ok: true,
+        status:
+          "city_dropdowns_rebuilt"
+      });
+    }
+
+    // --------------------------------------------------------
+    // HEALTH CHECK
+    // --------------------------------------------------------
+
+    if (
+      action === "health" ||
+      action === "ping"
+    ) {
+
+      return oraJson_({
+        ok: true,
+        status: "ok",
+        version: ORA_VERSION,
+        timestamp:
+          new Date().toISOString()
+      });
+    }
+
+    return oraJson_({
+      ok: false,
+      error:
+        "Unknown action: " + action
+    });
+
+  } catch (err) {
+
+    return oraJson_({
+      ok: false,
+      error:
+        String(
+          err &&
+          err.message
+            ? err.message
+            : err
+        )
+    });
   }
-  return `Order Offer Rs. ${Math.round(discount*100)/100}`;
-};
+}
 
 
-const buildOrderSyncPayload = (order:Order,settings?:StoreSettings) => ({
-  orderId:order.order_number,
-  source:order.order_source,
-  customerName:order.customer_name,
-  phoneNumber:order.phone,
-  whatsAppNumber:order.whatsapp,
-  address:order.address,
-  city:order.city,
-  district:order.district,
-  orderTime:order.created_at,
-  leadId:order.platform_lead_id||'',
-  importedStatus:order.call_center_status||'Pending',
-  offer:orderOfferLabel(order,settings),
-  discount:Number(order.special_offer_discount||0),
-  deliveryFee:Number(order.delivery_fee||0),
-  normalTotal:Number(order.subtotal||0),
-  finalTotal:Number(order.total_amount||0),
-  items:(order.items||[]).map(it=>({
-    itemName:it.product_name,
-    itemCode:it.sku,
-    qty:it.quantity,
-    unitPrice:it.unit_price,
-    lineTotal:Math.round(Number(it.quantity||1)*Number(it.unit_price||0)*100)/100,
-    variant:it.variant_name||'',
-    mainCode:it.main_sku||it.sku,
-  })),
-});
+// ============================================================
+// CITY / DISTRICT AUTO APPLY
+// ============================================================
 
-export async function syncOrdersBatchToGoogleSheets(
-  orders:Order[],
-  webhookUrl:string,
-  settings?:StoreSettings,
-):Promise<{success:boolean;message:string;syncedCount:number;existingCount:number}> {
-  if(!webhookUrl || !webhookUrl.startsWith('http')) return {success:false,message:'Google Sheets Webhook URL is not configured.',syncedCount:0,existingCount:0};
-  const eligible=(orders||[]).filter(order =>
-    order.order_source!=='Manual Admin' &&
-    !(order.order_source==='Website' && order.payment_method==='Bank Payment' && order.payment_verification_status!=='Approved')
+function oraFindCityDistrict_(cityText) {
+
+  var raw =
+    String(
+      cityText || ""
+    ).trim();
+
+  if (!raw) {
+    return {
+      city: "",
+      district: ""
+    };
+  }
+
+  // If dropdown value is "City • District"
+  if (
+    raw.indexOf("•") >= 0
+  ) {
+
+    var parts =
+      raw.split("•");
+
+    return {
+      city:
+        String(
+          parts[0] || ""
+        ).trim(),
+
+      district:
+        String(
+          parts.slice(1).join("•") || ""
+        ).trim()
+    };
+  }
+
+  var ss =
+    SpreadsheetApp
+      .getActiveSpreadsheet();
+
+  var cityTab =
+    ss.getSheetByName(
+      ORA_CITY_TAB
+    );
+
+  if (!cityTab) {
+    return {
+      city: raw,
+      district: ""
+    };
+  }
+
+  var last =
+    cityTab.getLastRow();
+
+  if (last < 2) {
+    return {
+      city: raw,
+      district: ""
+    };
+  }
+
+  var vals =
+    cityTab
+      .getRange(
+        2,
+        1,
+        last - 1,
+        2
+      )
+      .getDisplayValues();
+
+  var target =
+    raw.toLowerCase();
+
+  for (
+    var i = 0;
+    i < vals.length;
+    i++
+  ) {
+
+    var city =
+      String(
+        vals[i][0] || ""
+      ).trim();
+
+    var district =
+      String(
+        vals[i][1] || ""
+      ).trim();
+
+    if (
+      city.toLowerCase() === target
+    ) {
+
+      return {
+        city: city,
+        district: district
+      };
+    }
+  }
+
+  return {
+    city: raw,
+    district: ""
+  };
+}
+
+
+function oraApplyCityDistrictRow_(
+  sh,
+  row
+) {
+
+  if (!sh || row < 2) return;
+
+  var cityCol =
+    oraCol_("City");
+
+  var districtCol =
+    oraCol_("District");
+
+  if (
+    cityCol <= 0 ||
+    districtCol <= 0
+  ) return;
+
+  var raw =
+    String(
+      sh.getRange(
+        row,
+        cityCol
+      ).getDisplayValue() || ""
+    ).trim();
+
+  if (!raw) return;
+
+  var found =
+    oraFindCityDistrict_(
+      raw
+    );
+
+  // IMPORTANT:
+  // City column receives ONLY City.
+  // District column receives ONLY District.
+  sh.getRange(
+    row,
+    cityCol
+  ).setValue(
+    found.city
   );
-  if(!eligible.length) return {success:true,message:'No eligible orders to sync.',syncedCount:0,existingCount:0};
-  try{
-    const proxyResult=await proxyPost(webhookUrl,{payload_type:'order_batch_sync',orders:eligible.map(order=>buildOrderSyncPayload(order,settings))});
-    const result=proxyResult?.result||{};
-    const status=String(result?.status||'').trim();
-    if(status!=='orders_batch_synced') throw new Error(`Apps Script returned unexpected batch status: ${status||'no status'}`);
-    const syncedCount=Math.max(0,Number(result?.synced||0));
-    const existingCount=Math.max(0,Number(result?.existing||0));
-    return {success:true,message:`Batch synced ${syncedCount} new order(s); ${existingCount} already existed.`,syncedCount,existingCount};
-  }catch(e:any){
-    return {success:false,message:e?.message||'Google Sheet batch sync failed.',syncedCount:0,existingCount:0};
+
+  sh.getRange(
+    row,
+    districtCol
+  ).setValue(
+    found.district
+  );
+}
+
+
+// ============================================================
+// ORDER ACTION / ITEM ACTION HELPERS
+// ============================================================
+
+function oraSetOrderActionColor_(
+  sh,
+  row
+) {
+
+  if (!sh || row < 2) return;
+
+  var col =
+    oraCol_("Order Action");
+
+  if (col <= 0) return;
+
+  var value =
+    String(
+      sh.getRange(
+        row,
+        col
+      ).getDisplayValue() || ""
+    );
+
+  sh.getRange(
+    row,
+    col
+  ).setBackground(
+    oraOrderActionColor_(
+      value
+    )
+  );
+}
+
+
+function oraSetItemActionColor_(
+  sh,
+  row
+) {
+
+  if (!sh || row < 2) return;
+
+  var col =
+    oraCol_("Item Action");
+
+  if (col <= 0) return;
+
+  var value =
+    String(
+      sh.getRange(
+        row,
+        col
+      ).getDisplayValue() || ""
+    );
+
+  sh.getRange(
+    row,
+    col
+  ).setBackground(
+    oraItemActionColor_(
+      value
+    )
+  );
+}
+
+
+// ============================================================
+// SAFE CITY / DISTRICT REPAIR
+// ============================================================
+
+function repairCityDistrictColumns() {
+
+  var ss =
+    SpreadsheetApp
+      .getActiveSpreadsheet();
+
+  var cityTab =
+    oraEnsureCityTab_(ss);
+
+  oraEnsureCombined_(ss);
+
+  /*
+   IMPORTANT:
+   This does NOT clear any order sheet.
+   It does NOT reorder columns.
+   It does NOT delete existing columns.
+   It only adds missing City / District columns
+   at the END if they do not already exist.
+  */
+
+  var repaired = [];
+
+  for (
+    var i = 0;
+    i < ORA_ORDER_SHEETS.length;
+    i++
+  ) {
+
+    var name =
+      ORA_ORDER_SHEETS[i];
+
+    var sh =
+      ss.getSheetByName(name);
+
+    if (!sh) continue;
+
+    var last =
+      Math.max(
+        1,
+        sh.getLastColumn()
+      );
+
+    var headers =
+      sh
+        .getRange(
+          1,
+          1,
+          1,
+          last
+        )
+        .getDisplayValues()[0];
+
+    var hasCity = false;
+    var hasDistrict = false;
+
+    for (
+      var h = 0;
+      h < headers.length;
+      h++
+    ) {
+
+      var hv =
+        String(
+          headers[h] || ""
+        ).trim();
+
+      if (hv === "City")
+        hasCity = true;
+
+      if (hv === "District")
+        hasDistrict = true;
+    }
+
+    var add = [];
+
+    if (!hasCity)
+      add.push("City");
+
+    if (!hasDistrict)
+      add.push("District");
+
+    if (add.length) {
+
+      var start =
+        sh.getLastColumn() + 1;
+
+      if (
+        sh.getMaxColumns() <
+        start + add.length - 1
+      ) {
+
+        sh.insertColumnsAfter(
+          sh.getMaxColumns(),
+          start +
+            add.length -
+            1 -
+            sh.getMaxColumns()
+        );
+      }
+
+      sh.getRange(
+        1,
+        start,
+        1,
+        add.length
+      ).setValues([add]);
+    }
+
+    var lr =
+      sh.getLastRow();
+
+    if (lr >= 2) {
+
+      oraApplyCityDropdown_(
+        ss,
+        sh,
+        2,
+        lr - 1
+      );
+
+      repaired.push(
+        name +
+        ": " +
+        sh.getLastColumn() +
+        " columns"
+      );
+    }
+  }
+
+  SpreadsheetApp
+    .getActive()
+    .toast(
+      "City / District repaired safely. Existing columns were not removed or moved.",
+      "O-RA",
+      5
+    );
+
+  Logger.log(
+    repaired.join("\n")
+  );
+}
+
+
+// ============================================================
+// CITY LIST IMPORT / REBUILD
+// ============================================================
+
+function refreshCityListCombined() {
+
+  var ss =
+    SpreadsheetApp
+      .getActiveSpreadsheet();
+
+  oraEnsureCityTab_(ss);
+  oraEnsureCombined_(ss);
+  oraRebuildCityDropdowns();
+
+  SpreadsheetApp
+    .getActive()
+    .toast(
+      "CITY LIST combined values and order dropdowns refreshed.",
+      "O-RA",
+      5
+    );
+}
+
+
+// ============================================================
+// BASIC SETUP
+// ============================================================
+
+function setupOraCallCenterSheet() {
+
+  var ss =
+    SpreadsheetApp
+      .getActiveSpreadsheet();
+
+  oraEnsureCityTab_(ss);
+  oraEnsureCombined_(ss);
+
+  for (
+    var i = 0;
+    i < ORA_ORDER_SHEETS.length;
+    i++
+  ) {
+
+    var sh =
+      oraEnsureSheet_(
+        ss,
+        ORA_ORDER_SHEETS[i],
+        ORA_ORDER_HEADERS
+      );
+
+    oraFormatOrderSheet_(
+      sh,
+      0,
+      0
+    );
+
+    var lr =
+      sh.getLastRow();
+
+    if (lr >= 2) {
+
+      oraValidationsRange_(
+        ss,
+        sh,
+        2,
+        lr - 1
+      );
+    }
+  }
+
+  oraRebuildCityDropdowns();
+
+  SpreadsheetApp
+    .getActive()
+    .toast(
+      "O-RA setup completed safely.",
+      "O-RA",
+      5
+    );
+}
+
+
+// ============================================================
+// WEB ORDER CITY / DISTRICT UPDATE
+// ============================================================
+
+function applyCityDistrictToAllOrders() {
+
+  var ss =
+    SpreadsheetApp
+      .getActiveSpreadsheet();
+
+  var total = 0;
+
+  for (
+    var s = 0;
+    s < ORA_ORDER_SHEETS.length;
+    s++
+  ) {
+
+    var sh =
+      ss.getSheetByName(
+        ORA_ORDER_SHEETS[s]
+      );
+
+    if (!sh) continue;
+
+    var lr =
+      sh.getLastRow();
+
+    if (lr < 2) continue;
+
+    var cityCol =
+      oraCol_("City");
+
+    var districtCol =
+      oraCol_("District");
+
+    if (
+      cityCol <= 0 ||
+      districtCol <= 0
+    ) continue;
+
+    var cities =
+      sh.getRange(
+        2,
+        cityCol,
+        lr - 1,
+        1
+      ).getDisplayValues();
+
+    var output = [];
+
+    for (
+      var r = 0;
+      r < cities.length;
+      r++
+    ) {
+
+      var found =
+        oraFindCityDistrict_(
+          cities[r][0]
+        );
+
+      output.push([
+        found.city,
+        found.district
+      ]);
+
+      if (
+        found.city ||
+        found.district
+      ) {
+        total++;
+      }
+    }
+
+    sh.getRange(
+      2,
+      cityCol,
+      output.length,
+      2
+    ).setValues(
+      output
+    );
+  }
+
+  SpreadsheetApp
+    .getActive()
+    .toast(
+      "City / District applied to " +
+      total +
+      " rows.",
+      "O-RA",
+      5
+    );
+}
+
+
+// ============================================================
+// DELETE ORDER -> DELETED ORDERS
+// ============================================================
+
+function oraEnsureDeletedSheet_(ss) {
+
+  var sh =
+    ss.getSheetByName(
+      ORA_DELETED_SHEET
+    );
+
+  if (!sh) {
+
+    sh =
+      ss.insertSheet(
+        ORA_DELETED_SHEET
+      );
+  }
+
+  return sh;
+}
+
+
+function oraDeleteOrderById_(
+  orderId
+) {
+
+  var ss =
+    SpreadsheetApp
+      .getActiveSpreadsheet();
+
+  var target =
+    String(
+      orderId || ""
+    ).trim();
+
+  if (!target) {
+    return {
+      ok: false,
+      error: "Missing order ID"
+    };
+  }
+
+  var deleted =
+    oraEnsureDeletedSheet_(
+      ss
+    );
+
+  var moved = 0;
+
+  for (
+    var s = 0;
+    s < ORA_ORDER_SHEETS.length;
+    s++
+  ) {
+
+    var sh =
+      ss.getSheetByName(
+        ORA_ORDER_SHEETS[s]
+      );
+
+    if (!sh) continue;
+
+    var lr =
+      sh.getLastRow();
+
+    if (lr < 2) continue;
+
+    var idCol =
+      oraCol_("Order ID");
+
+    var ids =
+      sh.getRange(
+        2,
+        idCol,
+        lr - 1,
+        1
+      ).getDisplayValues();
+
+    for (
+      var r = ids.length - 1;
+      r >= 0;
+      r--
+    ) {
+
+      if (
+        String(
+          ids[r][0] || ""
+        ).trim() !== target
+      ) continue;
+
+      var row =
+        r + 2;
+
+      var last =
+        sh.getLastColumn();
+
+      var values =
+        sh.getRange(
+          row,
+          1,
+          1,
+          last
+        ).getValues()[0];
+
+      if (
+        deleted.getLastRow() === 0
+      ) {
+
+        var headers =
+          sh.getRange(
+            1,
+            1,
+            1,
+            last
+          ).getValues()[0];
+
+        deleted
+          .getRange(
+            1,
+            1,
+            1,
+            headers.length
+          )
+          .setValues([
+            headers
+          ]);
+      }
+
+      var destRow =
+        deleted.getLastRow() + 1;
+
+      deleted
+        .getRange(
+          destRow,
+          1,
+          1,
+          values.length
+        )
+        .setValues([
+          values
+        ]);
+
+      sh.deleteRow(row);
+
+      moved++;
+    }
+  }
+
+  return {
+    ok: true,
+    deleted: moved,
+    orderId: target
+  };
+}
+
+
+// ============================================================
+// DELETE / CLEAR ENDPOINTS
+// ============================================================
+
+function oraDeleteOrderRequest_(body) {
+
+  var id =
+    oraPick_(
+      body,
+      [
+        "orderId",
+        "order_id",
+        "id"
+      ]
+    );
+
+  return oraDeleteOrderById_(
+    id
+  );
+}
+
+
+function oraClearTestOrders_() {
+
+  var ss =
+    SpreadsheetApp
+      .getActiveSpreadsheet();
+
+  var removed = 0;
+
+  for (
+    var s = 0;
+    s < ORA_ORDER_SHEETS.length;
+    s++
+  ) {
+
+    var sh =
+      ss.getSheetByName(
+        ORA_ORDER_SHEETS[s]
+      );
+
+    if (!sh) continue;
+
+    var lr =
+      sh.getLastRow();
+
+    if (lr < 2) continue;
+
+    var idCol =
+      oraCol_("Order ID");
+
+    var ids =
+      sh.getRange(
+        2,
+        idCol,
+        lr - 1,
+        1
+      ).getDisplayValues();
+
+    for (
+      var r = ids.length - 1;
+      r >= 0;
+      r--
+    ) {
+
+      var id =
+        String(
+          ids[r][0] || ""
+        ).trim();
+
+      if (
+        id.toUpperCase()
+          .indexOf("TEST-") === 0 ||
+        id.toUpperCase()
+          .indexOf("WEB-TEST-") === 0
+      ) {
+
+        sh.deleteRow(
+          r + 2
+        );
+
+        removed++;
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    removed: removed
+  };
+}
+// ============================================================
+// PART 3/3
+// ============================================================
+
+function onEdit(e) {
+
+  try {
+
+    if (!e || !e.range) return;
+
+    var sh =
+      e.range.getSheet();
+
+    var name =
+      sh.getName();
+
+    var row =
+      e.range.getRow();
+
+    var col =
+      e.range.getColumn();
+
+    if (row < 2) return;
+
+    // --------------------------------------------------------
+    // CITY COLUMN
+    // City -> District
+    // --------------------------------------------------------
+
+    if (
+      ORA_ORDER_SHEETS.indexOf(name) >= 0 &&
+      col === oraCol_("City")
+    ) {
+
+      oraApplyCityDistrictRow_(
+        sh,
+        row
+      );
+
+      return;
+    }
+
+    // --------------------------------------------------------
+    // ITEM ACTION
+    // --------------------------------------------------------
+
+    if (
+      ORA_ORDER_SHEETS.indexOf(name) >= 0 &&
+      col === oraCol_("Item Action")
+    ) {
+
+      oraSetItemActionColor_(
+        sh,
+        row
+      );
+
+      return;
+    }
+
+    // --------------------------------------------------------
+    // ORDER ACTION
+    // ONLY FIRST ROW OF EACH ORDER
+    // --------------------------------------------------------
+
+    if (
+      ORA_ORDER_SHEETS.indexOf(name) >= 0 &&
+      col === oraCol_("Order Action")
+    ) {
+
+      oraSetOrderActionColor_(
+        sh,
+        row
+      );
+
+      return;
+    }
+
+    // --------------------------------------------------------
+    // CITY LIST EDIT
+    // Rebuild combined City • District values
+    // --------------------------------------------------------
+
+    if (
+      name === ORA_CITY_TAB &&
+      (
+        col === 1 ||
+        col === 2
+      )
+    ) {
+
+      oraEnsureCombined_(
+        SpreadsheetApp
+          .getActiveSpreadsheet()
+      );
+
+      oraRebuildCityDropdowns();
+
+      return;
+    }
+
+  } catch (err) {
+
+    console.log(
+      "onEdit error:",
+      err
+    );
   }
 }
 
-export async function syncOrderToGoogleSheets(order:Order,webhookUrl:string,settings?:StoreSettings,products:Product[]=[]):Promise<{success:boolean;message:string}> {
-  void products; // Catalog sync is separate; do not resend the full catalog with every order.
-  const result=await syncOrdersBatchToGoogleSheets([order],webhookUrl,settings);
-  return {success:result.success,message:result.success?`${order.order_number} queued/synced to ${order.order_source} Google Sheet.`:result.message};
+
+// ============================================================
+// INSTALLABLE EDIT HANDLER
+// ============================================================
+
+function onEditInstalled(e) {
+
+  try {
+
+    if (!e || !e.range) return;
+
+    var sh =
+      e.range.getSheet();
+
+    var name =
+      sh.getName();
+
+    var row =
+      e.range.getRow();
+
+    var col =
+      e.range.getColumn();
+
+    if (row < 2) return;
+
+    if (
+      ORA_ORDER_SHEETS.indexOf(name) >= 0 &&
+      col === oraCol_("City")
+    ) {
+
+      oraApplyCityDistrictRow_(
+        sh,
+        row
+      );
+
+      return;
+    }
+
+    if (
+      ORA_ORDER_SHEETS.indexOf(name) >= 0 &&
+      col === oraCol_("Item Action")
+    ) {
+
+      oraSetItemActionColor_(
+        sh,
+        row
+      );
+
+      return;
+    }
+
+    if (
+      ORA_ORDER_SHEETS.indexOf(name) >= 0 &&
+      col === oraCol_("Order Action")
+    ) {
+
+      oraSetOrderActionColor_(
+        sh,
+        row
+      );
+
+      return;
+    }
+
+    if (
+      name === ORA_CITY_TAB &&
+      (
+        col === 1 ||
+        col === 2
+      )
+    ) {
+
+      var ss =
+        SpreadsheetApp
+          .getActiveSpreadsheet();
+
+      oraEnsureCombined_(ss);
+      oraRebuildCityDropdowns();
+
+      return;
+    }
+
+  } catch (err) {
+
+    console.log(
+      "onEditInstalled error:",
+      err
+    );
+  }
 }
 
-export async function syncProductCatalogToGoogleSheets(products:Product[],webhookUrl:string,settings?:StoreSettings):Promise<{success:boolean;message:string}> {
-  if(!webhookUrl || !webhookUrl.startsWith('http')) return {success:false,message:'Google Sheets Webhook URL is not configured.'};
-  try{ const rows=buildCatalogRows(products,settings); const pricing={enabled:Boolean(settings?.multi_buy_discount_enabled),tiers:[{min:Number(settings?.multi_buy_tier1_min??2),max:Number(settings?.multi_buy_tier1_max??3),rate:Number(settings?.multi_buy_tier1_rate??5)},{min:Number(settings?.multi_buy_tier2_min??4),max:Number(settings?.multi_buy_tier2_max??5),rate:Number(settings?.multi_buy_tier2_rate??7.5)},{min:Number(settings?.multi_buy_tier3_min??6),max:Number(settings?.multi_buy_tier3_max??10),rate:Number(settings?.multi_buy_tier3_rate??10)}]}; const proxyResult=await proxyPost(webhookUrl,{payload_type:'catalog_sync',products:rows,pricing}); const status=String(proxyResult?.result?.status||'').trim(); if(!status) throw new Error(`Apps Script returned no JSON status. Raw response: ${String(proxyResult?.raw || '').slice(0,180) || 'empty'}`); if(status!=='catalog_synced') throw new Error(`Apps Script returned unexpected status: ${status}`); return {success:true,message:`Catalog synced (${rows.length} SKU/variant rows).`}; }
-  catch(e:any){return {success:false,message:e?.message||'Catalog sync failed.'};}
+
+// ============================================================
+// INSTALL TRIGGER
+// ============================================================
+
+function installOraTrigger() {
+
+  var ss =
+    SpreadsheetApp
+      .getActiveSpreadsheet();
+
+  var triggers =
+    ScriptApp
+      .getProjectTriggers();
+
+  for (
+    var i = 0;
+    i < triggers.length;
+    i++
+  ) {
+
+    if (
+      triggers[i]
+        .getHandlerFunction() ===
+      "onEditInstalled"
+    ) {
+
+      ScriptApp
+        .deleteTrigger(
+          triggers[i]
+        );
+    }
+  }
+
+  ScriptApp
+    .newTrigger(
+      "onEditInstalled"
+    )
+    .forSpreadsheet(ss)
+    .onEdit()
+    .create();
+
+  SpreadsheetApp
+    .getActive()
+    .toast(
+      "O-RA edit trigger installed.",
+      "O-RA",
+      5
+    );
 }
 
-export async function clearGoogleSheetTestData(webhookUrl:string):Promise<{success:boolean;message:string}> {
-  if(!webhookUrl || !webhookUrl.startsWith('http')) return {success:false,message:'Google Sheet Web App URL is not configured.'};
-  try{ const r=await proxyPost(webhookUrl,{payload_type:'operational_clear'}); const status=String(r?.result?.status||''); if(status!=='operational_cleared') throw new Error(`Apps Script did not confirm clear (${status||'no status'}).`); return {success:true,message:'Website/Facebook/TikTok operational order rows cleared; Product Catalog preserved.'}; }catch(e:any){return {success:false,message:e?.message||'Google Sheet clear failed.'};}
+
+// ============================================================
+// TEST ORDER CLEANUP
+// ============================================================
+
+function clearAllTestOrderData() {
+
+  var result =
+    oraClearTestOrders_();
+
+  SpreadsheetApp
+    .getActive()
+    .toast(
+      "Removed " +
+      result.removed +
+      " test order rows.",
+      "O-RA",
+      5
+    );
+
+  return result;
 }
 
-export async function clearGoogleSheetLiveStartData(webhookUrl:string):Promise<{success:boolean;message:string}> {
-  if(!webhookUrl || !webhookUrl.startsWith('http')) return {success:false,message:'Google Sheet Web App URL is not configured.'};
-  try{ const r=await proxyPost(webhookUrl,{payload_type:'live_start_clear'}); const status=String(r?.result?.status||''); if(status!=='live_start_cleared') throw new Error(`Apps Script did not confirm live-start clear (${status||'no status'}).`); return {success:true,message:'All O-RA business/demo rows cleared from Google Sheet; tabs/headers/link preserved.'}; }catch(e:any){return {success:false,message:e?.message||'Google Sheet live-start clear failed.'};}
+
+// ============================================================
+// MANUAL ORDER DELETE
+// ============================================================
+
+function deleteOrderFromSheet() {
+
+  var ui =
+    SpreadsheetApp
+      .getUi();
+
+  var response =
+    ui.prompt(
+      "Delete Order",
+      "Enter Order ID:",
+      ui.ButtonSet.OK_CANCEL
+    );
+
+  if (
+    response.getSelectedButton() !==
+    ui.Button.OK
+  ) {
+    return;
+  }
+
+  var id =
+    String(
+      response.getResponseText() || ""
+    ).trim();
+
+  if (!id) return;
+
+  var result =
+    oraDeleteOrderById_(
+      id
+    );
+
+  ui.alert(
+    result.ok
+      ? (
+          "Order deleted: " +
+          result.deleted
+        )
+      : (
+          "Delete failed: " +
+          result.error
+        )
+  );
 }
 
-export async function deleteOrderFromGoogleSheets(orderNumber:string,webhookUrl:string,reason?:string,source?:OrderSource):Promise<{success:boolean;message:string}> {
-  if(!webhookUrl || !webhookUrl.startsWith('http')) return {success:false,message:'Google Sheet Web App URL is not configured.'};
-  try{ const result=await proxyPost(webhookUrl,{payload_type:'order_delete',order_number:orderNumber,order_source:source,reason:reason||''}); const status=String(result?.result?.status||result?.status||''); if(status && status!=='order_deleted') return {success:false,message:'Apps Script did not confirm row deletion.'}; return {success:true,message:`${orderNumber} removed from Google Sheet.`}; }catch(e:any){return {success:false,message:e?.message||'Google Sheet order delete failed.'};}
+
+// ============================================================
+// CITY SEARCH TEST
+// ============================================================
+
+function testCitySearch() {
+
+  var ui =
+    SpreadsheetApp.getUi();
+
+  var response =
+    ui.prompt(
+      "City Search",
+      "Type at least 3 letters:",
+      ui.ButtonSet.OK_CANCEL
+    );
+
+  if (
+    response.getSelectedButton() !==
+    ui.Button.OK
+  ) {
+    return;
+  }
+
+  var q =
+    response.getResponseText();
+
+  var results =
+    oraSearchCitiesFromTab_(
+      q
+    );
+
+  if (!results.length) {
+
+    ui.alert(
+      "No matching cities found."
+    );
+
+    return;
+  }
+
+  var text = "";
+
+  for (
+    var i = 0;
+    i < Math.min(
+      results.length,
+      50
+    );
+    i++
+  ) {
+
+    text +=
+      (
+        i + 1
+      ) +
+      ". " +
+      results[i].city +
+      " • " +
+      results[i].district +
+      "\n";
+  }
+
+  ui.alert(
+    "City Search Results\n\n" +
+    text
+  );
 }
+
+
+// ============================================================
+// FULL SAFE SETUP
+// ============================================================
+
+function setupOraFinalSafe() {
+
+  var ss =
+    SpreadsheetApp
+      .getActiveSpreadsheet();
+
+  // Never clear existing order sheets.
+  // Never reorder existing columns.
+  // Never remove City/District.
+  // Never remove Confirm/Cancel/Upload columns.
+
+  oraEnsureCityTab_(ss);
+
+  oraEnsureCombined_(ss);
+
+  for (
+    var i = 0;
+    i < ORA_ORDER_SHEETS.length;
+    i++
+  ) {
+
+    var sh =
+      oraEnsureSheet_(
+        ss,
+        ORA_ORDER_SHEETS[i],
+        ORA_ORDER_HEADERS
+      );
+
+    oraFormatOrderSheet_(
+      sh,
+      0,
+      0
+    );
+
+    var lr =
+      sh.getLastRow();
+
+    if (lr >= 2) {
+
+      oraValidationsRange_(
+        ss,
+        sh,
+        2,
+        lr - 1
+      );
+    }
+  }
+
+  oraRebuildCityDropdowns();
+
+  SpreadsheetApp
+    .getActive()
+    .toast(
+      "O-RA FINAL SAFE SETUP completed. Existing columns were preserved.",
+      "O-RA",
+      6
+    );
+}
+
+
+// ============================================================
+// WEBHOOK / ORDER TEST
+// ============================================================
+
+function testWebhookHealth() {
+
+  var result = {
+    ok: true,
+    version: ORA_VERSION,
+    sheets: [],
+    cityList: false
+  };
+
+  var ss =
+    SpreadsheetApp
+      .getActiveSpreadsheet();
+
+  result.cityList =
+    !!ss.getSheetByName(
+      ORA_CITY_TAB
+    );
+
+  for (
+    var i = 0;
+    i < ORA_ORDER_SHEETS.length;
+    i++
+  ) {
+
+    var sh =
+      ss.getSheetByName(
+        ORA_ORDER_SHEETS[i]
+      );
+
+    result.sheets.push({
+      name:
+        ORA_ORDER_SHEETS[i],
+      exists:
+        !!sh,
+      rows:
+        sh
+          ? Math.max(
+              0,
+              sh.getLastRow() - 1
+            )
+          : 0,
+      columns:
+        sh
+          ? sh.getLastColumn()
+          : 0
+    });
+  }
+
+  SpreadsheetApp
+    .getUi()
+    .alert(
+      JSON.stringify(
+        result,
+        null,
+        2
+      )
+    );
+
+  return result;
+}
+
+
+// ============================================================
+// END OF O-RA GOOGLE APPS SCRIPT V15.5
+// ============================================================
