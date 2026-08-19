@@ -926,7 +926,7 @@ const isOrderEligibleForSheetServer = (order:any) => {
   return true;
 };
 
-const postAppsScriptFastServer = async (webhookUrl:string, payload:any, timeoutMs=8000) => {
+const postAppsScriptFastServer = async (webhookUrl:string, payload:any, timeoutMs=20000) => {
   if(!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/i.test(String(webhookUrl||'').trim())) {
     throw new Error('Google Sheet Web App URL is not configured on the shared server settings.');
   }
@@ -958,7 +958,7 @@ const syncOrdersToGoogleSheetsServer = async (orders:any[]):Promise<OraSheetSync
     const eligible=(Array.isArray(orders)?orders:[]).filter(isOrderEligibleForSheetServer);
     if(!eligible.length) return {ok:true,skipped:true,synced:0,existing:0,rows:0};
     const result=await postAppsScriptFastServer(webhook,{payload_type:'order_batch_sync',orders:eligible.map(o=>buildOrderSheetPayloadServer(o,settings))});
-    if(String(result?.status||'')!=='orders_batch_synced') throw new Error(`Unexpected Apps Script status: ${String(result?.status||'empty')}`);
+    if(!['orders_batch_synced','orders_synced'].includes(String(result?.status||''))) throw new Error(`Unexpected Apps Script status: ${String(result?.status||'empty')}`);
     return {ok:true,synced:Number(result?.synced||0),existing:Number(result?.existing||0),rows:Number(result?.rows||0)};
   }catch(e:any){
     return {ok:false,error:e?.name==='AbortError'?'Google Sheet sync timed out. Order is safely saved and can be re-synced.':(e?.message||'Google Sheet sync failed.')};
@@ -1481,38 +1481,19 @@ app.post('/api/admin/orders/bulk-import', requireStaffAnyPermission(['lead_impor
       used.add(no);
     }
 
-    // Orders are durable before the response. Google Sheet mirroring is queued
-    // immediately in the Cloudflare background task so the caller never waits
-    // for Apps Script/network latency. One batch request keeps the Sheet fast.
     await saveOrderSnapshotsBatch(incoming);
-
-    const sheetSyncPromise=(async()=>{
-      try{
-        const sheetSync=await syncOrdersToGoogleSheetsServer(incoming);
-        if(sheetSync.ok){
-          const syncedAt=new Date().toISOString();
-          for(const order of incoming){
-            if(isOrderEligibleForSheetServer(order)){
-              order.is_synced_google_sheets=true;
-              order.synced_at=syncedAt;
-            }
-          }
-          await saveOrderSnapshotsBatch(incoming);
-        }else{
-          console.warn('Google Sheet bulk background sync did not confirm:',sheetSync);
+    const sheetSync=await syncOrdersToGoogleSheetsServer(incoming);
+    if(sheetSync.ok){
+      const syncedAt=new Date().toISOString();
+      for(const order of incoming){
+        if(isOrderEligibleForSheetServer(order)){
+          order.is_synced_google_sheets=true;
+          order.synced_at=syncedAt;
         }
-        return sheetSync;
-      }catch(e:any){
-        console.warn('Google Sheet bulk background sync failed:',e?.message||e);
-        return {ok:false,error:e?.message||'Google Sheet background sync failed.'};
       }
-    })();
-
-    const waitUntil=(globalThis as any).__ORA_WAIT_UNTIL__;
-    if(typeof waitUntil==='function') waitUntil(sheetSyncPromise);
-    else void sheetSyncPromise;
-
-    return res.json({ok:true,orders:incoming,sheet_sync:{ok:true,queued:true}});
+      await saveOrderSnapshotsBatch(incoming);
+    }
+    return res.json({ok:true,orders:incoming,sheet_sync:sheetSync});
   }catch(e:any){ return res.status(500).json({error:e?.message||'Bulk order import failed.'}); }
 });
 
@@ -1600,19 +1581,11 @@ app.delete('/api/orders/:id', requireSuperAdmin, async (req,res)=>{
     try{
       const state=await readSharedStorefrontState();
       const webhook=String(state?.settings?.google_sheet_webhook_url||'').trim();
-      if(webhook && order.order_source!=='Manual Admin'){
+      if(webhook){
         const result=await postAppsScriptFastServer(webhook,{payload_type:'order_delete',order_number:order.order_number,order_source:order.order_source,reason});
         sheetSync={ok:String(result?.status||'')==='order_deleted'};
       }
     }catch(e:any){ sheetSync={ok:false,error:e?.message||'Google Sheet delete failed.'}; }
-    try {
-      const state = await readSharedStorefrontState();
-      const settings = (state?.settings && typeof state.settings === 'object') ? state.settings : {};
-      const sheetWebhookUrl = String(settings?.google_sheet_webhook_url || '').trim();
-      if (sheetWebhookUrl) {
-        postAppsScriptFastServer(sheetWebhookUrl, { payload_type: 'delete_order', order_number: String(order.order_number), orderNo: String(order.order_number) }).catch(() => {});
-      }
-    } catch {}
     return res.json({ok:true,order_number:order.order_number,reason,sheet_sync:sheetSync});
   }catch(e:any){return res.status(500).json({error:e?.message||'Order delete failed.'});}
 });
@@ -1639,10 +1612,10 @@ app.delete('/api/operational-test-data', requireSuperAdmin, async (_req,res)=>{
   try {
     const beforeLocal = readOrderSnapshotsLocal().length;
 
-    // Localhost authoritative test store: clear it immediately.
+    // Clear the durable local order store first.
     writeOrderSnapshotsLocal([]);
 
-    // Live/Supabase mirror: clear if configured.
+    // Clear the Supabase mirror when configured.
     const sb=getSupabaseAdmin();
     if(sb){
       try{
@@ -1653,10 +1626,28 @@ app.delete('/api/operational-test-data', requireSuperAdmin, async (_req,res)=>{
       }
     }
 
+    // Clear the same operational order rows from Google Sheets.
+    let sheetSync: any = {ok:true, skipped:true};
+    try {
+      const state=await readSharedStorefrontState();
+      const webhook=String(state?.settings?.google_sheet_webhook_url||'').trim();
+      if(webhook){
+        const result=await postAppsScriptFastServer(webhook,{payload_type:'operational_clear'});
+        sheetSync={
+          ok:String(result?.status||'')==='operational_cleared',
+          skipped:false,
+          status:String(result?.status||'')
+        };
+      }
+    } catch(e:any) {
+      sheetSync={ok:false,skipped:false,error:e?.message||'Google Sheet clear failed.'};
+    }
+
     return res.json({
       ok:true,
       removed_local_orders:beforeLocal,
-      remaining_local_orders:readOrderSnapshotsLocal().length
+      remaining_local_orders:readOrderSnapshotsLocal().length,
+      sheet_sync:sheetSync
     });
   } catch (e:any) {
     return res.status(500).json({error:e?.message || 'Operational data clear failed.'});
