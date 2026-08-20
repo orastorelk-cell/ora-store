@@ -716,6 +716,21 @@ function oraSearchCitiesFromTab_(q) {
   }
 }
 
+function oraDistrictForCity_(ss, city) {
+  var wanted = String(city || "").trim().toLowerCase();
+  if (!wanted) return "";
+  var cityTab = ss.getSheetByName(ORA_CITY_TAB);
+  if (!cityTab || cityTab.getLastRow() < 2) return "";
+  var vals = cityTab.getRange(2, 1, cityTab.getLastRow() - 1, 2).getDisplayValues();
+  for (var i = 0; i < vals.length; i++) {
+    var c = String(vals[i][0] || "").trim();
+    if (c && c.toLowerCase() === wanted) {
+      return String(vals[i][1] || "").trim();
+    }
+  }
+  return "";
+}
+
 function oraAppendOrders_(ss, orders) {
 
   var bySheet = {
@@ -1003,7 +1018,11 @@ function oraAppendOrders_(ss, orders) {
             ob,
             ["district"]
           )
-        );
+        ).trim();
+
+      if (!district && city) {
+        district = oraDistrictForCity_(ss, city);
+      }
 
       var whatsapp =
         String(
@@ -1012,7 +1031,7 @@ function oraAppendOrders_(ss, orders) {
             [
               "whatsAppNumber",
               "whatsapp_number",
-              "phone"
+              "whatsapp"
             ]
           )
         );
@@ -1153,7 +1172,8 @@ function oraAppendOrders_(ss, orders) {
           itemName,
           qty,
           orderTime,
-          leadId,
+          // Lead ID is internal for duplicate protection only. Never expose it in the Google Sheet.
+          "",
           impStatus,
           new Date(),
           first ? city : "",
