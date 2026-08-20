@@ -1,4 +1,5 @@
 import { GOOGLE_APPS_SCRIPT_CLEAN_V17 } from './googleAppsScriptCleanV17';
+import { GOOGLE_APPS_SCRIPT_V17_COMPAT } from './googleAppsScriptV17Compat';
 
 const APPS_SCRIPT_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/i;
 
@@ -201,4 +202,4 @@ export async function clearGoogleSheetLiveStartData(webhookUrl: string): Promise
   };
 }
 
-export const GOOGLE_APPS_SCRIPT_CODE = GOOGLE_APPS_SCRIPT_CLEAN_V17;
+export const GOOGLE_APPS_SCRIPT_CODE = `${GOOGLE_APPS_SCRIPT_CLEAN_V17}\n\n${GOOGLE_APPS_SCRIPT_V17_COMPAT}`;
