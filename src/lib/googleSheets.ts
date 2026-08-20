@@ -91,7 +91,6 @@ const buildOrderSheetRow = (
     'Original Item Name': String(item?.product_name || ''),
     'Original Qty': qty,
     'Order Time': isFirst ? String(order?.created_at || new Date().toISOString()) : '',
-    'Lead ID': isFirst ? String(order?.platform_lead_id || '') : '',
     'Imported Status': isFirst ? String(order?.call_center_status || 'Pending') : '',
     'City': isFirst ? String(order?.city || '') : '',
     'District': isFirst ? String(order?.district || '') : '',
