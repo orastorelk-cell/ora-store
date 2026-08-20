@@ -6,6 +6,7 @@ import { GOOGLE_APPS_SCRIPT_HOTFIX_V164 } from './googleAppsScriptHotfixV164';
 import { GOOGLE_APPS_SCRIPT_HOTFIX_V166 } from './googleAppsScriptHotfixV166';
 import { GOOGLE_APPS_SCRIPT_HOTFIX_V167 } from './googleAppsScriptHotfixV167';
 import { GOOGLE_APPS_SCRIPT_HOTFIX_V168 } from './googleAppsScriptHotfixV168';
+import { GOOGLE_APPS_SCRIPT_HOTFIX_V169 } from './googleAppsScriptHotfixV169';
 
 const APPS_SCRIPT_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/i;
 
@@ -208,6 +209,5 @@ export async function clearGoogleSheetLiveStartData(webhookUrl: string): Promise
   };
 }
 
-// Older layers remain for compatibility, but V16.8 is authoritative for setup,
-// order writes, sync and delete. It does not call previous wrappers.
-export const GOOGLE_APPS_SCRIPT_CODE = `${GOOGLE_APPS_SCRIPT_CODE_V16}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V162}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163_CITY}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V164}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V166}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V167}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V168}`;
+// V16.9 pins all web-app writes to the exact spreadsheet selected during setup.
+export const GOOGLE_APPS_SCRIPT_CODE = `${GOOGLE_APPS_SCRIPT_CODE_V16}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V162}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163_CITY}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V164}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V166}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V167}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V168}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V169}`;
