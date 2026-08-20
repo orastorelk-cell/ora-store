@@ -1,20 +1,7 @@
 export const GOOGLE_APPS_SCRIPT_HOTFIX_V166 = String.raw`
 ORA_VERSION = "O-RA Store Google Sheet Sync V16.6";
-
-function oraApplyValidationsV166_(sh,start,count){
-  if(!count)return;var hm=oraHeaderMap_(sh);
-  try{if(hm["Item Action"])sh.getRange(start,hm["Item Action"],count,1).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(["KEEP ITEM","CANCEL ITEM"],true).setAllowInvalid(false).build());}catch(e){}
-  try{if(hm["Order Action"])sh.getRange(start,hm["Order Action"],count,1).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(["PENDING","CONFIRM ORDER","NO ANSWER","CANCEL ENTIRE ORDER"],true).setAllowInvalid(false).build());}catch(e){}
-  try{if(hm["Apply Item Change"])sh.getRange(start,hm["Apply Item Change"],count,1).insertCheckboxes();}catch(e){}
-}
-function oraStatusColorsV166_(sh){
-  var hm=oraHeaderMap_(sh),rules=sh.getConditionalFormatRules();
-  function add(col,text,bg,fg){if(!col)return;rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo(text).setBackground(bg).setFontColor(fg).setBold(true).setRanges([sh.getRange(2,col,Math.max(1,sh.getMaxRows()-1),1)]).build());}
-  add(hm["Item Action"],"KEEP ITEM","#dcfce7","#166534");add(hm["Item Action"],"CANCEL ITEM","#fee2e2","#991b1b");
-  add(hm["Order Action"],"CONFIRM ORDER","#bbf7d0","#14532d");add(hm["Order Action"],"CANCEL ENTIRE ORDER","#fecaca","#7f1d1d");add(hm["Order Action"],"PENDING","#e5e7eb","#374151");add(hm["Order Action"],"NO ANSWER","#fce7f3","#9d174d");sh.setConditionalFormatRules(rules);
-}
-var oraWriteOrderV166Base_=oraWriteOrder_;
-oraWriteOrder_=function(ss,o){var sh=ss.getSheetByName(oraSheetName_(o.source))||oraEnsureOrderSheet_(ss,oraSheetName_(o.source));var n=oraWriteOrderV166Base_(ss,o);if(n>0){var start=sh.getLastRow()-n+1;oraApplyValidationsV166_(sh,start,n);try{if(n>1){sh.getRange(start,1,n,sh.getLastColumn()).shiftRowGroupDepth(1);sh.setRowGroupControlPosition(SpreadsheetApp.GroupControlTogglePosition.BEFORE);}}catch(e){}}return n;};
-var setupOraCallCenterSheetV166Base_=setupOraCallCenterSheet;
-setupOraCallCenterSheet=function(){setupOraCallCenterSheetV166Base_();var ss=SpreadsheetApp.getActiveSpreadsheet();for(var i=0;i<ORA_ORDER_SHEETS.length;i++){var sh=ss.getSheetByName(ORA_ORDER_SHEETS[i]);if(!sh)continue;oraApplyValidationsV166_(sh,2,Math.max(1,sh.getMaxRows()-1));try{oraStatusColorsV166_(sh);sh.setRowGroupControlPosition(SpreadsheetApp.GroupControlTogglePosition.BEFORE);}catch(e){}}SpreadsheetApp.getActive().toast("O-RA V16.6 ready - groups, dropdowns, status colors and Apply checkbox restored.","O-RA",5);};
+function oraApplyValidationsV166_(sh,start,count){if(!count)return;var hm=oraHeaderMap_(sh);try{if(hm["Item Action"])sh.getRange(start,hm["Item Action"],count,1).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(["KEEP ITEM","CANCEL ITEM"],true).setAllowInvalid(false).build());}catch(e){}try{if(hm["Order Action"])sh.getRange(start,hm["Order Action"],count,1).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(["PENDING","CONFIRM ORDER","NO ANSWER","CANCEL ENTIRE ORDER"],true).setAllowInvalid(false).build());}catch(e){}try{if(hm["Apply Item Change"])sh.getRange(start,hm["Apply Item Change"],count,1).insertCheckboxes();}catch(e){}}
+function oraStatusColorsV166_(sh){var hm=oraHeaderMap_(sh),rules=sh.getConditionalFormatRules();function add(col,text,bg,fg){if(!col)return;rules.push(SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo(text).setBackground(bg).setFontColor(fg).setBold(true).setRanges([sh.getRange(2,col,Math.max(1,sh.getMaxRows()-1),1)]).build());}add(hm["Item Action"],"KEEP ITEM","#dcfce7","#166534");add(hm["Item Action"],"CANCEL ITEM","#fee2e2","#991b1b");add(hm["Order Action"],"CONFIRM ORDER","#bbf7d0","#14532d");add(hm["Order Action"],"CANCEL ENTIRE ORDER","#fecaca","#7f1d1d");add(hm["Order Action"],"PENDING","#e5e7eb","#374151");add(hm["Order Action"],"NO ANSWER","#fce7f3","#9d174d");sh.setConditionalFormatRules(rules);}
+var oraWriteOrderV166Base_=oraWriteOrder_;oraWriteOrder_=function(ss,o){var sh=ss.getSheetByName(oraSheetName_(o.source))||oraEnsureOrderSheet_(ss,oraSheetName_(o.source));var n=oraWriteOrderV166Base_(ss,o);if(n>0)oraApplyValidationsV166_(sh,sh.getLastRow()-n+1,n);return n;};
+var setupOraCallCenterSheetV166Base_=setupOraCallCenterSheet;setupOraCallCenterSheet=function(){setupOraCallCenterSheetV166Base_();var ss=SpreadsheetApp.getActiveSpreadsheet();for(var i=0;i<ORA_ORDER_SHEETS.length;i++){var sh=ss.getSheetByName(ORA_ORDER_SHEETS[i]);if(!sh)continue;oraApplyValidationsV166_(sh,2,Math.max(1,sh.getMaxRows()-1));try{oraStatusColorsV166_(sh);sh.setRowGroupControlPosition(SpreadsheetApp.GroupControlTogglePosition.BEFORE);}catch(e){}}SpreadsheetApp.getActive().toast("O-RA V16.6 ready - groups, dropdowns, status colors and Apply checkbox restored.","O-RA",5);};
 `;
