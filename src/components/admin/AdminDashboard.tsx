@@ -224,6 +224,7 @@ export const AdminDashboard: React.FC = () => {
   const [deleteOrderReason, setDeleteOrderReason] = useState('');
   const [deleteOrderBusy, setDeleteOrderBusy] = useState(false);
   const [copiedScript, setCopiedScript] = useState(false);
+  const [selectedLeadItemCode, setSelectedLeadItemCode] = useState(products[0]?.sku || '');
   const [uploadBatches, setUploadBatches] = useState<Record<'Website'|'Facebook'|'TikTok', {
     orderNumbers: string[];
     uploaded: number;
@@ -906,7 +907,7 @@ export const AdminDashboard: React.FC = () => {
   };
   const downloadWebsiteConfirmedTemplate = () => downloadDecisionTemplate('Website');
 
-  const parseSourceCsvForDirectImport = (text:string,source:'Facebook Ads'|'TikTok Ads') => {
+  const parseSourceCsvForDirectImport = (text:string,source:'Facebook Ads'|'TikTok Ads',selectedItemCode:string) => {
     const parseLine=(line:string)=>{const out:string[]=[];let cur='',q=false;for(let i=0;i<line.length;i++){const ch=line[i];if(ch==='"'){if(q&&line[i+1]==='"'){cur+='"';i++;}else q=!q;}else if(ch===','&&!q){out.push(cur.trim());cur='';}else cur+=ch;}out.push(cur.trim());return out;};
     const lines=String(text||'').split(/\r?\n/).filter(l=>l.trim());if(lines.length<2)return[];
     const headers=parseLine(lines[0]).map(h=>h.toLowerCase().trim().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,''));
@@ -918,30 +919,40 @@ export const AdminDashboard: React.FC = () => {
     const iQty=findLoose(['quantity','qty']);
     const iName=findLoose(['full_name','customer_name','name']);
     const iPhone=findLoose(['phone_number','phone','mobile_number','mobile']);
-    const iWa=findLoose(['whatsapp_number','whatsapp','wa_number']);
+    const iWa=findLoose(['whatsapp_number','whatsapp_phone','whatsapp','wa_number']);
     const iAddr=findLoose(['full_address','customer_address','address']);
-    const iCity=findLoose(['city','town','district']);
+    const iCity=findLoose(['city','town']);
     const iVariant=findLoose(['color','colour','variant','option','selected_color']);
     const iNotes=findLoose(['notes','note','message','comment']);
     return lines.slice(1).map(line=>{const c=parseLine(line);return{
       platform_lead_id:iLead>=0?String(c[iLead]||'').trim():undefined,
       lead_created_at:iCreated>=0?String(c[iCreated]||'').trim():undefined,
-      item_code:iCode>=0?String(c[iCode]||'').trim():'',
+      item_code:String(selectedItemCode || (iCode>=0?String(c[iCode]||'').trim():'')).trim(),
       variant_value:iVariant>=0?String(c[iVariant]||'').trim():undefined,
-      quantity:Math.max(1,Number(iQty>=0?c[iQty]:1)||1),
+      quantity:iQty>=0?Number(String(c[iQty]||'').trim()):0,
       customer_name:iName>=0?String(c[iName]||'').trim():'',
       phone:iPhone>=0?String(c[iPhone]||'').trim():'',
-      whatsapp:iWa>=0?String(c[iWa]||'').trim():(iPhone>=0?String(c[iPhone]||'').trim():''),
-      address:iAddr>=0?String(c[iAddr]||'').trim():'N/A',
-      city:iCity>=0?String(c[iCity]||'').trim():'N/A',
+      whatsapp:iWa>=0?String(c[iWa]||'').trim():'',
+      address:iAddr>=0?String(c[iAddr]||'').trim():'',
+      city:iCity>=0?String(c[iCity]||'').trim():'',
       order_source:source,payment_method:'COD' as const,notes:iNotes>=0?String(c[iNotes]||'').trim():`${source} raw lead`,is_confirmed:false,
     };}).filter(r=>r.platform_lead_id||r.item_code||r.phone||r.customer_name);
   };
 
   const handleDirectSourceUpload = (file: File, source: 'Facebook Ads' | 'TikTok Ads') => {
+    const selectedCode = String(selectedLeadItemCode || '').trim();
+    if (!selectedCode) {
+      alert('Select or type the Item Code before uploading the Lead CSV.');
+      return;
+    }
+    const product = products.find(p => String(p.sku || '').trim().toUpperCase() === selectedCode.toUpperCase());
+    if (!product) {
+      alert(`Item Code "${selectedCode}" was not found in the O-RA product catalog.`);
+      return;
+    }
     const r = new FileReader();
     r.onload = async () => {
-      const rows = parseSourceCsvForDirectImport(String(r.result || ''), source);
+      const rows = parseSourceCsvForDirectImport(String(r.result || ''), source, selectedCode);
       if (!rows.length) {
         alert('No order rows found in the CSV.');
         return;
@@ -3520,10 +3531,40 @@ export const AdminDashboard: React.FC = () => {
             <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-900">NEW LEADS ONLY → System creates FB-/TK- Order IDs → Google Sheet PENDING. Stock is not deducted here.</div>
           </div>
 
+          <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_2fr] md:items-center">
+              <div>
+                <p className="text-xs font-black uppercase tracking-wider text-amber-700">Lead Item Code</p>
+                <p className="mt-1 text-[11px] leading-5 text-amber-900">
+                  Select/type the product once. The CSV does not need an Item Code; this selected code is used for every valid lead.
+                </p>
+              </div>
+              <div>
+                <input
+                  list="ora-lead-item-codes"
+                  value={selectedLeadItemCode}
+                  onChange={e=>setSelectedLeadItemCode(e.target.value)}
+                  placeholder="e.g. HS001"
+                  className="w-full rounded-xl border border-amber-300 bg-white px-3 py-2.5 text-sm font-black uppercase outline-none"
+                />
+                <datalist id="ora-lead-item-codes">
+                  {products.filter(p=>p.status!=='Draft').map(p=>(
+                    <option key={p.id} value={p.sku}>{p.name_en}</option>
+                  ))}
+                </datalist>
+                <p className="mt-1 text-[11px] font-bold text-amber-800">
+                  {products.find(p=>String(p.sku||'').toUpperCase()===String(selectedLeadItemCode||'').trim().toUpperCase())?.name_en
+                    ? `Item Name: ${products.find(p=>String(p.sku||'').toUpperCase()===String(selectedLeadItemCode||'').trim().toUpperCase())?.name_en}`
+                    : 'Type/select a valid Item Code to see the Item Name.'}
+                </p>
+              </div>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
             <div className="rounded-3xl border border-blue-200 bg-white p-5 shadow-sm space-y-4">
               <div className="flex items-center justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-wider text-blue-600">Facebook</p><h3 className="mt-1 text-base font-black text-gray-900">Facebook Lead Import</h3></div><span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-black text-blue-700">FB-...</span></div>
-              <p className="text-xs leading-5 text-gray-600">Download Facebook leads for <b>Today + Previous Day</b>. Extra ad columns are ignored; only O-RA order fields are kept. Previously imported Lead IDs are skipped.</p>
+              <p className="text-xs leading-5 text-gray-600">Download Facebook leads for <b>Today + Previous Day</b>. Extra ad columns and Item Code columns are ignored. The selected Item Code above is applied to every valid lead. Previously imported Lead IDs are skipped.</p>
               <button type="button" onClick={()=>downloadSourceOrderTemplate('Facebook Ads')} className="w-full rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-xs font-black text-blue-700"><Download className="mr-1 inline h-4 w-4"/> Download Optional Manual FB Lead Template</button>
               <label className="block cursor-pointer rounded-xl bg-blue-600 px-3 py-3 text-center text-xs font-black text-white"><Upload className="mr-1 inline h-4 w-4"/> Upload Facebook LEAD CSV<input type="file" accept=".csv,text/csv" className="hidden" onChange={e=>e.target.files?.[0]&&handleDirectSourceUpload(e.target.files[0],'Facebook Ads')}/></label>
               <button type="button" onClick={()=>handleSourceTestLead('Facebook Ads')} className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-[10px] font-black text-gray-600">Create FB Test Lead</button>
@@ -3531,7 +3572,7 @@ export const AdminDashboard: React.FC = () => {
 
             <div className="rounded-3xl border border-fuchsia-200 bg-white p-5 shadow-sm space-y-4">
               <div className="flex items-center justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-wider text-fuchsia-600">TikTok</p><h3 className="mt-1 text-base font-black text-gray-900">TikTok Lead Import</h3></div><span className="rounded-full bg-fuchsia-50 px-3 py-1 text-xs font-black text-fuchsia-700">TK-...</span></div>
-              <p className="text-xs leading-5 text-gray-600">Use the original TikTok Lead CSV for <b>Today + Previous Day</b>. Unneeded columns are ignored and duplicate Lead IDs are skipped automatically.</p>
+              <p className="text-xs leading-5 text-gray-600">Use the original TikTok Lead CSV for <b>Today + Previous Day</b>. Unneeded columns and Item Code columns are ignored. The selected Item Code above is applied to every valid lead. Duplicate Lead IDs are skipped automatically.</p>
               <button type="button" onClick={()=>downloadSourceOrderTemplate('TikTok Ads')} className="w-full rounded-xl border border-fuchsia-200 bg-fuchsia-50 px-3 py-2.5 text-xs font-black text-fuchsia-700"><Download className="mr-1 inline h-4 w-4"/> Download Optional Manual TikTok Lead Template</button>
               <label className="block cursor-pointer rounded-xl bg-fuchsia-600 px-3 py-3 text-center text-xs font-black text-white"><Upload className="mr-1 inline h-4 w-4"/> Upload TikTok LEAD CSV<input type="file" accept=".csv,text/csv" className="hidden" onChange={e=>e.target.files?.[0]&&handleDirectSourceUpload(e.target.files[0],'TikTok Ads')}/></label>
               <button type="button" onClick={()=>handleSourceTestLead('TikTok Ads')} className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-[10px] font-black text-gray-600">Create TikTok Test Lead</button>
