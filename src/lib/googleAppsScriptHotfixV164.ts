@@ -1,3 +1,5 @@
+import { GOOGLE_APPS_SCRIPT_HOTFIX_V165 } from './googleAppsScriptHotfixV165';
+
 export const GOOGLE_APPS_SCRIPT_HOTFIX_V164 = String.raw`
 // ============================================================
 // O-RA STORE - GOOGLE SHEET SPEED / GROUP / CITY HOTFIX V16.4
@@ -5,7 +7,6 @@ export const GOOGLE_APPS_SCRIPT_HOTFIX_V164 = String.raw`
 // ============================================================
 ORA_VERSION = "O-RA Store Google Sheet Sync V16.4";
 
-// Fast exact city lookup from the de-duplicated hidden city cache.
 function oraFastCityMatchV164_(ss, cityName){
   var wanted=String(cityName||"").trim();
   if(!wanted)return null;
@@ -18,8 +19,6 @@ function oraFastCityMatchV164_(ss, cityName){
   }catch(e){return null;}
 }
 
-// Per-order writes must stay light. Expensive City/Catalog validations are prepared
-// once by setupOraCallCenterSheet instead of being rebuilt on every new order.
 oraApplyValidations_ = function(ss,sh,start,count){
   if(!count)return;var hm=oraHeaderMap_(sh);
   try{if(hm["Item Action"])sh.getRange(start,hm["Item Action"],count,1).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(["KEEP ITEM","CANCEL ITEM"],true).setAllowInvalid(false).build());}catch(e){}
@@ -27,8 +26,6 @@ oraApplyValidations_ = function(ss,sh,start,count){
   try{if(hm["Apply Item Change"])sh.getRange(start,hm["Apply Item Change"],count,1).insertCheckboxes();}catch(e){}
 };
 
-// Direct V16.4 writer. It calculates the append row AFTER old rows are removed,
-// writes the whole multi-item order in one setValues(), then groups those rows.
 oraWriteOrder_ = function(ss,o){
   var sh=oraEnsureOrderSheet_(ss,oraSheetName_(o.source));
   var actions=oraCaptureActions_(sh,o.id);
@@ -59,7 +56,6 @@ oraWriteOrder_ = function(ss,o){
   sh.getRange(start,1,rows.length,lastCol).setValues(rows);
   oraApplyValidations_(ss,sh,start,rows.length);
 
-  // Visible/collapsible order grouping. One order = one row group.
   if(rows.length>1){
     try{
       sh.getRange(start,1,rows.length,lastCol).shiftRowGroupDepth(1);
@@ -80,7 +76,6 @@ oraSync_ = function(body){
   }finally{lock.releaseLock();}
 };
 
-// Build expensive dropdown rules once. Future order writes only write values.
 var setupOraCallCenterSheetV163_ = setupOraCallCenterSheet;
 setupOraCallCenterSheet = function(){
   setupOraCallCenterSheetV163_();
@@ -96,9 +91,6 @@ setupOraCallCenterSheet = function(){
   SpreadsheetApp.getActive().toast("O-RA V16.4 ready - fast sync, grouped orders, strict City selection.","O-RA",5);
 };
 
-// City rule: typing is only a search step. The actual cell changes ONLY when the
-// entered value exactly matches a city in the fast list. Invalid/partial text is
-// reverted to the previous city so the default City/District never disappears.
 var onEditV164Base_ = onEdit;
 onEdit = function(e){
   try{
@@ -121,4 +113,4 @@ onEdit = function(e){
   }catch(err){}
   try{onEditV164Base_(e);}catch(err){}
 };
-`;
+` + "\n\n" + GOOGLE_APPS_SCRIPT_HOTFIX_V165;
