@@ -1,8 +1,8 @@
 const buildOrderSheetRowServer = (order: any, item: any, isFirst: boolean, settings: Record<string, any>) => ({
   'Order ID': String(order?.order_number || ''),
-  'Customer Name': String(order?.customer_name || ''),
-  'Phone Number': String(order?.phone || ''),
-  'Address': String(order?.address || ''),
+  'Customer Name': isFirst ? String(order?.customer_name || '') : '',
+  'Phone Number': isFirst ? String(order?.phone || '') : '',
+  'Address': isFirst ? String(order?.address || '') : '',
   'Item Name': String(item?.product_name || item?.name || item?.item_name || order?.items?.[0]?.product_name || ''),
 'Item Code': String(item?.sku || item?.item_code || order?.items?.[0]?.sku || ''),
 'Qty': Math.max(1, Number(item?.quantity ?? item?.qty ?? 1)),
@@ -13,11 +13,11 @@ const buildOrderSheetRowServer = (order: any, item: any, isFirst: boolean, setti
 'Discount (Rs)': isFirst ? Number(order?.discount || 0) : 0,
 'Source': String(order?.order_source || order?.source || 'Website'),
 'Delivery Fee (Rs)': isFirst ? Number(order?.delivery_fee || 0) : 0,
-'WhatsApp Number': String(order?.whatsapp || order?.phone || ''),
+'WhatsApp Number': isFirst ? String(order?.whatsapp || '') : '',
 'Order Time': String(order?.created_at || new Date().toISOString()),
 'Imported Status': String(order?.call_center_status || 'Pending'),
-'City': String(order?.city || ''),
-'District': String(order?.district || '')
+'City': isFirst ? String(order?.city || '') : '',
+'District': isFirst ? String(order?.district || '') : ''
 });
 
 import express from "express";
@@ -1483,13 +1483,28 @@ app.post('/api/admin/orders/bulk-import', requireStaffAnyPermission(['lead_impor
     if(invalid) return res.status(400).json({error:`Invalid order payload: ${String(invalid?.order_number||invalid?.id||'unknown')}`});
 
     const existing=await getOrderSnapshots();
+    // Server-side Lead ID protection: the browser also dedupes, but the server must
+    // remain authoritative when the same CSV is uploaded from another browser/tab.
+    const importedLeadKeys=new Set(existing
+      .filter((o:any)=>String(o?.platform_lead_id||'').trim())
+      .map((o:any)=>`${String(o?.order_source||'').toLowerCase()}::${String(o?.platform_lead_id||'').trim().toLowerCase()}`));
+    const uniqueIncoming=incoming.filter((o:any)=>{
+      const lead=String(o?.platform_lead_id||'').trim();
+      if(!lead) return true;
+      const key=`${String(o?.order_source||'').toLowerCase()}::${lead.toLowerCase()}`;
+      if(importedLeadKeys.has(key)) return false;
+      importedLeadKeys.add(key);
+      return true;
+    });
+    if(!uniqueIncoming.length) return res.json({ok:true,orders:[],sheet_sync:{ok:true,skipped:true,reason:'All supplied Lead IDs were already imported.'}});
+
     const used=new Set(existing.map((o:any)=>String(o.order_number||'').toUpperCase()).filter(Boolean));
     const maxByPrefix:Record<string,number>={};
     for(const o of existing){
       const m=String(o.order_number||'').toUpperCase().match(/^([A-Z]+)-(\d+)$/);
       if(m) maxByPrefix[m[1]]=Math.max(maxByPrefix[m[1]]||0,Number(m[2]||0));
     }
-    for(const order of incoming){
+    for(const order of uniqueIncoming){
       let no=String(order.order_number||'').toUpperCase();
       const prefix=(no.split('-')[0]||'FB').toUpperCase();
       if(used.has(no)){
@@ -1503,11 +1518,11 @@ app.post('/api/admin/orders/bulk-import', requireStaffAnyPermission(['lead_impor
       used.add(no);
     }
 
-    await saveOrderSnapshotsBatch(incoming);
-    const sheetSync=await syncOrdersToGoogleSheetsServer(incoming);
+    await saveOrderSnapshotsBatch(uniqueIncoming);
+    const sheetSync=await syncOrdersToGoogleSheetsServer(uniqueIncoming);
     if(sheetSync.ok){
       const syncedAt=new Date().toISOString();
-      for(const order of incoming){
+      for(const order of uniqueIncoming){
         if(isOrderEligibleForSheetServer(order)){
           order.is_synced_google_sheets=true;
           order.synced_at=syncedAt;
@@ -1515,7 +1530,7 @@ app.post('/api/admin/orders/bulk-import', requireStaffAnyPermission(['lead_impor
       }
       await saveOrderSnapshotsBatch(incoming);
     }
-    return res.json({ok:true,orders:incoming,sheet_sync:sheetSync});
+    return res.json({ok:true,orders:uniqueIncoming,sheet_sync:sheetSync});
   }catch(e:any){ return res.status(500).json({error:e?.message||'Bulk order import failed.'}); }
 });
 
