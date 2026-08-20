@@ -1,5 +1,210 @@
 // ============================================================
-// O-RA STORE - GOOGLE SHEET SYNC V15.5
+// O-RA STORE - Google Sheets client bridge (V15.6)
+// ------------------------------------------------------------
+// ROOT-CAUSE FIX (V15.6): this file previously contained ONLY the
+// Google Apps Script source code (meant to be pasted into the Sheet's
+// Apps Script editor) with no `export` statements at all. Because
+// StoreContext.tsx and AdminDashboard.tsx import real functions from
+// this file (syncOrderToGoogleSheets, syncOrdersBatchToGoogleSheets,
+// syncProductCatalogToGoogleSheets, clearGoogleSheetTestData,
+// clearGoogleSheetLiveStartData, deleteOrderFromGoogleSheets,
+// GOOGLE_APPS_SCRIPT_CODE), every one of those imports resolved to
+// `undefined` at runtime. Vite/esbuild does not type-check on build,
+// so the site still built and deployed, but any button/flow that
+// called one of these functions failed silently with
+// "X is not a function" the moment it ran in the browser.
+//
+// This file now has two clearly separated parts:
+//
+// 1) Real TypeScript functions (below) that the website/admin panel
+//    calls directly to talk to the Google Sheet through the server's
+//    /api/google-sheets/proxy route.
+//
+// 2) GOOGLE_APPS_SCRIPT_CODE (bottom of this file): the exact source
+//    that must be pasted into the Google Sheet's Apps Script editor
+//    (Extensions -> Apps Script) so the Sheet can receive these
+//    requests. Admin Dashboard -> Google Sheets panel has a
+//    "Copy code" button wired to this constant.
+//
+// IMPORTANT: editing this file does NOT change the already-deployed
+// Google Apps Script project (that code lives on Google's servers,
+// separate from this repo). After any change to
+// GOOGLE_APPS_SCRIPT_CODE, an admin must:
+//   1. Open the Google Sheet -> Extensions -> Apps Script
+//   2. Select all existing code (Ctrl+A) and paste the new copied code
+//   3. Save (Ctrl+S)
+//   4. Deploy -> Manage deployments -> Edit (pencil) -> Version: New version -> Deploy
+// The Web App URL itself does not change when you deploy a new version,
+// so nothing needs to change in Store Settings.
+// ============================================================
+
+const APPS_SCRIPT_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/i;
+
+export type SheetActionResult = {
+  success: boolean;
+  message: string;
+  synced?: number;
+  existing?: number;
+  rows?: number;
+  removed?: number;
+};
+
+const isAppsScriptUrl = (url?: string) => APPS_SCRIPT_URL_PATTERN.test(String(url || '').trim());
+
+// All requests are routed through the server's /api/google-sheets/proxy so the
+// browser doesn't have to deal with Apps Script's no-cors response, and we get
+// a real success/failure confirmation instead of guessing.
+async function postToAppsScript(webhookUrl: string, payload: Record<string, any>): Promise<{ ok: boolean; result?: any; error?: string }> {
+  if (!isAppsScriptUrl(webhookUrl)) {
+    return { ok: false, error: 'Google Sheet Web App URL is missing or is not a valid Apps Script /exec link.' };
+  }
+  try {
+    const response = await fetch('/api/google-sheets/proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webhookUrl, payload }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.ok === false) {
+      return { ok: false, error: data?.error || `Google Sheet request failed (${response.status}).` };
+    }
+    const result = data?.result || {};
+    if (result?.ok === false) {
+      return { ok: false, error: result?.error || 'Google Sheet returned an error.' };
+    }
+    return { ok: true, result };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'Could not reach the Google Sheet server proxy.' };
+  }
+}
+
+// ------------------------------------------------------------
+// Order row builder - kept in sync with buildOrderSheetRowServer()
+// in server.ts and with the ORA_ORDER_HEADERS list inside the Apps
+// Script embedded below.
+// ------------------------------------------------------------
+
+const orderQtyOfferLabel = (order: any, settings: Record<string, any>): string => {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  const qty = items.reduce((sum: number, it: any) => sum + Math.max(1, Number(it?.quantity || 1)), 0);
+  const discount = Math.max(0, Number(order?.special_offer_discount || 0));
+  if (discount <= 0) return 'No Qty Offer';
+  if (settings?.multi_buy_discount_enabled) {
+    const tiers = [
+      { min: Number(settings.multi_buy_tier1_min ?? 2), max: Number(settings.multi_buy_tier1_max ?? 3), rate: Number(settings.multi_buy_tier1_rate ?? 5) },
+      { min: Number(settings.multi_buy_tier2_min ?? 4), max: Number(settings.multi_buy_tier2_max ?? 5), rate: Number(settings.multi_buy_tier2_rate ?? 7.5) },
+      { min: Number(settings.multi_buy_tier3_min ?? 6), max: Number(settings.multi_buy_tier3_max ?? 10), rate: Number(settings.multi_buy_tier3_rate ?? 10) },
+    ];
+    const tier = tiers.find(t => qty >= t.min && qty <= t.max && t.rate > 0);
+    if (tier) return `Qty Offer ${tier.rate}% (${qty} items)`;
+  }
+  return `Order Offer Rs. ${Math.round(discount * 100) / 100}`;
+};
+
+const buildOrderSheetRow = (order: any, item: any, isFirst: boolean, settings: Record<string, any>) => ({
+  'Order ID': String(order?.order_number || ''),
+  'Customer Name': String(order?.customer_name || ''),
+  'Phone Number': String(order?.phone || ''),
+  'Address': String(order?.address || ''),
+  'Item Name': String(item?.product_name || order?.items?.[0]?.product_name || ''),
+  'Item Code': String(item?.sku || order?.items?.[0]?.sku || ''),
+  'Qty': Math.max(1, Number(item?.quantity ?? 1)),
+  'Unit Price (Rs)': Number(item?.unit_price ?? order?.items?.[0]?.unit_price ?? 0),
+  'Final Total (Rs)': isFirst ? Number(order?.total_amount ?? 0) : 0,
+  'Variant / Color': String(item?.variant_name || order?.items?.[0]?.variant_name || ''),
+  'Order Action': 'PENDING',
+  'Offer': orderQtyOfferLabel(order, settings),
+  'Discount (Rs)': isFirst ? Number(order?.special_offer_discount || 0) : 0,
+  'Source': String(order?.order_source || 'Website'),
+  'Main Code': String(item?.main_sku || item?.sku || ''),
+  'Line Total (Rs)': Math.max(1, Number(item?.quantity ?? 1)) * Number(item?.unit_price ?? 0),
+  'Normal Total (Rs)': isFirst ? Number(order?.subtotal || 0) : 0,
+  'Delivery Fee (Rs)': isFirst ? Number(order?.delivery_fee || 0) : 0,
+  'WhatsApp Number': String(order?.whatsapp || order?.phone || ''),
+  'Order Time': String(order?.created_at || new Date().toISOString()),
+  'Imported Status': String(order?.call_center_status || 'Pending'),
+  'City': String(order?.city || ''),
+  'District': String(order?.district || ''),
+});
+
+const buildOrderGroups = (orders: any[], settings: Record<string, any>) => {
+  const groups: Record<string, any[]> = {};
+  for (const order of orders) {
+    const source = String(order?.order_source || 'Website');
+    if (!groups[source]) groups[source] = [];
+    const items = Array.isArray(order?.items) && order.items.length ? order.items : [null];
+    items.forEach((item: any, i: number) => {
+      groups[source].push(buildOrderSheetRow(order, item, i === 0, settings));
+    });
+  }
+  return groups;
+};
+
+// ------------------------------------------------------------
+// Orders
+// ------------------------------------------------------------
+
+export async function syncOrderToGoogleSheets(order: any, webhookUrl: string, settings: Record<string, any>, _products?: any[]): Promise<SheetActionResult> {
+  const res = await postToAppsScript(webhookUrl, { action: 'sync_orders', groups: buildOrderGroups([order], settings) });
+  if (!res.ok) return { success: false, message: res.error || 'Google Sheet sync failed.' };
+  const status = res.result?.status;
+  if (status !== 'orders_synced' && status !== 'orders_batch_synced') {
+    return { success: false, message: res.result?.error || `Unexpected Google Sheet response: ${status || 'empty'}` };
+  }
+  return { success: true, message: 'Order synced to Google Sheet.', synced: res.result?.synced, existing: res.result?.existing, rows: res.result?.rows };
+}
+
+export async function syncOrdersBatchToGoogleSheets(orders: any[], webhookUrl: string, settings: Record<string, any>): Promise<SheetActionResult> {
+  if (!orders || !orders.length) return { success: true, message: 'Nothing to sync.', synced: 0 };
+  const res = await postToAppsScript(webhookUrl, { action: 'sync_orders', groups: buildOrderGroups(orders, settings) });
+  if (!res.ok) return { success: false, message: res.error || 'Google Sheet batch sync failed.' };
+  const status = res.result?.status;
+  if (status !== 'orders_synced' && status !== 'orders_batch_synced') {
+    return { success: false, message: res.result?.error || `Unexpected Google Sheet response: ${status || 'empty'}` };
+  }
+  return { success: true, message: 'Orders synced to Google Sheet.', synced: res.result?.synced, existing: res.result?.existing, rows: res.result?.rows };
+}
+
+export async function deleteOrderFromGoogleSheets(orderId: string, webhookUrl: string): Promise<SheetActionResult> {
+  const res = await postToAppsScript(webhookUrl, { action: 'delete_order', orderId });
+  if (!res.ok) return { success: false, message: res.error || 'Google Sheet order delete failed.' };
+  return { success: true, message: 'Order removed from Google Sheet.' };
+}
+
+// ------------------------------------------------------------
+// Product catalog (feeds the "Change Item To" dropdown in the Sheet)
+// ------------------------------------------------------------
+
+export async function syncProductCatalogToGoogleSheets(products: any[], webhookUrl: string, _settings?: Record<string, any>): Promise<SheetActionResult> {
+  const res = await postToAppsScript(webhookUrl, { action: 'catalog_sync', products });
+  if (!res.ok) return { success: false, message: res.error || 'Google Sheet catalog sync failed.' };
+  return { success: true, message: 'Product catalog synced to Google Sheet.', rows: res.result?.rows };
+}
+
+// ------------------------------------------------------------
+// Clear / reset helpers
+// ------------------------------------------------------------
+
+export async function clearGoogleSheetTestData(webhookUrl: string): Promise<SheetActionResult> {
+  const res = await postToAppsScript(webhookUrl, { action: 'clear_test_orders' });
+  if (!res.ok) return { success: false, message: res.error || 'Could not clear test orders from the Google Sheet.' };
+  return { success: true, message: 'Test orders cleared from Google Sheet.', removed: res.result?.removed };
+}
+
+export async function clearGoogleSheetLiveStartData(webhookUrl: string): Promise<SheetActionResult> {
+  const res = await postToAppsScript(webhookUrl, { action: 'clear_live_start_data' });
+  if (!res.ok) return { success: false, message: res.error || 'Could not clear the Google Sheet for live start.' };
+  return { success: true, message: 'Google Sheet order data cleared for live start.', removed: res.result?.removed };
+}
+
+// ============================================================
+// GOOGLE APPS SCRIPT SOURCE
+// Paste this whole block into the Google Sheet's Apps Script editor.
+// (Admin Dashboard -> Google Sheets panel -> "Copy code" button copies
+// exactly this string.)
+// ============================================================
+export const GOOGLE_APPS_SCRIPT_CODE = `// ============================================================
+// O-RA STORE - GOOGLE SHEET SYNC V15.6
 // CITY LIST: A=City, B=District
 // Existing order columns are NEVER cleared/reordered.
 // ============================================================
@@ -11,7 +216,7 @@ var ORA_CATALOG_HEADERS = ["Item Image","Main Code","Variant Code","Item Name","
 var ORA_ORDER_SHEETS = ["CALL CENTER ORDERS","FACEBOOK ORDERS","TIKTOK ORDERS"];
 var ORA_DELETED_SHEET = "DELETED ORDERS";
 var ORA_CITY_TAB = "CITY LIST";
-var ORA_VERSION = "O-RA Store Google Sheet Sync V15.5";
+var ORA_VERSION = "O-RA Store Google Sheet Sync V15.6";
 
 function oraJson_(obj) {
   return ContentService
@@ -716,21 +921,6 @@ function oraSearchCitiesFromTab_(q) {
   }
 }
 
-function oraDistrictForCity_(ss, city) {
-  var wanted = String(city || "").trim().toLowerCase();
-  if (!wanted) return "";
-  var cityTab = ss.getSheetByName(ORA_CITY_TAB);
-  if (!cityTab || cityTab.getLastRow() < 2) return "";
-  var vals = cityTab.getRange(2, 1, cityTab.getLastRow() - 1, 2).getDisplayValues();
-  for (var i = 0; i < vals.length; i++) {
-    var c = String(vals[i][0] || "").trim();
-    if (c && c.toLowerCase() === wanted) {
-      return String(vals[i][1] || "").trim();
-    }
-  }
-  return "";
-}
-
 function oraAppendOrders_(ss, orders) {
 
   var bySheet = {
@@ -1018,11 +1208,7 @@ function oraAppendOrders_(ss, orders) {
             ob,
             ["district"]
           )
-        ).trim();
-
-      if (!district && city) {
-        district = oraDistrictForCity_(ss, city);
-      }
+        );
 
       var whatsapp =
         String(
@@ -1031,7 +1217,7 @@ function oraAppendOrders_(ss, orders) {
             [
               "whatsAppNumber",
               "whatsapp_number",
-              "whatsapp"
+              "phone"
             ]
           )
         );
@@ -1172,8 +1358,7 @@ function oraAppendOrders_(ss, orders) {
           itemName,
           qty,
           orderTime,
-          // Lead ID is internal for duplicate protection only. Never expose it in the Google Sheet.
-          "",
+          leadId,
           impStatus,
           new Date(),
           first ? city : "",
@@ -1317,7 +1502,7 @@ function oraAppendOrders_(ss, orders) {
 }
 // ============================================================
 // PART 2/3
-// O-RA STORE - GOOGLE SHEET SYNC V15.5
+// O-RA STORE - GOOGLE SHEET SYNC V15.6
 // ============================================================
 
 function doGet(e) {
@@ -1502,6 +1687,81 @@ function doPost(e) {
         rows: resultOne.rows,
         timestamp:
           new Date().toISOString()
+      });
+    }
+
+    // --------------------------------------------------------
+    // PRODUCT CATALOG SYNC
+    // (Fills the "PRODUCT CATALOG" tab used by the "Change Item To"
+    // dropdown. Accepts either pre-built rows (body.items, keyed by
+    // the exact ORA_CATALOG_HEADERS names) or raw product objects
+    // (body.products, with nested .variants[]).)
+    // --------------------------------------------------------
+
+    if (
+      action === "catalog_sync" ||
+      action === "sync_catalog" ||
+      action === "product_catalog_sync"
+    ) {
+
+      var catResult = oraSyncCatalog_(ss, body);
+
+      return oraJson_({
+        ok: true,
+        status: "catalog_synced",
+        rows: catResult.rows,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // --------------------------------------------------------
+    // DELETE SINGLE ORDER (called from the website admin panel)
+    // --------------------------------------------------------
+
+    if (
+      action === "delete_order" ||
+      action === "delete_order_by_id"
+    ) {
+
+      var delResult = oraDeleteOrderRequest_(body);
+
+      return oraJson_(delResult);
+    }
+
+    // --------------------------------------------------------
+    // CLEAR TEST ORDERS (rows starting with TEST- / WEB-TEST-)
+    // --------------------------------------------------------
+
+    if (
+      action === "clear_test_orders" ||
+      action === "clear_test_data"
+    ) {
+
+      var clearTestResult = oraClearTestOrders_();
+
+      return oraJson_({
+        ok: true,
+        status: "test_orders_cleared",
+        removed: clearTestResult.removed
+      });
+    }
+
+    // --------------------------------------------------------
+    // FULL LIVE-START DATA CLEAR (removes ALL order rows so the
+    // shop can go live with a clean sheet; headers, City List and
+    // Product Catalog structure are kept)
+    // --------------------------------------------------------
+
+    if (
+      action === "clear_live_start_data"
+    ) {
+
+      var clearLiveResult = oraClearLiveStartData_();
+
+      return oraJson_({
+        ok: true,
+        status: "live_start_data_cleared",
+        removed: clearLiveResult.removed
       });
     }
 
@@ -2322,6 +2582,144 @@ function oraDeleteOrderRequest_(body) {
 }
 
 
+// ============================================================
+// PRODUCT CATALOG SYNC (feeds the "Change Item To" dropdown)
+// ============================================================
+
+function oraFlattenCatalogProducts_(products) {
+
+  var rows = [];
+  var now = new Date().toISOString();
+
+  for (var i = 0; i < products.length; i++) {
+
+    var p = products[i] || {};
+    var mainCode = String(p.sku || p.main_sku || "");
+    var name = String(p.name_en || p.name || "");
+    var img = (Array.isArray(p.images) && p.images.length) ? String(p.images[0]) : "";
+    var type = String(p.product_type || "");
+    var variants = Array.isArray(p.variants) ? p.variants : [];
+
+    if (!variants.length) {
+      rows.push([
+        img,
+        mainCode,
+        mainCode,
+        name,
+        "",
+        type,
+        oraNum_(p.selling_price),
+        oraNum_(p.stock_quantity),
+        String(p.status || ""),
+        img,
+        name,
+        now
+      ]);
+      continue;
+    }
+
+    for (var v = 0; v < variants.length; v++) {
+
+      var vv = variants[v] || {};
+      var variantCode = String(vv.sku || "");
+      var variantName = String(vv.option_value || "");
+      var label = variantName ? (name + " - " + variantName) : name;
+
+      rows.push([
+        vv.image || img,
+        mainCode,
+        variantCode,
+        name,
+        variantName,
+        type,
+        oraNum_(vv.selling_price),
+        oraNum_(vv.stock_quantity),
+        String(vv.status || p.status || ""),
+        vv.image || img,
+        label,
+        now
+      ]);
+    }
+  }
+
+  return rows;
+}
+
+function oraSyncCatalog_(ss, body) {
+
+  var sh = oraEnsureSheet_(
+    ss,
+    "PRODUCT CATALOG",
+    ORA_CATALOG_HEADERS
+  );
+
+  var rows = [];
+
+  if (Array.isArray(body.items) && body.items.length) {
+
+    for (var i = 0; i < body.items.length; i++) {
+      var it = body.items[i] || {};
+      rows.push(
+        ORA_CATALOG_HEADERS.map(function(h) {
+          return it[h] !== undefined && it[h] !== null ? it[h] : "";
+        })
+      );
+    }
+
+  } else if (Array.isArray(body.products)) {
+
+    rows = oraFlattenCatalogProducts_(body.products);
+  }
+
+  // The Product Catalog is a system-managed reference sheet (not an
+  // order sheet), so it is safe to fully rebuild its data rows on
+  // every sync -- this keeps prices/stock/dropdowns always accurate
+  // without needing complex per-row diffing.
+  var lr = sh.getLastRow();
+  if (lr > 1) {
+    sh.getRange(2, 1, lr - 1, ORA_CATALOG_HEADERS.length).clearContent();
+  }
+
+  if (rows.length) {
+    sh.getRange(2, 1, rows.length, ORA_CATALOG_HEADERS.length).setValues(rows);
+  }
+
+  sh.getRange(1, 1, 1, ORA_CATALOG_HEADERS.length)
+    .setFontWeight("bold")
+    .setBackground("#111827")
+    .setFontColor("#ffffff")
+    .setWrap(true);
+
+  return { rows: rows.length };
+}
+
+
+// ============================================================
+// FULL LIVE-START DATA CLEAR
+// ============================================================
+
+function oraClearLiveStartData_() {
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var removed = 0;
+  var allSheets = ORA_ORDER_SHEETS.concat([ORA_DELETED_SHEET]);
+
+  for (var s = 0; s < allSheets.length; s++) {
+
+    var sh = ss.getSheetByName(allSheets[s]);
+    if (!sh) continue;
+
+    var lr = sh.getLastRow();
+    if (lr < 2) continue;
+
+    removed += (lr - 1);
+    sh.deleteRows(2, lr - 1);
+  }
+
+  return { ok: true, removed: removed };
+}
+
+
 function oraClearTestOrders_() {
 
   var ss =
@@ -2916,5 +3314,6 @@ function testWebhookHealth() {
 
 
 // ============================================================
-// END OF O-RA GOOGLE APPS SCRIPT V15.5
+// END OF O-RA GOOGLE APPS SCRIPT V15.6
 // ============================================================
+`;
