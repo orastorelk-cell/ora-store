@@ -3,7 +3,6 @@ import { GOOGLE_APPS_SCRIPT_HOTFIX_V162 } from './googleAppsScriptHotfixV162';
 import { GOOGLE_APPS_SCRIPT_HOTFIX_V163 } from './googleAppsScriptHotfixV163';
 import { GOOGLE_APPS_SCRIPT_HOTFIX_V163_CITY } from './googleAppsScriptHotfixV163City';
 import { GOOGLE_APPS_SCRIPT_HOTFIX_V164 } from './googleAppsScriptHotfixV164';
-import { GOOGLE_APPS_SCRIPT_DIAGNOSTICS } from './googleAppsScriptDiagnostics';
 
 const APPS_SCRIPT_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/i;
 
@@ -92,6 +91,7 @@ const buildOrderSheetRow = (
     'Original Item Name': String(item?.product_name || ''),
     'Original Qty': qty,
     'Order Time': isFirst ? String(order?.created_at || new Date().toISOString()) : '',
+    'Lead ID': isFirst ? String(order?.platform_lead_id || '') : '',
     'Imported Status': isFirst ? String(order?.call_center_status || 'Pending') : '',
     'City': isFirst ? String(order?.city || '') : '',
     'District': isFirst ? String(order?.district || '') : '',
@@ -206,4 +206,4 @@ export async function clearGoogleSheetLiveStartData(webhookUrl: string): Promise
   };
 }
 
-export const GOOGLE_APPS_SCRIPT_CODE = `${GOOGLE_APPS_SCRIPT_CODE_V16}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V162}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163_CITY}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V164}\n\n${GOOGLE_APPS_SCRIPT_DIAGNOSTICS}`;
+export const GOOGLE_APPS_SCRIPT_CODE = `${GOOGLE_APPS_SCRIPT_CODE_V16}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V162}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163_CITY}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V164}`;
