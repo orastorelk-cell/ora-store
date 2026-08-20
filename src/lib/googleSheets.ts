@@ -3,6 +3,7 @@ import { GOOGLE_APPS_SCRIPT_HOTFIX_V162 } from './googleAppsScriptHotfixV162';
 import { GOOGLE_APPS_SCRIPT_HOTFIX_V163 } from './googleAppsScriptHotfixV163';
 import { GOOGLE_APPS_SCRIPT_HOTFIX_V163_CITY } from './googleAppsScriptHotfixV163City';
 import { GOOGLE_APPS_SCRIPT_HOTFIX_V164 } from './googleAppsScriptHotfixV164';
+import { GOOGLE_APPS_SCRIPT_HOTFIX_V166 } from './googleAppsScriptHotfixV166';
 import { GOOGLE_APPS_SCRIPT_HOTFIX_V167 } from './googleAppsScriptHotfixV167';
 
 const APPS_SCRIPT_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/i;
@@ -206,7 +207,7 @@ export async function clearGoogleSheetLiveStartData(webhookUrl: string): Promise
   };
 }
 
-// IMPORTANT: V16.4 already includes V16.5, and V16.5 already includes V16.6.
-// Append that chain only once, then append V16.7 once. Duplicating V16.5/V16.6
-// re-wraps setupOraCallCenterSheet and causes Maximum call stack recursion.
-export const GOOGLE_APPS_SCRIPT_CODE = `${GOOGLE_APPS_SCRIPT_CODE_V16}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V162}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163_CITY}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V164}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V167}`;
+// Composition rule: each behavior layer is included exactly once.
+// V16.4 includes the standalone V16.5 core. V16.6 only adds row validations.
+// V16.7 only adds catalog image previews. No setup wrapper is duplicated.
+export const GOOGLE_APPS_SCRIPT_CODE = `${GOOGLE_APPS_SCRIPT_CODE_V16}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V162}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163_CITY}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V164}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V166}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V167}`;
