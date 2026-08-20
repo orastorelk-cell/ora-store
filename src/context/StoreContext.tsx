@@ -1382,14 +1382,16 @@ useEffect(() => {
 
       const customer_name = String(rows.map(r=>r.customer_name).find(Boolean) || '').trim();
       const phone = String(rows.map(r=>r.phone).find(Boolean) || '').trim();
-      const whatsapp = String(rows.map(r=>r.whatsapp).find(Boolean) || phone).trim();
-      const address = String(rows.map(r=>r.address).find(Boolean) || 'N/A').trim();
-      const city = String(rows.map(r=>r.city).find(Boolean) || 'N/A').trim();
+      const whatsapp = String(rows.map(r=>r.whatsapp).find(Boolean) || '').trim();
+      const address = String(rows.map(r=>r.address).find(Boolean) || '').trim();
+      const city = String(rows.map(r=>r.city).find(Boolean) || '').trim();
       const payment_method = rows.map(r=>r.payment_method).find(Boolean) || 'COD';
       const notes = String(rows.map(r=>r.notes).find(Boolean) || `${source} Lead CSV Import`).trim();
       const isConfirmed = rows.some(r => r.is_confirmed);
       if (!customer_name) { failedCount++; errors.push(`${requestedOrderId || groupKey}: Customer name is missing.`); continue; }
       if (!phone) { failedCount++; errors.push(`${requestedOrderId || groupKey}: Phone number is missing.`); continue; }
+      if (!address) { failedCount++; errors.push(`${requestedOrderId || groupKey}: Address is missing.`); continue; }
+      if (!city) { failedCount++; errors.push(`${requestedOrderId || groupKey}: City is missing.`); continue; }
 
       const orderItems: Order['items'] = [];
       let invalidGroup = false;
@@ -1402,7 +1404,12 @@ useEffect(() => {
         if(isConfirmed && normalizedProductType(selection.product)==='variant' && !selection.variant){
           errors.push(`${requestedOrderId || groupKey}: Select a Color / Variant for ${selection.product.name_en} before confirmation.`); invalidGroup=true; break;
         }
-        const qty=Math.max(1,Number(row.quantity)||1);
+        const qty=Number(row.quantity);
+        if (!Number.isFinite(qty) || qty < 1) {
+          errors.push(`${requestedOrderId || groupKey}: Quantity is missing or invalid on row ${rowIndex+1}.`);
+          invalidGroup=true;
+          break;
+        }
         if(!isConfirmed && normalizedProductType(selection.product)==='variant' && !selection.variant){
           // Pending FB/TikTok lead: main code is enough. Exact variant is chosen by Call Center later.
           const unitPrice=displayUnitPrice(selection.product,settings);
