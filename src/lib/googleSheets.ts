@@ -2,6 +2,7 @@ import { GOOGLE_APPS_SCRIPT_CODE_CLEAN_V1 } from './googleAppsScriptCleanV1';
 import { GOOGLE_APPS_SCRIPT_CITY_EXACT_8549 } from './googleAppsScriptCityExact8549';
 import { GOOGLE_APPS_SCRIPT_CALL_CENTER_UX } from './googleAppsScriptCallCenterUX';
 import { GOOGLE_APPS_SCRIPT_STABLE_ROWS } from './googleAppsScriptStableRows';
+import { GOOGLE_APPS_SCRIPT_FULL_RESET } from './googleAppsScriptFullReset';
 
 const APPS_SCRIPT_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/i;
 
@@ -200,4 +201,4 @@ export async function clearGoogleSheetLiveStartData(webhookUrl: string): Promise
   return { success: true, message: 'Google Sheet order data cleared.', removed: Number(posted.result?.removed || 0), status: posted.result?.status, version: posted.result?.version };
 }
 
-export const GOOGLE_APPS_SCRIPT_CODE = `${GOOGLE_APPS_SCRIPT_CODE_CLEAN_V1}\n\n${GOOGLE_APPS_SCRIPT_CITY_EXACT_8549}\n\n${GOOGLE_APPS_SCRIPT_CALL_CENTER_UX}\n\n${GOOGLE_APPS_SCRIPT_STABLE_ROWS}`;
+export const GOOGLE_APPS_SCRIPT_CODE = `${GOOGLE_APPS_SCRIPT_CODE_CLEAN_V1}\n\n${GOOGLE_APPS_SCRIPT_CITY_EXACT_8549}\n\n${GOOGLE_APPS_SCRIPT_CALL_CENTER_UX}\n\n${GOOGLE_APPS_SCRIPT_STABLE_ROWS}\n\n${GOOGLE_APPS_SCRIPT_FULL_RESET}`;
