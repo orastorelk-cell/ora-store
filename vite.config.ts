@@ -4,10 +4,11 @@ import path from 'path';
 import {defineConfig} from 'vite';
 import { adminDashboardUnifiedUploadPatch } from './src/lib/adminDashboardUnifiedUploadPatch';
 import { adminDashboardVisibleTemplatePatch } from './src/lib/adminDashboardVisibleTemplatePatch';
+import { adminDashboardLeadPreviewPatch } from './src/lib/adminDashboardLeadPreviewPatch';
 
 export default defineConfig(() => {
   return {
-    plugins: [adminDashboardUnifiedUploadPatch(), adminDashboardVisibleTemplatePatch(), react(), tailwindcss()],
+    plugins: [adminDashboardUnifiedUploadPatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), react(), tailwindcss()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
