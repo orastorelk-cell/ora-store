@@ -37,7 +37,7 @@ const authenticateSheet = async (request: Request, sb: any) => {
   const webhook = String(state?.settings?.google_sheet_webhook_url || "").trim();
   const expected = deploymentIdFromWebhook(webhook);
   const supplied = String(request.headers.get("x-ora-sheet-key") || "").trim();
-  return { ok: Boolean(expected && supplied && supplied === expected), state, expected };
+  return { ok: Boolean(expected && supplied && supplied === expected), state };
 };
 
 const eligibleForSheet = (order: any) => {
@@ -50,7 +50,8 @@ export async function handleSheetPullRequest(request: Request, env: any): Promis
   const url = new URL(request.url);
   const isPull = url.pathname === "/api/google-sheets/pull";
   const isAck = url.pathname === "/api/google-sheets/pull-ack";
-  if (!isPull && !isAck) return null;
+  const isCatalog = url.pathname === "/api/google-sheets/catalog-pull";
+  if (!isPull && !isAck && !isCatalog) return null;
 
   const sb = getSupabase(env);
   if (!sb) return json({ ok: false, error: "Live Supabase connection is unavailable for Sheet pull sync." }, 503);
@@ -58,6 +59,16 @@ export async function handleSheetPullRequest(request: Request, env: any): Promis
   try {
     const auth = await authenticateSheet(request, sb);
     if (!auth.ok) return json({ ok: false, error: "Invalid Google Sheet pull key." }, 403);
+
+    if (isCatalog) {
+      if (request.method !== "GET") return json({ ok: false, error: "Method not allowed." }, 405);
+      return json({
+        ok: true,
+        status: "catalog_available",
+        catalog_version: Math.max(0, Number(auth.state?.version || 0)),
+        products: Array.isArray(auth.state?.products) ? auth.state.products.slice(0, 5000) : [],
+      });
+    }
 
     if (isPull) {
       if (request.method !== "GET") return json({ ok: false, error: "Method not allowed." }, 405);
@@ -79,6 +90,7 @@ export async function handleSheetPullRequest(request: Request, env: any): Promis
         count: orders.length,
         orders,
         order_numbers: orders.map((order: any) => String(order.order_number || "")).filter(Boolean),
+        catalog_version: Math.max(0, Number(auth.state?.version || 0)),
         server_time: new Date().toISOString(),
       });
     }
