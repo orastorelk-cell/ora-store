@@ -191,10 +191,26 @@ const guaranteeNewOrderSheetSync = async (request: Request, env: unknown, respon
   }
 };
 
+const markVerifiedBulkOrders = async (runtime: SheetRuntime, orders: any[]) => {
+  const syncedAt = new Date().toISOString();
+  const out: any[] = [];
+  for (const order of orders) {
+    const syncedOrder = {
+      ...order,
+      is_synced_google_sheets: true,
+      synced_at: syncedAt,
+      sheet_sync_verified_at: syncedAt,
+    };
+    await markPersistedOrder(runtime, syncedOrder);
+    out.push(syncedOrder);
+  }
+  return out;
+};
+
 // FB/TikTok imports use /api/admin/orders/bulk-import. The server persists the
-// whole import first. Mirror the returned durable orders in small verified chunks
-// so one expensive Apps Script call can never collapse a large lead upload into
-// a partial Sheet write. The Apps Script bundle also has a one-pass fast append.
+// whole import first. If its batch response has exact order/row counts, do one
+// physical last-ID readback and accept it. Otherwise repair the durable orders in
+// small verified chunks. This avoids both partial writes and duplicate re-writes.
 const guaranteeBulkImportSheetSync = async (request: Request, env: unknown, response: Response): Promise<Response> => {
   const url = new URL(request.url);
   if (request.method !== 'POST' || url.pathname !== '/api/admin/orders/bulk-import' || !response.ok) return response;
@@ -206,6 +222,37 @@ const guaranteeBulkImportSheetSync = async (request: Request, env: unknown, resp
 
   try {
     const runtime = await getSheetRuntime(env);
+    const expectedTotalRows = orders.reduce((sum, order) => sum + expectedItemRows(order), 0);
+    const serverSynced = Number(data?.sheet_sync?.synced || 0);
+    const serverRows = Number(data?.sheet_sync?.rows || 0);
+    const serverComplete = data?.sheet_sync?.ok === true
+      && serverSynced >= orders.length
+      && serverRows >= expectedTotalRows;
+
+    if (serverComplete) {
+      const lastOrder = orders[orders.length - 1];
+      const physical = await confirmPhysicalOrderRows(
+        runtime,
+        String(lastOrder?.order_number || ''),
+        expectedItemRows(lastOrder),
+      );
+      const syncedOrders = await markVerifiedBulkOrders(runtime, orders);
+      return makeJsonResponse({
+        ...data,
+        orders: syncedOrders,
+        sheet_sync: {
+          ...data.sheet_sync,
+          ok: true,
+          confirmed: true,
+          rows: serverRows,
+          synced: serverSynced,
+          spreadsheet_id: physical?.spreadsheet_id || data?.sheet_sync?.spreadsheet_id || null,
+          spreadsheet_name: physical?.spreadsheet_name || data?.sheet_sync?.spreadsheet_name || null,
+          path: 'clean-v1-worker-server-batch-verified',
+        },
+      }, response);
+    }
+
     const syncedOrders: any[] = [];
     let totalRows = 0;
     let totalSynced = 0;
@@ -224,8 +271,6 @@ const guaranteeBulkImportSheetSync = async (request: Request, env: unknown, resp
         throw new Error(`Bulk Sheet sync confirmed ${synced}/${chunk.length} order(s) and ${rows}/${expectedRows} row(s).`);
       }
 
-      // Read back the final ID in every small chunk. Combined with the exact
-      // synced/row counts above this catches the reported first-lead-only case.
       const lastOrder = chunk[chunk.length - 1];
       await confirmPhysicalOrderRows(
         runtime,
@@ -233,17 +278,8 @@ const guaranteeBulkImportSheetSync = async (request: Request, env: unknown, resp
         expectedItemRows(lastOrder),
       );
 
-      const syncedAt = new Date().toISOString();
-      for (const order of chunk) {
-        const syncedOrder = {
-          ...order,
-          is_synced_google_sheets: true,
-          synced_at: syncedAt,
-          sheet_sync_verified_at: syncedAt,
-        };
-        await markPersistedOrder(runtime, syncedOrder);
-        syncedOrders.push(syncedOrder);
-      }
+      const verified = await markVerifiedBulkOrders(runtime, chunk);
+      syncedOrders.push(...verified);
       totalRows += rows;
       totalSynced += synced;
     }
@@ -258,7 +294,7 @@ const guaranteeBulkImportSheetSync = async (request: Request, env: unknown, resp
         version: lastResult?.version || null,
         rows: totalRows,
         synced: totalSynced,
-        path: 'clean-v1-worker-bulk-confirmed',
+        path: 'clean-v1-worker-bulk-repaired',
       },
     }, response);
   } catch (error: any) {
