@@ -3,11 +3,8 @@ import { GOOGLE_APPS_SCRIPT_HOTFIX_V162 } from './googleAppsScriptHotfixV162';
 import { GOOGLE_APPS_SCRIPT_HOTFIX_V163 } from './googleAppsScriptHotfixV163';
 import { GOOGLE_APPS_SCRIPT_HOTFIX_V163_CITY } from './googleAppsScriptHotfixV163City';
 import { GOOGLE_APPS_SCRIPT_HOTFIX_V164 } from './googleAppsScriptHotfixV164';
-import { GOOGLE_APPS_SCRIPT_HOTFIX_V165 } from './googleAppsScriptHotfixV165';
-import { GOOGLE_APPS_SCRIPT_PULL_V18 } from './googleAppsScriptPullV18';
 
 const APPS_SCRIPT_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/i;
-const APPS_SCRIPT_DEPLOYMENT_ID_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/([^/]+)\/exec$/i;
 
 export type SheetActionResult = {
   success: boolean;
@@ -209,46 +206,4 @@ export async function clearGoogleSheetLiveStartData(webhookUrl: string): Promise
   };
 }
 
-const GOOGLE_APPS_SCRIPT_CODE_BASE = `${GOOGLE_APPS_SCRIPT_CODE_V16}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V162}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163_CITY}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V164}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V165}\n\n${GOOGLE_APPS_SCRIPT_PULL_V18}`;
-
-const deploymentIdFromAppsScriptUrl = (webhookUrl?: string) => {
-  const match = String(webhookUrl || '').trim().match(APPS_SCRIPT_DEPLOYMENT_ID_PATTERN);
-  return match?.[1] || '';
-};
-
-const readSavedSheetWebhookUrl = () => {
-  if (typeof window === 'undefined') return '';
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem('ora_settings') || '{}');
-    return String(parsed?.google_sheet_webhook_url || '').trim();
-  } catch {
-    return '';
-  }
-};
-
-export const buildGoogleAppsScriptCode = (webhookUrl?: string) => {
-  const deploymentId = deploymentIdFromAppsScriptUrl(webhookUrl);
-  const embeddedKey = deploymentId || '__ORA_PULL_KEY_MISSING__';
-  return GOOGLE_APPS_SCRIPT_CODE_BASE.replace('__ORA_PULL_KEY__', embeddedKey);
-};
-
-// AdminDashboard imports this as a live ES-module binding. Keep it synchronized
-// with the latest local settings so the Copy Script Code click cannot reuse the
-// deployment ID that existed when this module was first loaded.
-let lastEmbeddedWebhookUrl = readSavedSheetWebhookUrl();
-export let GOOGLE_APPS_SCRIPT_CODE = buildGoogleAppsScriptCode(lastEmbeddedWebhookUrl);
-
-const refreshGoogleAppsScriptCode = () => {
-  const nextWebhookUrl = readSavedSheetWebhookUrl();
-  if (nextWebhookUrl === lastEmbeddedWebhookUrl) return;
-  lastEmbeddedWebhookUrl = nextWebhookUrl;
-  GOOGLE_APPS_SCRIPT_CODE = buildGoogleAppsScriptCode(nextWebhookUrl);
-};
-
-if (typeof window !== 'undefined') {
-  // Capture runs before the Admin button's click handler, so a URL saved moments
-  // earlier is embedded before navigator.clipboard.writeText reads the binding.
-  window.addEventListener('pointerdown', refreshGoogleAppsScriptCode, true);
-  window.addEventListener('focus', refreshGoogleAppsScriptCode);
-  window.addEventListener('pageshow', refreshGoogleAppsScriptCode);
-}
+export const GOOGLE_APPS_SCRIPT_CODE = `${GOOGLE_APPS_SCRIPT_CODE_V16}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V162}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163_CITY}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V164}`;
