@@ -122,9 +122,8 @@ oraWriteOrder_ = function(ss, o) {
     sh.setRowHeightsForced(start, values.length, 34);
   } catch (e) {}
 
-  if (values.length > 1) {
-    try { sh.getRange(start, 1, values.length, ORA_ORDER_HEADERS.length).shiftRowGroupDepth(1); } catch (e) {}
-  }
+  // Every order gets its own collapsible row group, including single-item orders.
+  try { sh.getRange(start, 1, values.length, ORA_ORDER_HEADERS.length).shiftRowGroupDepth(1); } catch (e) {}
   try { oraStyleOrderBlock_(sh, start, values.length); } catch (e) {}
   return values.length;
 };
