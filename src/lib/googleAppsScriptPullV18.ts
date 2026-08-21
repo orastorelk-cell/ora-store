@@ -1,14 +1,27 @@
 export const GOOGLE_APPS_SCRIPT_PULL_V18 = String.raw`
 
 // ============================================================
-// O-RA STORE - V18 GOOGLE-PULL RELIABILITY LAYER
+// O-RA STORE - V18.1 GOOGLE-PULL RELIABILITY LAYER
 // Fallback path: Google itself pulls unsynced orders from O-RA.
 // The existing server -> Apps Script push remains enabled as a fast path.
 // ============================================================
-ORA_VERSION = "O-RA Store Google Sheet Sync V18 Pull Fallback";
+ORA_VERSION = "O-RA Store Google Sheet Sync V18.1 Pull Authorization";
 var ORA_PULL_API_BASE = "https://ora-store.orastore-lk.workers.dev";
 var ORA_PULL_HANDLER = "oraStablePullOrdersFromServer";
 var ORA_PULL_CATALOG_VERSION_KEY = "ORA_PULL_CATALOG_VERSION";
+
+function oraStableRequirePullPermissions_(){
+  ScriptApp.requireScopes(ScriptApp.AuthMode.FULL,[
+    "https://www.googleapis.com/auth/script.external_request",
+    "https://www.googleapis.com/auth/script.scriptapp",
+    "https://www.googleapis.com/auth/spreadsheets"
+  ]);
+}
+
+function oraAuthorizeOraSheetSync(){
+  oraStableRequirePullPermissions_();
+  return "O-RA Google Sheet pull permissions are authorized.";
+}
 
 function oraStableDeploymentId_(){
   var serviceUrl=String(ScriptApp.getService().getUrl()||"").trim();
@@ -94,10 +107,11 @@ function oraStableInstallPullTrigger_(){
   return true;
 }
 
-// Replace setup only at the final layer. This pins the exact Sheet, installs one
-// pull trigger, then tries one immediate pull so an already-saved order can appear
-// without waiting for the first scheduled minute.
+// Replace setup only at the final layer. Permission is required BEFORE the
+// installable trigger is created, so background runs never fail for missing
+// UrlFetchApp authorization.
 setupOraCallCenterSheet = function(){
+  oraStableRequirePullPermissions_();
   var ss=SpreadsheetApp.getActiveSpreadsheet();
   if(!ss)throw new Error("Open the target Google Sheet before running setupOraCallCenterSheet.");
   PropertiesService.getScriptProperties().setProperty(ORA_STABLE_SHEET_ID_KEY,ss.getId());
@@ -106,15 +120,10 @@ setupOraCallCenterSheet = function(){
   oraStableEnsureCatalog_(ss);
   if(!ss.getSheetByName("CITY LIST"))ss.insertSheet("CITY LIST");
   oraStableInstallPullTrigger_();
-  var pullMessage="Pull trigger installed";
-  try{
-    var first=oraStablePullOrdersFromServer();
-    pullMessage=first.status==="pull_synced"?("Pulled "+Number(first.synced||0)+" order(s)"):"No pending orders";
-  }catch(err){
-    pullMessage="Trigger installed; first pull will retry automatically";
-    console.log("O-RA first pull: "+String(err&&err.message?err.message:err));
-  }
+  var first=oraStablePullOrdersFromServer();
+  var pullMessage=first.status==="pull_synced"?("Pulled "+Number(first.synced||0)+" order(s)"):"No pending orders";
   SpreadsheetApp.flush();
-  SpreadsheetApp.getActive().toast("O-RA V18 ready - "+pullMessage+".","O-RA",8);
+  SpreadsheetApp.getActive().toast("O-RA V18.1 ready - "+pullMessage+".","O-RA",8);
+  return first;
 };
 `;
