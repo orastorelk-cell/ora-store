@@ -1,6 +1,7 @@
 import { httpServerHandler } from "cloudflare:node";
 import { waitUntil } from "cloudflare:workers";
 import app from "../server";
+import { handleSheetPullRequest } from "./sheet-pull";
 
 // Make Cloudflare background execution available to the Express routes.
 // This lets the customer receive the Order ID immediately while tasks
@@ -113,5 +114,12 @@ const makeJsonResponse = (data: unknown, original: Response) => new Response(
 };
 
 app.listen(3000);
+const nodeHandler: any = httpServerHandler({ port: 3000 });
 
-export default httpServerHandler({ port: 3000 });
+export default {
+  async fetch(request: Request, env: unknown, ctx: unknown) {
+    const pullResponse = await handleSheetPullRequest(request, env);
+    if (pullResponse) return pullResponse;
+    return nodeHandler.fetch(request, env, ctx);
+  },
+};
