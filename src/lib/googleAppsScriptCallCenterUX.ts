@@ -84,15 +84,16 @@ function oraRegroupExistingOrders_(sh) {
 
 var oraWriteOrderCallCenterBase_ = oraWriteOrder_;
 oraWriteOrder_ = function(ss, o) {
-  var sh = oraEnsureOrderSheet_(ss, oraSheetName_(o.source));
-  var before = sh.getLastRow();
   var written = oraWriteOrderCallCenterBase_(ss, o);
   if (written > 0) {
-    var start = before + 1;
-    if (written === 1) {
-      try { sh.getRange(start, 1, 1, ORA_ORDER_HEADERS.length).shiftRowGroupDepth(1); } catch (e) {}
+    var sh = oraEnsureOrderSheet_(ss, oraSheetName_(o.source));
+    var start = oraFindOrderFirstRow_(sh, o.id);
+    if (start) {
+      if (written === 1) {
+        try { sh.getRange(start, 1, 1, ORA_ORDER_HEADERS.length).shiftRowGroupDepth(1); } catch (e) {}
+      }
+      oraStyleOrderBlock_(sh, start, written);
     }
-    oraStyleOrderBlock_(sh, start, written);
     oraApplyCallCenterView_(sh);
   }
   return written;
@@ -145,20 +146,38 @@ function oraClearTestRowsBySource_(source) {
   return removed;
 }
 
+function oraClearAllOperationalOrderRows_() {
+  var ss = oraTarget_(), removed = 0;
+  for (var s = 0; s < ORA_ORDER_SHEETS.length; s++) {
+    var sh = ss.getSheetByName(ORA_ORDER_SHEETS[s]);
+    if (!sh || sh.getLastRow() < 2) {
+      if (sh) oraApplyCallCenterView_(sh);
+      continue;
+    }
+    var count = sh.getLastRow() - 1;
+    try { sh.getRange(2, 1, count, ORA_ORDER_HEADERS.length).shiftRowGroupDepth(-8); } catch (e) {}
+    sh.deleteRows(2, count);
+    removed += count;
+    oraApplyCallCenterView_(sh);
+  }
+  SpreadsheetApp.flush();
+  return removed;
+}
+
 var doPostCallCenterBase_ = doPost;
 doPost = function(e) {
   try {
     var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     var action = oraStr_(body.action || body.payload_type).trim().toLowerCase();
 
-    if (action === 'clear_test_orders' || action === 'operational_clear') {
-      var removed = oraClearTestRowsBySource_(body.source || body.order_source || '');
-      return oraJson_({
-        ok: true,
-        status: action === 'operational_clear' ? 'operational_cleared' : 'test_orders_cleared',
-        removed: removed,
-        version: ORA_VERSION
-      });
+    if (action === 'clear_test_orders') {
+      var removedTestsOnly = oraClearTestRowsBySource_(body.source || body.order_source || '');
+      return oraJson_({ ok: true, status: 'test_orders_cleared', removed: removedTestsOnly, version: ORA_VERSION });
+    }
+
+    if (action === 'operational_clear') {
+      var removedOperational = oraClearAllOperationalOrderRows_();
+      return oraJson_({ ok: true, status: 'operational_cleared', removed: removedOperational, version: ORA_VERSION });
     }
 
     if ((action === 'delete_order' || action === 'order_delete') && /delete test order/i.test(oraStr_(body.reason || ''))) {
