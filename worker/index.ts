@@ -113,5 +113,88 @@ const makeJsonResponse = (data: unknown, original: Response) => new Response(
 };
 
 app.listen(3000);
+const nodeHandler: any = httpServerHandler({ port: 3000 });
 
-export default httpServerHandler({ port: 3000 });
+const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), {
+  status,
+  headers: {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+  },
+});
+
+// Read-only production diagnostic. No webhook URL or secret is returned.
+// It reads the exact shared Store Settings from Supabase and sends the same
+// text/plain POST used by the server-side order mirror to Apps Script.
+const sheetDiagnostic = async (request: Request, envValue: unknown): Promise<Response | null> => {
+  const requestUrl = new URL(request.url);
+  if (request.method !== "GET" || requestUrl.pathname !== "/api/google-sheets/diagnostic") return null;
+
+  const env = (envValue || {}) as Record<string, string | undefined>;
+  const supabaseUrl = String(env.VITE_SUPABASE_URL || "").replace(/\/$/, "");
+  const supabaseKey = String(env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+  if (!supabaseUrl || !supabaseKey) {
+    return json({ ok: false, stage: "supabase_config", error: "Supabase server configuration is missing." }, 503);
+  }
+
+  try {
+    const stateResponse = await nativeFetch(
+      `${supabaseUrl}/rest/v1/admin_data_store?key=eq.storefront-state-v1&select=payload`,
+      {
+        headers: {
+          apikey: supabaseKey,
+          authorization: `Bearer ${supabaseKey}`,
+          accept: "application/json",
+        },
+      },
+    );
+    const stateText = await stateResponse.text();
+    let stateRows: any[] = [];
+    try { stateRows = stateText ? JSON.parse(stateText) : []; } catch {}
+    if (!stateResponse.ok) {
+      return json({ ok: false, stage: "supabase_settings_read", supabase_http: stateResponse.status, error: "Could not read shared Store Settings." }, 502);
+    }
+
+    const webhook = String(stateRows?.[0]?.payload?.settings?.google_sheet_webhook_url || "").trim();
+    if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/i.test(webhook)) {
+      return json({ ok: false, stage: "webhook_setting", supabase: true, webhook_configured: false, error: "Shared Google Sheet /exec URL is missing or invalid." }, 409);
+    }
+
+    const appsResponse = await nativeFetch(webhook, {
+      method: "POST",
+      headers: {
+        "content-type": "text/plain;charset=utf-8",
+        accept: "application/json,text/plain,*/*",
+      },
+      body: JSON.stringify({ action: "health" }),
+      redirect: "follow",
+    });
+    const appsText = await appsResponse.text();
+    let appsData: any = {};
+    try { appsData = appsText ? JSON.parse(appsText) : {}; } catch {}
+
+    const appsOk = appsResponse.ok && appsData?.ok !== false && String(appsData?.status || "") !== "error";
+    return json({
+      ok: appsOk,
+      stage: appsOk ? "google_apps_script" : "google_apps_script_error",
+      supabase: true,
+      webhook_configured: true,
+      apps_script_http: appsResponse.status,
+      apps_script_ok: appsData?.ok ?? null,
+      apps_script_status: appsData?.status ?? null,
+      apps_script_version: appsData?.version ?? null,
+      apps_script_message: appsData?.message ?? null,
+      response_is_json: Boolean(appsText && Object.keys(appsData || {}).length),
+    }, appsOk ? 200 : 502);
+  } catch (error: any) {
+    return json({ ok: false, stage: "diagnostic_exception", error: String(error?.message || error || "Unknown diagnostic error") }, 500);
+  }
+};
+
+export default {
+  async fetch(request: Request, env: unknown, ctx: unknown) {
+    const diagnostic = await sheetDiagnostic(request, env);
+    if (diagnostic) return diagnostic;
+    return nodeHandler.fetch(request, env, ctx);
+  },
+};
