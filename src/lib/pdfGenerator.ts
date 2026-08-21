@@ -12,6 +12,35 @@ export function validateInvoiceOrder(order: Order): string[] {
   return reasons;
 }
 
+const escapeInvoiceSvgText = (value: unknown) => String(value ?? '')
+  .replace(/&/g,'&amp;')
+  .replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;')
+  .replace(/"/g,'&quot;');
+
+// Keep Invoice V6 layout untouched. If the order has a District, place it on the
+// existing free line directly under City in the customer/delivery block.
+const buildInvoiceSvg = (
+  order: Order,
+  settings: StoreSettings,
+  pageItems: Order['items'],
+  pageIndex: number,
+  totalPages: number,
+) => {
+  const svg = buildExactInvoiceSvg(order,settings,false,pageItems,pageIndex,totalPages);
+  const district = String((order as any).district || '').trim();
+  if (!district) return svg;
+
+  const anchor = '\n<!-- Waybill: no redundant courier name -->';
+  if (!svg.includes(anchor)) return svg;
+  const districtRow = [
+    '<text class="t label" x="650" y="350">District</text>',
+    '<text class="t label" x="722" y="350">-</text>',
+    `<text class="t value" x="755" y="350">${escapeInvoiceSvgText(district)}</text>`,
+  ].join('');
+  return svg.replace(anchor, `\n${districtRow}\n${anchor}`);
+};
+
 async function addExactPage(
   doc: jsPDF,
   order: Order,
@@ -20,7 +49,7 @@ async function addExactPage(
   pageIndex: number,
   totalPages: number
 ) {
-  const svg=buildExactInvoiceSvg(order,settings,false,pageItems,pageIndex,totalPages);
+  const svg=buildInvoiceSvg(order,settings,pageItems,pageIndex,totalPages);
   const pngBytes=await svgToBrowserPngBytes(svg);
 
   const pageW=148;
@@ -167,7 +196,7 @@ export async function generateA4FourUpInvoicesPDF(orders: Order[], settings: Sto
     const y=row*105;
 
     try {
-      const svg=buildExactInvoiceSvg(order,settings,false,order.items || [],0,1);
+      const svg=buildInvoiceSvg(order,settings,order.items || [],0,1);
       const pngBytes=await svgToBrowserPngBytes(svg);
       doc.addImage(pngBytes,'PNG',x,y,148,105,undefined,'FAST');
     } catch (e:any) {
