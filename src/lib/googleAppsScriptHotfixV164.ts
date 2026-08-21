@@ -6,6 +6,7 @@ export const GOOGLE_APPS_SCRIPT_HOTFIX_V164 = String.raw`
 // Requires V16.1 + V16.2 + V16.3 above this code.
 // ============================================================
 ORA_VERSION = "O-RA Store Google Sheet Sync V16.4";
+var ORA_PINNED_SPREADSHEET_ID = "1NY5SJ-hSIQTGpAHMT4rz3TOPaQBao2dqL62nzb379m4";
 
 function oraFastCityMatchV164_(ss, cityName){
   var wanted=String(cityName||"").trim();
@@ -67,19 +68,20 @@ oraWriteOrder_ = function(ss,o){
 };
 
 oraSync_ = function(body){
-  var lock=LockService.getDocumentLock();
+  var lock=LockService.getScriptLock();
   if(!lock.tryLock(2500))return {ok:false,error:"Sheet is busy. Please retry."};
   try{
-    var ss=SpreadsheetApp.getActiveSpreadsheet(),orders=oraNormalizeIncoming_(body),rows=0;
+    var ss=SpreadsheetApp.openById(ORA_PINNED_SPREADSHEET_ID),orders=oraNormalizeIncoming_(body),rows=0;
     for(var i=0;i<orders.length;i++)rows+=oraWriteOrder_(ss,orders[i]);
-    return {ok:true,status:"orders_synced",synced:orders.length,existing:0,rows:rows,version:ORA_VERSION};
+    SpreadsheetApp.flush();
+    return {ok:true,status:"orders_synced",synced:orders.length,existing:0,rows:rows,version:ORA_VERSION,targetSheetId:ORA_PINNED_SPREADSHEET_ID};
   }finally{lock.releaseLock();}
 };
 
 var setupOraCallCenterSheetV163_ = setupOraCallCenterSheet;
 setupOraCallCenterSheet = function(){
   setupOraCallCenterSheetV163_();
-  var ss=SpreadsheetApp.getActiveSpreadsheet();
+  var ss=SpreadsheetApp.openById(ORA_PINNED_SPREADSHEET_ID);
   var fast=oraBuildFastCityList_(ss);
   for(var i=0;i<ORA_ORDER_SHEETS.length;i++){
     var sh=ss.getSheetByName(ORA_ORDER_SHEETS[i]);if(!sh)continue;
@@ -88,7 +90,7 @@ setupOraCallCenterSheet = function(){
     try{var cat=ss.getSheetByName(ORA_CATALOG_TAB);if(cat&&cat.getLastRow()>1&&hm["Change Item To"])sh.getRange(2,hm["Change Item To"],count,1).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInRange(cat.getRange(2,11,cat.getLastRow()-1,1),true).setAllowInvalid(false).build());}catch(e){}
     try{sh.setRowGroupControlPosition(SpreadsheetApp.GroupControlTogglePosition.BEFORE);}catch(e){}
   }
-  SpreadsheetApp.getActive().toast("O-RA V16.4 ready - fast sync, grouped orders, strict City selection.","O-RA",5);
+  try{ss.toast("O-RA V16.4 ready - production Sheet pinned.","O-RA",5);}catch(e){}
 };
 
 var onEditV164Base_ = onEdit;
