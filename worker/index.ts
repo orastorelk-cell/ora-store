@@ -57,23 +57,35 @@ const getSheetRuntime = async (envValue: unknown): Promise<SheetRuntime> => {
   return { supabaseUrl, supabaseKey, webhook };
 };
 
+const isTransientSheetError = (message: string) => /Service Spreadsheets failed while accessing document|Internal error|Service unavailable|timed out|timeout|temporarily unavailable/i.test(message);
+
 const postAppsScript = async (runtime: SheetRuntime, payload: Record<string, any>) => {
-  const response = await nativeFetch(runtime.webhook, {
-    method: 'POST',
-    headers: {
-      'content-type': 'text/plain;charset=utf-8',
-      accept: 'application/json,text/plain,*/*',
-    },
-    body: JSON.stringify(payload),
-    redirect: 'follow',
-  });
-  const { text, data } = await parseJsonResponse(response);
-  if (!response.ok) throw new Error(`Google Apps Script HTTP ${response.status}: ${text.slice(0, 240)}`);
-  if (!text || !Object.keys(data || {}).length) throw new Error(`Google Apps Script returned non-JSON: ${text.slice(0, 240)}`);
-  if (data?.ok === false || String(data?.status || '').toLowerCase() === 'error') {
-    throw new Error(data?.message || data?.error || 'Google Apps Script returned an error.');
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const response = await nativeFetch(runtime.webhook, {
+        method: 'POST',
+        headers: {
+          'content-type': 'text/plain;charset=utf-8',
+          accept: 'application/json,text/plain,*/*',
+        },
+        body: JSON.stringify(payload),
+        redirect: 'follow',
+      });
+      const { text, data } = await parseJsonResponse(response);
+      if (!response.ok) throw new Error(`Google Apps Script HTTP ${response.status}: ${text.slice(0, 240)}`);
+      if (!text || !Object.keys(data || {}).length) throw new Error(`Google Apps Script returned non-JSON: ${text.slice(0, 240)}`);
+      if (data?.ok === false || String(data?.status || '').toLowerCase() === 'error') {
+        throw new Error(data?.message || data?.error || 'Google Apps Script returned an error.');
+      }
+      return data;
+    } catch (error: any) {
+      lastError = error instanceof Error ? error : new Error(String(error || 'Google Apps Script call failed.'));
+      if (!isTransientSheetError(lastError.message) || attempt >= 3) throw lastError;
+      await new Promise(resolve => setTimeout(resolve, attempt === 1 ? 350 : 900));
+    }
   }
-  return data;
+  throw lastError || new Error('Google Apps Script call failed.');
 };
 
 const expectedRows = (order: any) => Math.max(1, Array.isArray(order?.items) && order.items.length ? order.items.length : 1);
