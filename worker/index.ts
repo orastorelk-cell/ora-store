@@ -101,11 +101,8 @@ app.listen(3000);
 
 const nodeHandler: any = httpServerHandler({ port: 3000 });
 
-// Claude's diagnosis is correct for the current architecture: real orders were
-// allowed to return before the Sheet write was confirmed. Instead of replacing
-// the whole server.ts (and risking unrelated working features), force the
-// existing /api/orders route onto its already-built synchronous confirmation
-// path by setting wait_sheet_sync=true at the Cloudflare boundary.
+// Real/test orders both use the server's existing synchronous Sheet-confirmation
+// path. The request body is rewritten only to set wait_sheet_sync=true.
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     try {
@@ -116,6 +113,10 @@ export default {
           payload.wait_sheet_sync = true;
           const headers = new Headers(request.headers);
           headers.set("content-type", "application/json");
+          // The JSON body length changed after adding wait_sheet_sync. Reusing the
+          // browser's old Content-Length makes the Node/Express body parser reject
+          // the request with a bare HTTP 400 before /api/orders can run.
+          headers.delete("content-length");
           const confirmedRequest = new Request(request.url, {
             method: "POST",
             headers,
