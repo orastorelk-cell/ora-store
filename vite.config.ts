@@ -5,10 +5,11 @@ import {defineConfig} from 'vite';
 import { adminDashboardUnifiedUploadPatch } from './src/lib/adminDashboardUnifiedUploadPatch';
 import { adminDashboardVisibleTemplatePatch } from './src/lib/adminDashboardVisibleTemplatePatch';
 import { adminDashboardLeadPreviewPatch } from './src/lib/adminDashboardLeadPreviewPatch';
+import { adminDashboardProductAutoPopularPatch } from './src/lib/adminDashboardProductAutoPopularPatch';
 
 export default defineConfig(() => {
   return {
-    plugins: [adminDashboardUnifiedUploadPatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), react(), tailwindcss()],
+    plugins: [adminDashboardUnifiedUploadPatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
