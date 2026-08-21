@@ -18,9 +18,38 @@ const escapeInvoiceSvgText = (value: unknown) => String(value ?? '')
   .replace(/>/g,'&gt;')
   .replace(/"/g,'&quot;');
 
-// Keep Invoice V6 layout untouched. If the order has a District, place it on the
-// existing free line directly under City in the customer/delivery block.
-const buildInvoiceSvg = (
+const APPS_SCRIPT_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/i;
+
+const resolveInvoiceDistrict = async (order: Order, settings: StoreSettings) => {
+  const existing = String((order as any).district || '').trim();
+  if (existing) return existing;
+
+  const webhookUrl = String((settings as any).google_sheet_webhook_url || '').trim();
+  const orderId = String(order.order_number || '').trim();
+  if (!orderId || !APPS_SCRIPT_URL_PATTERN.test(webhookUrl)) return '';
+
+  try {
+    const response = await fetch('/api/google-sheets/proxy', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        webhookUrl,
+        payload:{ action:'order_details', orderId },
+      }),
+    });
+    const data = await response.json().catch(()=>({}));
+    const result = data?.result || {};
+    if (!response.ok || data?.ok === false || result?.ok === false) return '';
+    return String(result?.district || '').trim();
+  } catch {
+    return '';
+  }
+};
+
+// Keep Invoice V6 layout untouched. If a District exists on the system order use
+// it directly; otherwise read the current Call Center Sheet value. This matters
+// for FB/TikTok leads where staff fills City/District during the phone call.
+const buildInvoiceSvg = async (
   order: Order,
   settings: StoreSettings,
   pageItems: Order['items'],
@@ -28,7 +57,7 @@ const buildInvoiceSvg = (
   totalPages: number,
 ) => {
   const svg = buildExactInvoiceSvg(order,settings,false,pageItems,pageIndex,totalPages);
-  const district = String((order as any).district || '').trim();
+  const district = await resolveInvoiceDistrict(order, settings);
   if (!district) return svg;
 
   const anchor = '\n<!-- Waybill: no redundant courier name -->';
@@ -49,7 +78,7 @@ async function addExactPage(
   pageIndex: number,
   totalPages: number
 ) {
-  const svg=buildInvoiceSvg(order,settings,pageItems,pageIndex,totalPages);
+  const svg=await buildInvoiceSvg(order,settings,pageItems,pageIndex,totalPages);
   const pngBytes=await svgToBrowserPngBytes(svg);
 
   const pageW=148;
@@ -196,7 +225,7 @@ export async function generateA4FourUpInvoicesPDF(orders: Order[], settings: Sto
     const y=row*105;
 
     try {
-      const svg=buildInvoiceSvg(order,settings,order.items || [],0,1);
+      const svg=await buildInvoiceSvg(order,settings,order.items || [],0,1);
       const pngBytes=await svgToBrowserPngBytes(svg);
       doc.addImage(pngBytes,'PNG',x,y,148,105,undefined,'FAST');
     } catch (e:any) {
