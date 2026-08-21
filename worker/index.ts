@@ -2,22 +2,14 @@ import { httpServerHandler } from "cloudflare:node";
 import { waitUntil } from "cloudflare:workers";
 import app from "../server";
 
-// Make Cloudflare background execution available to the Express routes.
-// This lets the customer receive the Order ID immediately while tasks
-// such as Google Sheet sync continue safely in the background.
+// Keep Cloudflare background execution available for non-order background work.
 (globalThis as any).__ORA_WAIT_UNTIL__ = waitUntil;
 
 // -----------------------------------------------------------------------------
 // Google Apps Script compatibility bridge
 // -----------------------------------------------------------------------------
-// Cloudflare can receive the Apps Script response headers promptly while the
-// redirected Google response body remains slow/stalled. server.ts used to wait
-// for response.text(), hit its AbortController timeout, and report a false Sheet
-// timeout even though Apps Script had already executed the doPost request.
-//
-// For sync_orders we therefore treat a successful HTTP response as acceptance,
-// cancel the unused response body, and return the small JSON contract server.ts
-// already expects. Delete/clear keep their legacy payload normalization below.
+// Keep only the legacy delete/clear payload normalization here. Order sync must
+// use the real Apps Script response; never synthesize a fake success response.
 const nativeFetch = globalThis.fetch.bind(globalThis);
 
 const isGoogleAppsScriptExec = (input: RequestInfo | URL) => {
@@ -34,26 +26,9 @@ const makeJsonResponse = (data: unknown, original: Response) => new Response(
   {
     status: original.status,
     statusText: original.statusText,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-    },
+    headers: { "content-type": "application/json; charset=utf-8" },
   },
 );
-
-const orderPayloadStats = (body: any) => {
-  const groups = body?.groups && typeof body.groups === "object" ? body.groups : {};
-  let rows = 0;
-  const ids = new Set<string>();
-  for (const value of Object.values(groups)) {
-    if (!Array.isArray(value)) continue;
-    rows += value.length;
-    for (const row of value as any[]) {
-      const id = String(row?.["Order ID"] || row?.order_id || row?.order_number || "").trim();
-      if (id) ids.add(id.toUpperCase());
-    }
-  }
-  return { rows, synced: ids.size };
-};
 
 (globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   if (!isGoogleAppsScriptExec(input) || !init?.body || typeof init.body !== "string") {
@@ -65,24 +40,6 @@ const orderPayloadStats = (body: any) => {
     body = JSON.parse(init.body);
   } catch {
     return nativeFetch(input, init);
-  }
-
-  // Order sync is the critical path. Apps Script executions were completing, but
-  // Cloudflare then waited on Google's response body until the 20 s server timeout.
-  // Do not consume that body. HTTP 2xx means the Web App accepted/executed the POST.
-  if (String(body?.action || "").toLowerCase() === "sync_orders") {
-    const response = await nativeFetch(input, init);
-    if (!response.ok) return response;
-    const stats = orderPayloadStats(body);
-    try { await response.body?.cancel(); } catch {}
-    return makeJsonResponse({
-      ok: true,
-      status: "orders_synced",
-      synced: stats.synced,
-      existing: 0,
-      rows: stats.rows,
-      edge_confirmed: true,
-    }, response);
   }
 
   let responseMode: "delete" | "clear" | null = null;
@@ -99,9 +56,7 @@ const orderPayloadStats = (body: any) => {
     body = { action: "clear_live_start_data" };
   }
 
-  if (!responseMode) {
-    return nativeFetch(input, init);
-  }
+  if (!responseMode) return nativeFetch(input, init);
 
   const response = await nativeFetch(input, {
     ...init,
@@ -120,9 +75,7 @@ const orderPayloadStats = (body: any) => {
     parsed = { ok: false, error: text || "Invalid Google Sheet response." };
   }
 
-  if (!response.ok || parsed?.ok === false) {
-    return makeJsonResponse(parsed, response);
-  }
+  if (!response.ok || parsed?.ok === false) return makeJsonResponse(parsed, response);
 
   if (responseMode === "delete") {
     const removed = Number(parsed?.deleted ?? parsed?.removed ?? 0);
@@ -146,4 +99,35 @@ const orderPayloadStats = (body: any) => {
 
 app.listen(3000);
 
-export default httpServerHandler({ port: 3000 });
+const nodeHandler: any = httpServerHandler({ port: 3000 });
+
+// Claude's diagnosis is correct for the current architecture: real orders were
+// allowed to return before the Sheet write was confirmed. Instead of replacing
+// the whole server.ts (and risking unrelated working features), force the
+// existing /api/orders route onto its already-built synchronous confirmation
+// path by setting wait_sheet_sync=true at the Cloudflare boundary.
+export default {
+  async fetch(request: Request, env: unknown, ctx: unknown) {
+    try {
+      const url = new URL(request.url);
+      if (request.method === "POST" && url.pathname === "/api/orders") {
+        const payload: any = await request.clone().json().catch(() => null);
+        if (payload && typeof payload === "object" && payload.order) {
+          payload.wait_sheet_sync = true;
+          const headers = new Headers(request.headers);
+          headers.set("content-type", "application/json");
+          const confirmedRequest = new Request(request.url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(payload),
+          });
+          return nodeHandler.fetch(confirmedRequest, env, ctx);
+        }
+      }
+    } catch {
+      // Fall through to the normal app handler; never block order persistence
+      // because the edge compatibility layer could not inspect a request.
+    }
+    return nodeHandler.fetch(request, env, ctx);
+  },
+};
