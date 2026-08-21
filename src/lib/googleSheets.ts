@@ -3,6 +3,7 @@ import { GOOGLE_APPS_SCRIPT_HOTFIX_V162 } from './googleAppsScriptHotfixV162';
 import { GOOGLE_APPS_SCRIPT_HOTFIX_V163 } from './googleAppsScriptHotfixV163';
 import { GOOGLE_APPS_SCRIPT_HOTFIX_V163_CITY } from './googleAppsScriptHotfixV163City';
 import { GOOGLE_APPS_SCRIPT_HOTFIX_V164 } from './googleAppsScriptHotfixV164';
+import { GOOGLE_APPS_SCRIPT_HOTFIX_V165 } from './googleAppsScriptHotfixV165';
 
 const APPS_SCRIPT_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/i;
 
@@ -206,4 +207,4 @@ export async function clearGoogleSheetLiveStartData(webhookUrl: string): Promise
   };
 }
 
-export const GOOGLE_APPS_SCRIPT_CODE = `${GOOGLE_APPS_SCRIPT_CODE_V16}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V162}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163_CITY}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V164}`;
+export const GOOGLE_APPS_SCRIPT_CODE = `${GOOGLE_APPS_SCRIPT_CODE_V16}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V162}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163_CITY}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V164}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V165}`;
