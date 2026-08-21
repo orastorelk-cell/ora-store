@@ -1,3 +1,5 @@
+import { GOOGLE_APPS_SCRIPT_HOTFIX_V165 } from './googleAppsScriptHotfixV165';
+
 export const GOOGLE_APPS_SCRIPT_HOTFIX_V164 = String.raw`
 // ============================================================
 // O-RA STORE - GOOGLE SHEET SPEED / GROUP / CITY HOTFIX V16.4
@@ -111,4 +113,4 @@ onEdit = function(e){
   }catch(err){}
   try{onEditV164Base_(e);}catch(err){}
 };
-`;
+` + "\n\n" + GOOGLE_APPS_SCRIPT_HOTFIX_V165;
