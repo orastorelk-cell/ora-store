@@ -3,22 +3,11 @@ import { waitUntil } from "cloudflare:workers";
 import app from "../server";
 
 // Make Cloudflare background execution available to the Express routes.
-// This lets the customer receive the Order ID immediately while tasks
-// such as Google Sheet sync continue safely in the background.
 (globalThis as any).__ORA_WAIT_UNTIL__ = waitUntil;
 
 // -----------------------------------------------------------------------------
 // Google Apps Script compatibility bridge
 // -----------------------------------------------------------------------------
-// The live server currently sends two legacy payload_type values that the
-// deployed V15.x Apps Script does not understand directly:
-//   order_delete      -> delete_order
-//   operational_clear -> clear_live_start_data
-//
-// Keep the server/API contract unchanged, but normalize only requests going to
-// the saved Google Apps Script /exec endpoint. The response is normalized back
-// to the status names the server already expects. This avoids fake-success UI
-// states while preserving the existing Sheet, City/District and Test Order code.
 const nativeFetch = globalThis.fetch.bind(globalThis);
 
 const isGoogleAppsScriptExec = (input: RequestInfo | URL) => {
@@ -37,6 +26,7 @@ const makeJsonResponse = (data: unknown, original: Response) => new Response(
     statusText: original.statusText,
     headers: {
       "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
     },
   },
 );
@@ -123,6 +113,202 @@ const json = (data: unknown, status = 200) => new Response(JSON.stringify(data),
   },
 });
 
+type SheetRuntime = {
+  supabaseUrl: string;
+  supabaseKey: string;
+  webhook: string;
+  settings: Record<string, any>;
+};
+
+const getSheetRuntime = async (envValue: unknown): Promise<SheetRuntime> => {
+  const env = (envValue || {}) as Record<string, string | undefined>;
+  const supabaseUrl = String(env.VITE_SUPABASE_URL || "").replace(/\/$/, "");
+  const supabaseKey = String(env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+  if (!supabaseUrl || !supabaseKey) throw new Error("Supabase server configuration is missing.");
+
+  const stateResponse = await nativeFetch(
+    `${supabaseUrl}/rest/v1/admin_data_store?key=eq.storefront-state-v1&select=payload`,
+    {
+      headers: {
+        apikey: supabaseKey,
+        authorization: `Bearer ${supabaseKey}`,
+        accept: "application/json",
+      },
+    },
+  );
+  const stateText = await stateResponse.text();
+  let stateRows: any[] = [];
+  try { stateRows = stateText ? JSON.parse(stateText) : []; } catch {}
+  if (!stateResponse.ok) throw new Error(`Could not read shared Store Settings (${stateResponse.status}).`);
+
+  const payload = stateRows?.[0]?.payload || {};
+  const settings = payload?.settings && typeof payload.settings === "object" ? payload.settings : {};
+  const webhook = String(settings?.google_sheet_webhook_url || "").trim();
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/i.test(webhook)) {
+    throw new Error("Shared Google Sheet /exec URL is missing or invalid.");
+  }
+  return { supabaseUrl, supabaseKey, webhook, settings };
+};
+
+const parseAppsScriptResponse = async (response: Response) => {
+  const text = await response.text();
+  let data: any = {};
+  try { data = text ? JSON.parse(text) : {}; } catch {}
+  return { text, data };
+};
+
+const quantityOfferLabel = (order: any, settings: Record<string, any>) => {
+  const qty = (Array.isArray(order?.items) ? order.items : [])
+    .reduce((sum: number, item: any) => sum + Math.max(1, Number(item?.quantity || 1)), 0);
+  const discount = Math.max(0, Number(order?.special_offer_discount || 0));
+  if (discount <= 0) return "No Qty Offer";
+  if (settings?.multi_buy_discount_enabled) {
+    const tiers = [
+      { min:Number(settings.multi_buy_tier1_min ?? 2), max:Number(settings.multi_buy_tier1_max ?? 3), rate:Number(settings.multi_buy_tier1_rate ?? 5) },
+      { min:Number(settings.multi_buy_tier2_min ?? 4), max:Number(settings.multi_buy_tier2_max ?? 5), rate:Number(settings.multi_buy_tier2_rate ?? 7.5) },
+      { min:Number(settings.multi_buy_tier3_min ?? 6), max:Number(settings.multi_buy_tier3_max ?? 10), rate:Number(settings.multi_buy_tier3_rate ?? 10) },
+    ];
+    const tier = tiers.find((row) => qty >= row.min && qty <= row.max && row.rate > 0);
+    if (tier) return `Qty Offer ${tier.rate}% (${qty} items)`;
+  }
+  return `Order Offer Rs. ${Math.round(discount * 100) / 100}`;
+};
+
+const getPersistedOrder = async (runtime: SheetRuntime, orderId: string): Promise<any | null> => {
+  const response = await nativeFetch(
+    `${runtime.supabaseUrl}/rest/v1/order_snapshots?order_id=eq.${encodeURIComponent(orderId)}&select=payload`,
+    {
+      headers: {
+        apikey: runtime.supabaseKey,
+        authorization: `Bearer ${runtime.supabaseKey}`,
+        accept: "application/json",
+      },
+    },
+  );
+  if (!response.ok) return null;
+  const rows: any[] = await response.json().catch(() => []);
+  return rows?.[0]?.payload || null;
+};
+
+const savePersistedOrder = async (runtime: SheetRuntime, order: any) => {
+  const response = await nativeFetch(
+    `${runtime.supabaseUrl}/rest/v1/order_snapshots?order_id=eq.${encodeURIComponent(String(order?.id || ""))}`,
+    {
+      method: "PATCH",
+      headers: {
+        apikey: runtime.supabaseKey,
+        authorization: `Bearer ${runtime.supabaseKey}`,
+        "content-type": "application/json",
+        prefer: "return=minimal",
+      },
+      body: JSON.stringify({ payload: order, updated_at: new Date().toISOString() }),
+    },
+  );
+  if (!response.ok) throw new Error(`Could not mark Google Sheet sync in durable order store (${response.status}).`);
+};
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// The Express route intentionally responds before its background Sheet mirror finishes.
+// On the live Worker that background path has proven unreliable. We do not rewrite the
+// incoming /api/orders body. Instead, after the durable server save succeeds, wait briefly
+// for the existing background mirror to confirm. Only if it still has not confirmed do we
+// send the saved final order object through the already-proven V17 sync_orders path.
+const guaranteeOrderSheetSync = async (request: Request, envValue: unknown, response: Response): Promise<Response> => {
+  const url = new URL(request.url);
+  if (request.method !== "POST" || url.pathname !== "/api/orders" || !response.ok) return response;
+
+  let data: any = {};
+  try { data = await response.clone().json(); } catch { return response; }
+  const order = data?.order;
+  if (!order || data?.sheet_sync?.queued !== true) return response;
+
+  try {
+    const runtime = await getSheetRuntime(envValue);
+
+    // Give the server's existing waitUntil mirror up to four seconds to finish first.
+    // This avoids racing two writers when the normal background path is healthy.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (attempt > 0) await sleep(1000);
+      const persisted = await getPersistedOrder(runtime, String(order.id || ""));
+      if (persisted?.is_synced_google_sheets === true) {
+        return makeJsonResponse({
+          ...data,
+          order: persisted,
+          sheet_sync: { ok:true, synced:1, confirmed:true, path:"server-background" },
+        }, response);
+      }
+    }
+
+    // Background did not confirm. Use the exact saved order values; V17 builds the
+    // rows, line totals, multi-item layout and target tab. We only supply the offer
+    // label because it is a display field, not a second pricing calculation.
+    const orderForSheet = {
+      ...order,
+      offer: quantityOfferLabel(order, runtime.settings),
+    };
+    const appsResponse = await nativeFetch(runtime.webhook, {
+      method: "POST",
+      headers: {
+        "content-type": "text/plain;charset=utf-8",
+        accept: "application/json,text/plain,*/*",
+      },
+      body: JSON.stringify({ action:"sync_orders", order:orderForSheet }),
+      redirect: "follow",
+    });
+    const { data: appsData } = await parseAppsScriptResponse(appsResponse);
+    const sheetOk = appsResponse.ok
+      && appsData?.ok !== false
+      && ["orders_synced", "orders_batch_synced"].includes(String(appsData?.status || ""));
+
+    if (!sheetOk) {
+      return makeJsonResponse({
+        ...data,
+        sheet_sync: {
+          ok:false,
+          error: appsData?.message || appsData?.error || `Google Apps Script sync failed (${appsResponse.status}).`,
+          status: appsData?.status || null,
+          version: appsData?.version || null,
+          path:"worker-confirmed-fallback",
+        },
+      }, response);
+    }
+
+    const syncedAt = new Date().toISOString();
+    const syncedOrder = {
+      ...order,
+      is_synced_google_sheets: true,
+      synced_at: syncedAt,
+    };
+    await savePersistedOrder(runtime, syncedOrder);
+
+    return makeJsonResponse({
+      ...data,
+      order: syncedOrder,
+      sheet_sync: {
+        ok:true,
+        synced:Number(appsData?.synced || 1),
+        rows:Number(appsData?.rows || 0),
+        existing:Number(appsData?.existing || 0),
+        status:appsData?.status || "orders_synced",
+        version:appsData?.version || null,
+        confirmed:true,
+        path:"worker-confirmed-fallback",
+      },
+    }, response);
+  } catch (error: any) {
+    // The order is already durably saved. Return it, but never pretend Sheet success.
+    return makeJsonResponse({
+      ...data,
+      sheet_sync: {
+        ok:false,
+        error:String(error?.message || error || "Google Sheet confirmation failed."),
+        path:"worker-confirmed-fallback",
+      },
+    }, response);
+  }
+};
+
 // Production diagnostic. No webhook URL or secret is returned.
 // Default mode is read-only health. Add ?write=1 to send one disposable
 // production-shaped sync_orders row through the exact saved /exec endpoint.
@@ -130,36 +316,8 @@ const sheetDiagnostic = async (request: Request, envValue: unknown): Promise<Res
   const requestUrl = new URL(request.url);
   if (request.method !== "GET" || requestUrl.pathname !== "/api/google-sheets/diagnostic") return null;
 
-  const env = (envValue || {}) as Record<string, string | undefined>;
-  const supabaseUrl = String(env.VITE_SUPABASE_URL || "").replace(/\/$/, "");
-  const supabaseKey = String(env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
-  if (!supabaseUrl || !supabaseKey) {
-    return json({ ok: false, stage: "supabase_config", error: "Supabase server configuration is missing." }, 503);
-  }
-
   try {
-    const stateResponse = await nativeFetch(
-      `${supabaseUrl}/rest/v1/admin_data_store?key=eq.storefront-state-v1&select=payload`,
-      {
-        headers: {
-          apikey: supabaseKey,
-          authorization: `Bearer ${supabaseKey}`,
-          accept: "application/json",
-        },
-      },
-    );
-    const stateText = await stateResponse.text();
-    let stateRows: any[] = [];
-    try { stateRows = stateText ? JSON.parse(stateText) : []; } catch {}
-    if (!stateResponse.ok) {
-      return json({ ok: false, stage: "supabase_settings_read", supabase_http: stateResponse.status, error: "Could not read shared Store Settings." }, 502);
-    }
-
-    const webhook = String(stateRows?.[0]?.payload?.settings?.google_sheet_webhook_url || "").trim();
-    if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/i.test(webhook)) {
-      return json({ ok: false, stage: "webhook_setting", supabase: true, webhook_configured: false, error: "Shared Google Sheet /exec URL is missing or invalid." }, 409);
-    }
-
+    const runtime = await getSheetRuntime(envValue);
     const doWrite = requestUrl.searchParams.get("write") === "1";
     const diagnosticOrderId = `ORA-DIAG-${Date.now()}`;
     const payload = doWrite
@@ -196,7 +354,7 @@ const sheetDiagnostic = async (request: Request, envValue: unknown): Promise<Res
         }
       : { action: "health" };
 
-    const appsResponse = await nativeFetch(webhook, {
+    const appsResponse = await nativeFetch(runtime.webhook, {
       method: "POST",
       headers: {
         "content-type": "text/plain;charset=utf-8",
@@ -205,10 +363,7 @@ const sheetDiagnostic = async (request: Request, envValue: unknown): Promise<Res
       body: JSON.stringify(payload),
       redirect: "follow",
     });
-    const appsText = await appsResponse.text();
-    let appsData: any = {};
-    try { appsData = appsText ? JSON.parse(appsText) : {}; } catch {}
-
+    const { text: appsText, data: appsData } = await parseAppsScriptResponse(appsResponse);
     const appsOk = appsResponse.ok && appsData?.ok !== false && String(appsData?.status || "") !== "error";
     return json({
       ok: appsOk,
@@ -229,7 +384,7 @@ const sheetDiagnostic = async (request: Request, envValue: unknown): Promise<Res
       response_is_json: Boolean(appsText && Object.keys(appsData || {}).length),
     }, appsOk ? 200 : 502);
   } catch (error: any) {
-    return json({ ok: false, stage: "diagnostic_exception", error: String(error?.message || error || "Unknown diagnostic error") }, 500);
+    return json({ ok:false, stage:"diagnostic_exception", error:String(error?.message || error || "Unknown diagnostic error") }, 500);
   }
 };
 
@@ -237,6 +392,8 @@ export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     const diagnostic = await sheetDiagnostic(request, env);
     if (diagnostic) return diagnostic;
-    return nodeHandler.fetch(request, env, ctx);
+
+    const response = await nodeHandler.fetch(request, env, ctx);
+    return guaranteeOrderSheetSync(request, env, response);
   },
 };
