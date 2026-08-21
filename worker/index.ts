@@ -102,7 +102,8 @@ app.listen(3000);
 const nodeHandler: any = httpServerHandler({ port: 3000 });
 
 // Real/test orders both use the server's existing synchronous Sheet-confirmation
-// path. The request body is rewritten only to set wait_sheet_sync=true.
+// path. Rebuild the request with only safe headers so stale transport headers
+// (content-length/content-encoding/transfer-encoding/etc.) cannot corrupt JSON.
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     try {
@@ -111,12 +112,15 @@ export default {
         const payload: any = await request.clone().json().catch(() => null);
         if (payload && typeof payload === "object" && payload.order) {
           payload.wait_sheet_sync = true;
-          const headers = new Headers(request.headers);
+
+          const headers = new Headers();
           headers.set("content-type", "application/json");
-          // The JSON body length changed after adding wait_sheet_sync. Reusing the
-          // browser's old Content-Length makes the Node/Express body parser reject
-          // the request with a bare HTTP 400 before /api/orders can run.
-          headers.delete("content-length");
+          headers.set("accept", request.headers.get("accept") || "application/json");
+          const authorization = request.headers.get("authorization");
+          if (authorization) headers.set("authorization", authorization);
+          const cookie = request.headers.get("cookie");
+          if (cookie) headers.set("cookie", cookie);
+
           const confirmedRequest = new Request(request.url, {
             method: "POST",
             headers,
