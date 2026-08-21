@@ -191,11 +191,10 @@ const guaranteeNewOrderSheetSync = async (request: Request, env: unknown, respon
   }
 };
 
-// FB/TikTok imports use /api/admin/orders/bulk-import. The old path trusted one
-// Apps Script batch response without a Worker-level physical check, so a partial
-// write could leave only the first lead visible in the Sheet. Re-send the durable
-// orders themselves (not rebuilt row objects), in manageable chunks, and verify
-// the last order of every chunk plus the exact total row count reported by Apps Script.
+// FB/TikTok imports use /api/admin/orders/bulk-import. The server persists the
+// whole import first. Mirror the returned durable orders in small verified chunks
+// so one expensive Apps Script call can never collapse a large lead upload into
+// a partial Sheet write. The Apps Script bundle also has a one-pass fast append.
 const guaranteeBulkImportSheetSync = async (request: Request, env: unknown, response: Response): Promise<Response> => {
   const url = new URL(request.url);
   if (request.method !== 'POST' || url.pathname !== '/api/admin/orders/bulk-import' || !response.ok) return response;
@@ -211,7 +210,7 @@ const guaranteeBulkImportSheetSync = async (request: Request, env: unknown, resp
     let totalRows = 0;
     let totalSynced = 0;
     let lastResult: any = null;
-    const chunkSize = 40;
+    const chunkSize = 10;
 
     for (let i = 0; i < orders.length; i += chunkSize) {
       const chunk = orders.slice(i, i + chunkSize);
@@ -220,11 +219,13 @@ const guaranteeBulkImportSheetSync = async (request: Request, env: unknown, resp
       lastResult = result;
       const status = String(result?.status || '');
       const rows = Number(result?.rows || 0);
-      if (status !== 'orders_synced' || rows < expectedRows) {
-        throw new Error(`Bulk Sheet sync wrote ${rows}/${expectedRows} expected row(s) for imported leads.`);
+      const synced = Number(result?.synced || 0);
+      if (status !== 'orders_synced' || rows < expectedRows || synced < chunk.length) {
+        throw new Error(`Bulk Sheet sync confirmed ${synced}/${chunk.length} order(s) and ${rows}/${expectedRows} row(s).`);
       }
 
-      // This specifically catches the reported "only first lead appears" failure.
+      // Read back the final ID in every small chunk. Combined with the exact
+      // synced/row counts above this catches the reported first-lead-only case.
       const lastOrder = chunk[chunk.length - 1];
       await confirmPhysicalOrderRows(
         runtime,
@@ -244,7 +245,7 @@ const guaranteeBulkImportSheetSync = async (request: Request, env: unknown, resp
         syncedOrders.push(syncedOrder);
       }
       totalRows += rows;
-      totalSynced += chunk.length;
+      totalSynced += synced;
     }
 
     return makeJsonResponse({
