@@ -3,10 +3,11 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import {defineConfig} from 'vite';
 import { adminDashboardUnifiedUploadPatch } from './src/lib/adminDashboardUnifiedUploadPatch';
+import { adminDashboardVisibleTemplatePatch } from './src/lib/adminDashboardVisibleTemplatePatch';
 
 export default defineConfig(() => {
   return {
-    plugins: [adminDashboardUnifiedUploadPatch(), react(), tailwindcss()],
+    plugins: [adminDashboardUnifiedUploadPatch(), adminDashboardVisibleTemplatePatch(), react(), tailwindcss()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
