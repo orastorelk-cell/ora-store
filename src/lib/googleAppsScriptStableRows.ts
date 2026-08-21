@@ -35,8 +35,25 @@ function oraStableRowsAreContiguous_(rows) {
   return true;
 }
 
-function oraBuildStableOrderValues_(sh, o, prior) {
+// Website City + District are used on the FIRST sync. After the order exists in
+// the Sheet, Call Center may correct City/District manually. Preserve that exact
+// Sheet location on later resyncs so the website original does not overwrite a
+// Call Center correction.
+function oraCaptureExistingLocation_(sh, orderId) {
+  var hm = oraHeaderMap_(sh);
+  var rows = oraStableOrderRows_(sh, orderId);
+  if (!rows.length) return { exists: false, city: '', district: '' };
+  var row = rows[0];
+  return {
+    exists: true,
+    city: hm['City'] ? oraStr_(sh.getRange(row, hm['City']).getDisplayValue()) : '',
+    district: hm['District'] ? oraStr_(sh.getRange(row, hm['District']).getDisplayValue()) : ''
+  };
+}
+
+function oraBuildStableOrderValues_(sh, o, prior, priorLocation) {
   var hm = oraHeaderMap_(sh), rows = [], now = new Date();
+  priorLocation = priorLocation || { exists: false, city: '', district: '' };
   for (var i = 0; i < o.items.length; i++) {
     var it = o.items[i], first = i === 0, row = [];
     for (var c = 0; c < ORA_ORDER_HEADERS.length; c++) row.push('');
@@ -47,8 +64,8 @@ function oraBuildStableOrderValues_(sh, o, prior) {
     set('Phone Number', first ? o.phone : '');
     set('WhatsApp Number', first ? o.whatsapp : '');
     set('Address', first ? o.address : '');
-    set('City', first ? o.city : '');
-    set('District', first ? o.district : '');
+    set('City', first ? (priorLocation.exists ? priorLocation.city : o.city) : '');
+    set('District', first ? (priorLocation.exists ? priorLocation.district : o.district) : '');
     set('Item Name', it.name);
     set('Main Code', it.main || it.code);
     set('Item Code', it.code);
@@ -85,7 +102,8 @@ function oraBuildStableOrderValues_(sh, o, prior) {
 oraWriteOrder_ = function(ss, o) {
   var sh = oraEnsureOrderSheet_(ss, oraSheetName_(o.source));
   var prior = oraCaptureActions_(sh, o.id);
-  var values = oraBuildStableOrderValues_(sh, o, prior);
+  var priorLocation = oraCaptureExistingLocation_(sh, o.id);
+  var values = oraBuildStableOrderValues_(sh, o, prior, priorLocation);
   if (!values.length) return 0;
 
   var oldRows = oraStableOrderRows_(sh, o.id);
