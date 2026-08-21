@@ -2,14 +2,23 @@ import { httpServerHandler } from "cloudflare:node";
 import { waitUntil } from "cloudflare:workers";
 import app from "../server";
 
-// Keep Cloudflare background execution available for non-order background work.
+// Make Cloudflare background execution available to the Express routes.
+// This lets the customer receive the Order ID immediately while tasks
+// such as Google Sheet sync continue safely in the background.
 (globalThis as any).__ORA_WAIT_UNTIL__ = waitUntil;
 
 // -----------------------------------------------------------------------------
 // Google Apps Script compatibility bridge
 // -----------------------------------------------------------------------------
-// Keep only the legacy delete/clear payload normalization here. Order sync must
-// use the real Apps Script response; never synthesize a fake success response.
+// The live server currently sends two legacy payload_type values that the
+// deployed V15.x Apps Script does not understand directly:
+//   order_delete      -> delete_order
+//   operational_clear -> clear_live_start_data
+//
+// Keep the server/API contract unchanged, but normalize only requests going to
+// the saved Google Apps Script /exec endpoint. The response is normalized back
+// to the status names the server already expects. This avoids fake-success UI
+// states while preserving the existing Sheet, City/District and Test Order code.
 const nativeFetch = globalThis.fetch.bind(globalThis);
 
 const isGoogleAppsScriptExec = (input: RequestInfo | URL) => {
@@ -26,7 +35,9 @@ const makeJsonResponse = (data: unknown, original: Response) => new Response(
   {
     status: original.status,
     statusText: original.statusText,
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+    },
   },
 );
 
@@ -56,7 +67,9 @@ const makeJsonResponse = (data: unknown, original: Response) => new Response(
     body = { action: "clear_live_start_data" };
   }
 
-  if (!responseMode) return nativeFetch(input, init);
+  if (!responseMode) {
+    return nativeFetch(input, init);
+  }
 
   const response = await nativeFetch(input, {
     ...init,
@@ -75,7 +88,9 @@ const makeJsonResponse = (data: unknown, original: Response) => new Response(
     parsed = { ok: false, error: text || "Invalid Google Sheet response." };
   }
 
-  if (!response.ok || parsed?.ok === false) return makeJsonResponse(parsed, response);
+  if (!response.ok || parsed?.ok === false) {
+    return makeJsonResponse(parsed, response);
+  }
 
   if (responseMode === "delete") {
     const removed = Number(parsed?.deleted ?? parsed?.removed ?? 0);
@@ -99,40 +114,4 @@ const makeJsonResponse = (data: unknown, original: Response) => new Response(
 
 app.listen(3000);
 
-const nodeHandler: any = httpServerHandler({ port: 3000 });
-
-// Real/test orders both use the server's existing synchronous Sheet-confirmation
-// path. Rebuild the request with only safe headers so stale transport headers
-// (content-length/content-encoding/transfer-encoding/etc.) cannot corrupt JSON.
-export default {
-  async fetch(request: Request, env: unknown, ctx: unknown) {
-    try {
-      const url = new URL(request.url);
-      if (request.method === "POST" && url.pathname === "/api/orders") {
-        const payload: any = await request.clone().json().catch(() => null);
-        if (payload && typeof payload === "object" && payload.order) {
-          payload.wait_sheet_sync = true;
-
-          const headers = new Headers();
-          headers.set("content-type", "application/json");
-          headers.set("accept", request.headers.get("accept") || "application/json");
-          const authorization = request.headers.get("authorization");
-          if (authorization) headers.set("authorization", authorization);
-          const cookie = request.headers.get("cookie");
-          if (cookie) headers.set("cookie", cookie);
-
-          const confirmedRequest = new Request(request.url, {
-            method: "POST",
-            headers,
-            body: JSON.stringify(payload),
-          });
-          return nodeHandler.fetch(confirmedRequest, env, ctx);
-        }
-      }
-    } catch {
-      // Fall through to the normal app handler; never block order persistence
-      // because the edge compatibility layer could not inspect a request.
-    }
-    return nodeHandler.fetch(request, env, ctx);
-  },
-};
+export default httpServerHandler({ port: 3000 });
