@@ -7,6 +7,7 @@ import { GOOGLE_APPS_SCRIPT_HOTFIX_V165 } from './googleAppsScriptHotfixV165';
 import { GOOGLE_APPS_SCRIPT_PULL_V18 } from './googleAppsScriptPullV18';
 
 const APPS_SCRIPT_URL_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/i;
+const APPS_SCRIPT_DEPLOYMENT_ID_PATTERN = /^https:\/\/script\.google\.com\/macros\/s\/([^/]+)\/exec$/i;
 
 export type SheetActionResult = {
   success: boolean;
@@ -208,4 +209,30 @@ export async function clearGoogleSheetLiveStartData(webhookUrl: string): Promise
   };
 }
 
-export const GOOGLE_APPS_SCRIPT_CODE = `${GOOGLE_APPS_SCRIPT_CODE_V16}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V162}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163_CITY}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V164}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V165}\n\n${GOOGLE_APPS_SCRIPT_PULL_V18}`;
+const GOOGLE_APPS_SCRIPT_CODE_BASE = `${GOOGLE_APPS_SCRIPT_CODE_V16}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V162}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V163_CITY}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V164}\n\n${GOOGLE_APPS_SCRIPT_HOTFIX_V165}\n\n${GOOGLE_APPS_SCRIPT_PULL_V18}`;
+
+const deploymentIdFromAppsScriptUrl = (webhookUrl?: string) => {
+  const match = String(webhookUrl || '').trim().match(APPS_SCRIPT_DEPLOYMENT_ID_PATTERN);
+  return match?.[1] || '';
+};
+
+const readSavedSheetWebhookUrl = () => {
+  if (typeof window === 'undefined') return '';
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem('ora_settings') || '{}');
+    return String(parsed?.google_sheet_webhook_url || '').trim();
+  } catch {
+    return '';
+  }
+};
+
+export const buildGoogleAppsScriptCode = (webhookUrl?: string) => {
+  const deploymentId = deploymentIdFromAppsScriptUrl(webhookUrl);
+  const embeddedKey = deploymentId || '__ORA_PULL_KEY_MISSING__';
+  return GOOGLE_APPS_SCRIPT_CODE_BASE.replace('__ORA_PULL_KEY__', embeddedKey);
+};
+
+// AdminDashboard imports this value directly for Copy Script Code. It is generated
+// from the exact /exec URL already saved in this browser's O-RA settings, so Apps
+// Script no longer guesses its deployment ID from an editor/dev execution context.
+export const GOOGLE_APPS_SCRIPT_CODE = buildGoogleAppsScriptCode(readSavedSheetWebhookUrl());
