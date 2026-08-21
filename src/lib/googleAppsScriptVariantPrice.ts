@@ -6,6 +6,15 @@ export const GOOGLE_APPS_SCRIPT_VARIANT_PRICE = String.raw`
 // ============================================================
 ORA_VERSION = 'O-RA Store Google Sheets Clean V1 + Variant Price Live';
 
+// Item changes now apply immediately, so keep the old checkbox only for
+// backwards compatibility and hide it from the call-center working view.
+var oraCallCenterHiddenHeadersVariantBase_ = oraCallCenterHiddenHeaders_;
+oraCallCenterHiddenHeaders_ = function() {
+  var headers = oraCallCenterHiddenHeadersVariantBase_();
+  if (headers.indexOf('Apply Item Change') < 0) headers.push('Apply Item Change');
+  return headers;
+};
+
 function oraVariantCatalogRows_(ss, mainCode) {
   var cat = ss.getSheetByName(ORA_CATALOG_TAB);
   if (!cat || cat.getLastRow() < 2) return [];
