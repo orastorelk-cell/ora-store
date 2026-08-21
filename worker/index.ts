@@ -123,9 +123,9 @@ const json = (data: unknown, status = 200) => new Response(JSON.stringify(data),
   },
 });
 
-// Read-only production diagnostic. No webhook URL or secret is returned.
-// It reads the exact shared Store Settings from Supabase and sends the same
-// text/plain POST used by the server-side order mirror to Apps Script.
+// Production diagnostic. No webhook URL or secret is returned.
+// Default mode is read-only health. Add ?write=1 to send one disposable
+// production-shaped sync_orders row through the exact saved /exec endpoint.
 const sheetDiagnostic = async (request: Request, envValue: unknown): Promise<Response | null> => {
   const requestUrl = new URL(request.url);
   if (request.method !== "GET" || requestUrl.pathname !== "/api/google-sheets/diagnostic") return null;
@@ -160,13 +160,49 @@ const sheetDiagnostic = async (request: Request, envValue: unknown): Promise<Res
       return json({ ok: false, stage: "webhook_setting", supabase: true, webhook_configured: false, error: "Shared Google Sheet /exec URL is missing or invalid." }, 409);
     }
 
+    const doWrite = requestUrl.searchParams.get("write") === "1";
+    const diagnosticOrderId = `ORA-DIAG-${Date.now()}`;
+    const payload = doWrite
+      ? {
+          action: "sync_orders",
+          groups: {
+            Website: [{
+              "Order ID": diagnosticOrderId,
+              "Customer Name": "O-RA DIAGNOSTIC - SAFE TO DELETE",
+              "Phone Number": "0770000000",
+              "Address": "SYSTEM DIAGNOSTIC ROW",
+              "Item Name": "Google Sheet Write Diagnostic",
+              "Item Code": "DIAG-001",
+              "Qty": 1,
+              "Unit Price (Rs)": 1,
+              "Final Total (Rs)": 1,
+              "Variant / Color": "",
+              "Item Action": "KEEP ITEM",
+              "Order Action": "PENDING",
+              "Offer": "No Qty Offer",
+              "Discount (Rs)": 0,
+              "Source": "Website",
+              "Main Code": "DIAG-001",
+              "Line Total (Rs)": 1,
+              "Normal Total (Rs)": 1,
+              "Delivery Fee (Rs)": 0,
+              "WhatsApp Number": "0770000000",
+              "Order Time": new Date().toISOString(),
+              "Imported Status": "Pending",
+              "City": "Colombo",
+              "District": "Colombo",
+            }],
+          },
+        }
+      : { action: "health" };
+
     const appsResponse = await nativeFetch(webhook, {
       method: "POST",
       headers: {
         "content-type": "text/plain;charset=utf-8",
         accept: "application/json,text/plain,*/*",
       },
-      body: JSON.stringify({ action: "health" }),
+      body: JSON.stringify(payload),
       redirect: "follow",
     });
     const appsText = await appsResponse.text();
@@ -176,14 +212,20 @@ const sheetDiagnostic = async (request: Request, envValue: unknown): Promise<Res
     const appsOk = appsResponse.ok && appsData?.ok !== false && String(appsData?.status || "") !== "error";
     return json({
       ok: appsOk,
-      stage: appsOk ? "google_apps_script" : "google_apps_script_error",
+      stage: doWrite
+        ? (appsOk ? "google_sheet_write" : "google_sheet_write_error")
+        : (appsOk ? "google_apps_script" : "google_apps_script_error"),
+      diagnostic_order_id: doWrite ? diagnosticOrderId : undefined,
       supabase: true,
       webhook_configured: true,
       apps_script_http: appsResponse.status,
       apps_script_ok: appsData?.ok ?? null,
       apps_script_status: appsData?.status ?? null,
       apps_script_version: appsData?.version ?? null,
-      apps_script_message: appsData?.message ?? null,
+      apps_script_message: appsData?.message ?? appsData?.error ?? null,
+      synced: appsData?.synced ?? null,
+      rows: appsData?.rows ?? null,
+      existing: appsData?.existing ?? null,
       response_is_json: Boolean(appsText && Object.keys(appsData || {}).length),
     }, appsOk ? 200 : 502);
   } catch (error: any) {
