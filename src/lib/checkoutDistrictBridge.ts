@@ -67,8 +67,7 @@ if (typeof window !== 'undefined' && !window.__ORA_DISTRICT_BRIDGE_INSTALLED__) 
     const method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
     const pathname = new URL(requestUrl, window.location.origin).pathname;
 
-    // Cache the exact City + District pairs that the checkout search returned.
-    // This gives us a second safe source if the React field is unavailable for a moment.
+    // Cache the exact City + District pairs returned to Checkout.
     if (method === 'GET' && pathname === '/api/courier/fardar/search') {
       const response = await nativeFetch(input, init);
       try {
@@ -82,9 +81,9 @@ if (typeof window !== 'undefined' && !window.__ORA_DISTRICT_BRIDGE_INSTALLED__) 
         const payload = JSON.parse(init.body);
         const order = payload?.order;
         if (order && !norm(order.district)) {
-          // First choice: the exact district currently shown in Checkout.
-          // Fallback: only use a cached city when that city maps to exactly one district.
-          // Ambiguous city names are never guessed.
+          // First choice: exact District currently shown in Checkout.
+          // Fallback: use recent courier search only when the City has exactly one district.
+          // Ambiguous same-name cities are never guessed.
           const district = districtFromCheckoutDom() || districtFromRecentSearch(order.city);
           if (district) {
             const nextPayload = {
@@ -93,10 +92,25 @@ if (typeof window !== 'undefined' && !window.__ORA_DISTRICT_BRIDGE_INSTALLED__) 
             };
             return nativeFetch(input, { ...init, body: JSON.stringify(nextPayload) });
           }
+
+          // Website checkout must never create another order with a blank District.
+          // The customer needs to select one of the courier City suggestions first.
+          const source = norm(order.order_source || 'Website');
+          if (!source || source === 'Website') {
+            return new Response(
+              JSON.stringify({
+                error: 'Please select the City from the suggested courier list so the District can be confirmed.',
+              }),
+              {
+                status: 400,
+                headers: { 'Content-Type': 'application/json; charset=utf-8' },
+              },
+            );
+          }
         }
       }
     } catch {
-      // Never block checkout if the guard cannot inspect a non-standard request.
+      // Never block non-standard requests because of the bridge itself.
     }
 
     return nativeFetch(input, init);
