@@ -1,14 +1,15 @@
 export const GOOGLE_APPS_SCRIPT_PULL_V18 = String.raw`
 
 // ============================================================
-// O-RA STORE - V18.1 GOOGLE-PULL RELIABILITY LAYER
+// O-RA STORE - V18.2 GOOGLE-PULL RELIABILITY LAYER
 // Fallback path: Google itself pulls unsynced orders from O-RA.
-// The existing server -> Apps Script push remains enabled as a fast path.
+// The exact production /exec deployment key is embedded by googleSheets.ts.
 // ============================================================
-ORA_VERSION = "O-RA Store Google Sheet Sync V18.1 Pull Authorization";
+ORA_VERSION = "O-RA Store Google Sheet Sync V18.2 Exact Pull Key";
 var ORA_PULL_API_BASE = "https://ora-store.orastore-lk.workers.dev";
 var ORA_PULL_HANDLER = "oraStablePullOrdersFromServer";
 var ORA_PULL_CATALOG_VERSION_KEY = "ORA_PULL_CATALOG_VERSION";
+var ORA_PULL_KEY = "__ORA_PULL_KEY__";
 
 function oraStableRequirePullPermissions_(){
   ScriptApp.requireScopes(ScriptApp.AuthMode.FULL,[
@@ -23,11 +24,12 @@ function oraAuthorizeOraSheetSync(){
   return "O-RA Google Sheet pull permissions are authorized.";
 }
 
-function oraStableDeploymentId_(){
-  var serviceUrl=String(ScriptApp.getService().getUrl()||"").trim();
-  var match=serviceUrl.match(/\/macros\/s\/([^/]+)\/(?:exec|dev)(?:\?|$)/i);
-  if(!match)throw new Error("O-RA Web App deployment URL was not found. Deploy this Apps Script as a Web App first.");
-  return match[1];
+function oraStablePullKey_(){
+  var key=String(ORA_PULL_KEY||"").trim();
+  if(!key || key.indexOf("__ORA_")===0){
+    throw new Error("O-RA pull key was not embedded. Save the exact Web App /exec URL in O-RA Admin, hard refresh, then copy the script again.");
+  }
+  return key;
 }
 
 function oraStablePullJson_(url,options){
@@ -60,7 +62,7 @@ function oraStablePullCatalogIfChanged_(remoteVersion,key,headers){
 }
 
 function oraStablePullOrdersFromServer(){
-  var key=oraStableDeploymentId_();
+  var key=oraStablePullKey_();
   var headers={"x-ora-sheet-key":key,"accept":"application/json"};
   var data=oraStablePullJson_(ORA_PULL_API_BASE+"/api/google-sheets/pull",{
     method:"get",
@@ -107,11 +109,9 @@ function oraStableInstallPullTrigger_(){
   return true;
 }
 
-// Replace setup only at the final layer. Permission is required BEFORE the
-// installable trigger is created, so background runs never fail for missing
-// UrlFetchApp authorization.
 setupOraCallCenterSheet = function(){
   oraStableRequirePullPermissions_();
+  oraStablePullKey_();
   var ss=SpreadsheetApp.getActiveSpreadsheet();
   if(!ss)throw new Error("Open the target Google Sheet before running setupOraCallCenterSheet.");
   PropertiesService.getScriptProperties().setProperty(ORA_STABLE_SHEET_ID_KEY,ss.getId());
@@ -123,7 +123,7 @@ setupOraCallCenterSheet = function(){
   var first=oraStablePullOrdersFromServer();
   var pullMessage=first.status==="pull_synced"?("Pulled "+Number(first.synced||0)+" order(s)"):"No pending orders";
   SpreadsheetApp.flush();
-  SpreadsheetApp.getActive().toast("O-RA V18.1 ready - "+pullMessage+".","O-RA",8);
+  SpreadsheetApp.getActive().toast("O-RA V18.2 ready - "+pullMessage+".","O-RA",8);
   return first;
 };
 `;
