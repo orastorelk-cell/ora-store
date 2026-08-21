@@ -1,0 +1,341 @@
+name: O-RA Admin Unified Upload Hotfix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ora-admin-unified-upload-hotfix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-admin-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch AdminDashboard
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('src/components/admin/AdminDashboard.tsx')
+          text = path.read_text(encoding='utf-8')
+
+          # 1) Keep raw Lead Import results on the Lead Import page, separate from final confirmation results.
+          state_marker = "  // Branding changes stay as a draft until the admin explicitly saves them.\n"
+          if state_marker not in text:
+              raise SystemExit('state marker not found')
+          state_insert = r'''  const [leadImportBatches, setLeadImportBatches] = useState<Record<'Facebook'|'TikTok', {
+    orderNumbers: string[];
+    uploaded: number;
+    failed: number;
+    ignored: number;
+    errors: string[];
+    at?: string;
+  }>>({
+    Facebook: { orderNumbers: [], uploaded: 0, failed: 0, ignored: 0, errors: [] },
+    TikTok: { orderNumbers: [], uploaded: 0, failed: 0, ignored: 0, errors: [] },
+  });
+  const [unifiedConfirmBatch, setUnifiedConfirmBatch] = useState<{
+    orderNumbers: string[];
+    uploaded: number;
+    failed: number;
+    ignored: number;
+    errors: string[];
+    fileCount: number;
+    at?: string;
+  }>({ orderNumbers: [], uploaded: 0, failed: 0, ignored: 0, errors: [], fileCount: 0 });
+
+'''
+          if 'const [leadImportBatches, setLeadImportBatches]' not in text:
+              text = text.replace(state_marker, state_insert + state_marker, 1)
+
+          # 2) Raw FB/TikTok lead upload result must update the Lead Import state, not Confirm/Cancel state.
+          direct_start = text.index("  const handleDirectSourceUpload = (file: File, source: 'Facebook Ads' | 'TikTok Ads') => {")
+          direct_end = text.index("  const csvEscape = (value: unknown) => {", direct_start)
+          direct_chunk = text[direct_start:direct_end]
+          if 'setUploadBatches(prev => ({' in direct_chunk:
+              direct_chunk = direct_chunk.replace('setUploadBatches(prev => ({', 'setLeadImportBatches(prev => ({', 1)
+          elif 'setLeadImportBatches(prev => ({' not in direct_chunk:
+              raise SystemExit('lead import state setter marker not found')
+          text = text[:direct_start] + direct_chunk + text[direct_end:]
+
+          # 3) Exact Google Sheet header template. Extra columns are intentionally accepted by the importer.
+          template_marker = "  const downloadWebsiteConfirmedTemplate = () => downloadDecisionTemplate('Website');\n"
+          template_insert = r'''  const downloadUnifiedDecisionTemplate = () => {
+    const headers = [
+      'Order ID','Customer Name','Phone Number','WhatsApp Number','Address','City','District',
+      'Item Name','Main Code','Item Code','Variant / Color','Qty','Unit Price (Rs)','Line Total (Rs)',
+      'Offer','Discount (Rs)','Normal Total (Rs)','Delivery Fee (Rs)','Final Total (Rs)',
+      'Item Action','Order Action','Cancel Reason','Change Item To','Change Preview','Apply Item Change',
+      'Source','Order Time','Lead ID','Imported Status','Last Sync',
+      'Original Main Code','Original Variant / Color','Original Item Code','Original Item Name','Original Qty'
+    ];
+    const blob = new Blob([`${headers.join(',')}\n`], {type:'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'ora_all_channels_confirm_cancel_sheet_template.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+'''
+          if 'const downloadUnifiedDecisionTemplate' not in text:
+              if template_marker not in text:
+                  raise SystemExit('template marker not found')
+              text = text.replace(template_marker, template_insert + template_marker, 1)
+
+          # 4) One unified handler. It accepts one mixed file OR multiple WEB/FB/TK CSV files selected together.
+          unified_handler_marker = "  const handleSourceTestLead = async (source:'Facebook Ads'|'TikTok Ads') => {\n"
+          unified_handler = r'''  const handleUnifiedConfirmedCsvUpload = async (inputFiles: FileList | File[]) => {
+    const files = Array.from(inputFiles || []);
+    if (!files.length) return;
+    const orderNumbers: string[] = [];
+    const errors: string[] = [];
+    let uploaded = 0;
+    let failed = 0;
+    let ignored = 0;
+
+    for (const file of files) {
+      try {
+        const text = await file.text();
+        const result = importConfirmedOrdersCsv(text);
+        uploaded += result.confirmedCount;
+        failed += result.notFoundCount;
+        ignored += result.ignoredCount;
+        orderNumbers.push(...result.orderNumbers);
+        errors.push(...result.errors.map((message) => `${file.name}: ${message}`));
+      } catch (error:any) {
+        failed += 1;
+        errors.push(`${file.name}: ${error?.message || 'Could not read/process this CSV.'}`);
+      }
+    }
+
+    const uniqueOrderNumbers = Array.from(new Set(orderNumbers));
+    setUnifiedConfirmBatch({
+      orderNumbers: uniqueOrderNumbers,
+      uploaded,
+      failed,
+      ignored,
+      errors,
+      fileCount: files.length,
+      at: new Date().toISOString(),
+    });
+    alert(
+      `Confirm / Cancel Upload Complete\n\nFiles: ${files.length}\nProcessed: ${uploaded}\nNot Found: ${failed}\nIgnored / Pending: ${ignored}` +
+      (errors.length ? `\n\n${errors.slice(0,8).join('\n')}` : '')
+    );
+  };
+
+'''
+          if 'const handleUnifiedConfirmedCsvUpload' not in text:
+              if unified_handler_marker not in text:
+                  raise SystemExit('unified handler marker not found')
+              text = text.replace(unified_handler_marker, unified_handler + unified_handler_marker, 1)
+
+          # 5) Show raw Lead Import results in the Lead Import page itself.
+          lead_next_marker = '          <div className="rounded-2xl border border-gray-200 bg-white p-4 text-xs leading-5 text-gray-600"><b>Next step:</b> Call Center works in Google Sheets.'
+          lead_results = r'''          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            {(['Facebook','TikTok'] as const).map((source) => {
+              const batch = leadImportBatches[source];
+              if (!batch.at && batch.orderNumbers.length === 0 && batch.uploaded === 0 && batch.failed === 0) return null;
+              const sourceOrders = orders.filter(o => batch.orderNumbers.includes(o.order_number));
+              return (
+                <div key={source} className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <p className={`text-xs font-black ${source==='Facebook'?'text-blue-700':'text-fuchsia-700'}`}>{source} Lead Import • Last Result</p>
+                      <p className="mt-1 text-[10px] text-gray-500">{batch.at ? new Date(batch.at).toLocaleString() : ''}</p>
+                    </div>
+                    <span className="rounded-full bg-gray-100 px-2 py-1 text-[10px] font-black text-gray-700">{sourceOrders.length} order(s)</span>
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                    <div className="rounded-xl bg-emerald-50 p-2"><p className="text-[9px] font-bold text-gray-500">IMPORTED</p><p className="font-black text-emerald-700">{batch.uploaded}</p></div>
+                    <div className="rounded-xl bg-amber-50 p-2"><p className="text-[9px] font-bold text-gray-500">ALREADY IN</p><p className="font-black text-amber-700">{batch.ignored}</p></div>
+                    <div className="rounded-xl bg-red-50 p-2"><p className="text-[9px] font-bold text-gray-500">FAILED</p><p className="font-black text-red-700">{batch.failed}</p></div>
+                  </div>
+                  {sourceOrders.length > 0 && <div className="mt-3 rounded-xl bg-gray-50 p-3 text-[10px] text-gray-600">{sourceOrders.slice(0,12).map(o=><div key={o.id}><b className="font-mono text-gray-900">{o.order_number}</b> • {o.customer_name}</div>)}</div>}
+                  {batch.errors.length > 0 && <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-[10px] text-red-700">{batch.errors.slice(0,6).map((e,i)=><div key={i}>• {e}</div>)}</div>}
+                </div>
+              );
+            })}
+          </div>
+
+'''
+          if lead_results.strip() not in text:
+              if lead_next_marker not in text:
+                  raise SystemExit('lead result insertion marker not found')
+              text = text.replace(lead_next_marker, lead_results + lead_next_marker, 1)
+
+          # 6) Replace the old 3 separate Confirm/Cancel upload cards with one all-channel page.
+          confirm_start = text.index("      {activeTab === 'confirm_upload' && (")
+          confirm_end = text.index("      {/* TAB 5: GOOGLE SHEETS SYNC */}", confirm_start)
+          unified_confirm_section = r'''      {activeTab === 'confirm_upload' && (() => {
+        const batchOrders = orders.filter(o => unifiedConfirmBatch.orderNumbers.includes(o.order_number));
+        const allocated = batchOrders.filter(o => o.stock_allocated && o.stock_status === 'Allocated');
+        const waiting = batchOrders.filter(o => !o.stock_allocated && o.order_status !== 'Cancelled');
+        const withWaybill = batchOrders.filter(o => Boolean(o.waybill_number));
+        const invoiceReady = batchOrders.filter(o => validateInvoiceOrder(o).length === 0 && !o.invoice_locked);
+        const invoiced = batchOrders.filter(o => o.invoice_locked);
+        const webCount = batchOrders.filter(o => o.order_source === 'Website').length;
+        const fbCount = batchOrders.filter(o => o.order_source === 'Facebook Ads').length;
+        const tkCount = batchOrders.filter(o => o.order_source === 'TikTok Ads').length;
+
+        return (
+          <div className="space-y-6">
+            <div className="rounded-3xl border border-orange-200 bg-white p-5 sm:p-6 shadow-sm">
+              <div className="flex items-start gap-3">
+                <div className="rounded-2xl bg-orange-100 p-3"><Upload className="h-6 w-6 text-orange-700" /></div>
+                <div>
+                  <h2 className="text-lg font-black text-gray-900">Confirm / Cancel Orders • ALL CHANNELS</h2>
+                  <p className="mt-1 text-xs leading-5 text-gray-600">
+                    One upload point for Website + Facebook + TikTok. Order ID identifies the source automatically: WEB- / FB- / TK-. You do not need three separate upload boxes.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-bold leading-5 text-emerald-900">
+                CONFIRM ORDER → FIFO stock allocation → available Waybill auto assignment → invoice moves to Packing Downloads when eligible. CANCEL ENTIRE ORDER / CANCEL ITEM follows the same existing stock and invoice protection rules.
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-6 shadow-sm space-y-4">
+              <div>
+                <p className="text-xs font-black uppercase tracking-wider text-orange-600">One Common Sheet Format</p>
+                <h3 className="mt-1 text-base font-black text-gray-900">Use the Google Sheet rows exactly as they are</h3>
+                <p className="mt-2 text-xs leading-5 text-gray-600">
+                  The common template now has the exact same headers as CALL CENTER ORDERS / FACEBOOK ORDERS / TIKTOK ORDERS. You can download a completed Sheet tab as CSV and upload it directly, or copy full Sheet rows into the common template. Extra technical columns are accepted and ignored safely when they are not needed for the decision.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                <button type="button" onClick={downloadUnifiedDecisionTemplate}
+                  className="rounded-xl border border-gray-300 bg-gray-50 px-4 py-3 text-xs font-black text-gray-800 hover:bg-gray-100">
+                  <Download className="mr-1 inline h-4 w-4"/> Download Sheet-Matching Common Template
+                </button>
+                <label className="block cursor-pointer rounded-xl bg-orange-500 px-4 py-3 text-center text-xs font-black text-black hover:bg-orange-400">
+                  <Upload className="mr-1 inline h-4 w-4"/> Upload Confirm / Cancel CSV
+                  <input type="file" multiple accept=".csv,text/csv" className="hidden"
+                    onChange={e=>{
+                      const files=e.target.files;
+                      if(files?.length) void handleUnifiedConfirmedCsvUpload(files);
+                      e.currentTarget.value='';
+                    }}/>
+                </label>
+              </div>
+
+              <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-[11px] leading-5 text-blue-800">
+                <b>Easy options:</b> upload one CSV containing mixed WEB + FB + TK rows, <b>or</b> select up to all three exported CSV files together in the same file picker. The system processes them as one confirmation action.
+              </div>
+            </div>
+
+            {unifiedConfirmBatch.at && (
+              <div className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-6 shadow-sm space-y-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <h3 className="text-sm font-black text-gray-900">Last Unified Upload Result</h3>
+                    <p className="mt-1 text-[10px] text-gray-500">{new Date(unifiedConfirmBatch.at).toLocaleString()} • {unifiedConfirmBatch.fileCount} file(s)</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-[10px] font-black">
+                    <span className="rounded-lg bg-emerald-100 px-2.5 py-1.5 text-emerald-800">Processed {unifiedConfirmBatch.uploaded}</span>
+                    <span className="rounded-lg bg-red-100 px-2.5 py-1.5 text-red-800">Not Found {unifiedConfirmBatch.failed}</span>
+                    <span className="rounded-lg bg-amber-100 px-2.5 py-1.5 text-amber-800">Pending / Ignored {unifiedConfirmBatch.ignored}</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-7 text-center">
+                  <div className="rounded-xl bg-slate-50 p-3"><p className="text-[9px] font-bold text-gray-500">WEB</p><p className="font-black text-slate-900">{webCount}</p></div>
+                  <div className="rounded-xl bg-blue-50 p-3"><p className="text-[9px] font-bold text-gray-500">FB</p><p className="font-black text-blue-800">{fbCount}</p></div>
+                  <div className="rounded-xl bg-fuchsia-50 p-3"><p className="text-[9px] font-bold text-gray-500">TIKTOK</p><p className="font-black text-fuchsia-800">{tkCount}</p></div>
+                  <div className="rounded-xl bg-amber-50 p-3"><p className="text-[9px] font-bold text-gray-500">WAIT STOCK</p><p className="font-black text-amber-800">{waiting.length}</p></div>
+                  <div className="rounded-xl bg-cyan-50 p-3"><p className="text-[9px] font-bold text-gray-500">STOCK OK</p><p className="font-black text-cyan-800">{allocated.length}</p></div>
+                  <div className="rounded-xl bg-violet-50 p-3"><p className="text-[9px] font-bold text-gray-500">WAYBILL</p><p className="font-black text-violet-800">{withWaybill.length}</p></div>
+                  <div className="rounded-xl bg-green-50 p-3"><p className="text-[9px] font-bold text-gray-500">PACKING / INVOICE</p><p className="font-black text-green-800">{invoiced.length}</p></div>
+                </div>
+
+                {unifiedConfirmBatch.errors.length > 0 && (
+                  <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-[10px] text-red-700">
+                    {unifiedConfirmBatch.errors.slice(0,10).map((e,i)=><div key={i}>• {e}</div>)}
+                  </div>
+                )}
+
+                <div className="overflow-x-auto rounded-xl border border-gray-200">
+                  <table className="w-full min-w-[920px] text-left text-[10px] text-gray-700">
+                    <thead className="bg-gray-50 uppercase text-gray-500">
+                      <tr>
+                        <th className="p-2.5">Source</th><th className="p-2.5">Order ID</th><th className="p-2.5">Customer</th>
+                        <th className="p-2.5">Item / Qty</th><th className="p-2.5">Total</th><th className="p-2.5">Stock</th>
+                        <th className="p-2.5">Waybill</th><th className="p-2.5">Invoice</th><th className="p-2.5">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {batchOrders.length === 0 ? (
+                        <tr><td colSpan={9} className="p-5 text-center text-gray-400">No matching processed orders in the current order list.</td></tr>
+                      ) : batchOrders.map(o=>(
+                        <tr key={o.id} className="border-t border-gray-100">
+                          <td className="p-2.5 font-bold">{o.order_source}</td>
+                          <td className="p-2.5 font-mono font-black text-gray-900">{o.order_number}</td>
+                          <td className="p-2.5">{o.customer_name}<div className="text-gray-400">{o.phone}</div></td>
+                          <td className="p-2.5">{o.items.map((it,idx)=><div key={idx}><b>{it.sku}</b> • Qty {it.quantity}</div>)}</td>
+                          <td className="p-2.5 font-bold">Rs. {o.total_amount.toLocaleString()}</td>
+                          <td className="p-2.5">{o.stock_allocated ? 'Allocated' : o.order_status==='Cancelled' ? 'Cancelled' : 'Waiting'}</td>
+                          <td className="p-2.5 font-mono">{o.waybill_number || 'Pending'}</td>
+                          <td className="p-2.5">{o.invoice_locked ? 'Packing Ready' : validateInvoiceOrder(o).length===0 ? 'Ready' : 'Not Ready'}</td>
+                          <td className="p-2.5 font-bold">{o.order_status}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="flex flex-wrap justify-end gap-2">
+                  <button type="button" disabled={withWaybill.length === 0} onClick={()=>downloadFardarUploadCsv(batchOrders)}
+                    className="rounded-xl border border-violet-300 bg-violet-50 px-4 py-2.5 text-xs font-black text-violet-800 disabled:opacity-40">
+                    <Download className="mr-1 inline h-4 w-4"/> Fardar Upload CSV ({withWaybill.length})
+                  </button>
+                  <button type="button" disabled={invoiceReady.length === 0}
+                    onClick={async()=>{
+                      const generated = markInvoicesGenerated(invoiceReady.map(o=>o.id));
+                      if (!generated.length) { alert('No eligible invoices in this upload.'); return; }
+                      await generateBatchInvoicesPDF(generated, settings);
+                    }}
+                    className="rounded-xl bg-gray-900 px-4 py-2.5 text-xs font-black text-white disabled:opacity-40">
+                    <Printer className="mr-1 inline h-4 w-4"/> Generate Ready Invoices ({invoiceReady.length})
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+'''
+          text = text[:confirm_start] + unified_confirm_section + text[confirm_end:]
+
+          # Small sidebar wording update so staff understand this is one all-channel uploader.
+          text = text.replace("{ id:'confirm_upload', label:'FINALIZE • Confirm / Cancel Upload', icon:Upload },", "{ id:'confirm_upload', label:'FINALIZE • All Confirm / Cancel Upload', icon:Upload },", 1)
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Build check
+        run: |
+          npm ci
+          npm run build
+
+      - name: Commit hotfix and remove one-time workflow
+        shell: bash
+        run: |
+          git config user.name "O-RA Hotfix Bot"
+          git config user.email "actions@github.com"
+          rm -f .github/workflows/ora-admin-unified-upload-hotfix.yml
+          git add src/components/admin/AdminDashboard.tsx .github/workflows/ora-admin-unified-upload-hotfix.yml
+          git commit -m "fix: unify confirm cancel upload across all channels"
+          git push origin main
