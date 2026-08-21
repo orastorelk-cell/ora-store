@@ -3,7 +3,7 @@ import { waitUntil } from 'cloudflare:workers';
 import app from '../server';
 
 // Express remains the source of truth for order persistence/auth/business rules.
-// This Worker only guarantees the final Google Sheet mirror after a durable save.
+// This Worker guarantees the final Google Sheet mirror after a durable save.
 (globalThis as any).__ORA_WAIT_UNTIL__ = waitUntil;
 
 app.listen(3000);
@@ -104,6 +104,9 @@ const markPersistedOrder = async (runtime: SheetRuntime, order: any) => {
   if (!response.ok) throw new Error(`Could not update durable order sync state (${response.status}).`);
 };
 
+const expectedItemRows = (order: any) =>
+  Array.isArray(order?.items) && order.items.length ? order.items.length : 1;
+
 const confirmPhysicalOrderRows = async (runtime: SheetRuntime, orderNumber: string, expectedRows: number) => {
   const check = await postAppsScript(runtime, { action: 'read_order', orderId: orderNumber });
   const rows = Number(check?.rows || 0);
@@ -116,7 +119,7 @@ const confirmPhysicalOrderRows = async (runtime: SheetRuntime, orderNumber: stri
 const syncSavedOrder = async (runtime: SheetRuntime, order: any) => {
   const orderNumber = String(order?.order_number || '').trim();
   if (!orderNumber) throw new Error('Saved order has no order number.');
-  const itemCount = Array.isArray(order?.items) && order.items.length ? order.items.length : 1;
+  const itemCount = expectedItemRows(order);
 
   // Send the durable final order snapshot. Clean V1 owns row layout only;
   // it does not recalculate website prices/discounts/offers.
@@ -188,6 +191,88 @@ const guaranteeNewOrderSheetSync = async (request: Request, env: unknown, respon
   }
 };
 
+// FB/TikTok imports use /api/admin/orders/bulk-import. The old path trusted one
+// Apps Script batch response without a Worker-level physical check, so a partial
+// write could leave only the first lead visible in the Sheet. Re-send the durable
+// orders themselves (not rebuilt row objects), in manageable chunks, and verify
+// the last order of every chunk plus the exact total row count reported by Apps Script.
+const guaranteeBulkImportSheetSync = async (request: Request, env: unknown, response: Response): Promise<Response> => {
+  const url = new URL(request.url);
+  if (request.method !== 'POST' || url.pathname !== '/api/admin/orders/bulk-import' || !response.ok) return response;
+
+  let data: any = {};
+  try { data = await response.clone().json(); } catch { return response; }
+  const orders: any[] = Array.isArray(data?.orders) ? data.orders : [];
+  if (!orders.length) return response;
+
+  try {
+    const runtime = await getSheetRuntime(env);
+    const syncedOrders: any[] = [];
+    let totalRows = 0;
+    let totalSynced = 0;
+    let lastResult: any = null;
+    const chunkSize = 40;
+
+    for (let i = 0; i < orders.length; i += chunkSize) {
+      const chunk = orders.slice(i, i + chunkSize);
+      const expectedRows = chunk.reduce((sum, order) => sum + expectedItemRows(order), 0);
+      const result = await postAppsScript(runtime, { action: 'sync_orders', orders: chunk });
+      lastResult = result;
+      const status = String(result?.status || '');
+      const rows = Number(result?.rows || 0);
+      if (status !== 'orders_synced' || rows < expectedRows) {
+        throw new Error(`Bulk Sheet sync wrote ${rows}/${expectedRows} expected row(s) for imported leads.`);
+      }
+
+      // This specifically catches the reported "only first lead appears" failure.
+      const lastOrder = chunk[chunk.length - 1];
+      await confirmPhysicalOrderRows(
+        runtime,
+        String(lastOrder?.order_number || ''),
+        expectedItemRows(lastOrder),
+      );
+
+      const syncedAt = new Date().toISOString();
+      for (const order of chunk) {
+        const syncedOrder = {
+          ...order,
+          is_synced_google_sheets: true,
+          synced_at: syncedAt,
+          sheet_sync_verified_at: syncedAt,
+        };
+        await markPersistedOrder(runtime, syncedOrder);
+        syncedOrders.push(syncedOrder);
+      }
+      totalRows += rows;
+      totalSynced += chunk.length;
+    }
+
+    return makeJsonResponse({
+      ...data,
+      orders: syncedOrders,
+      sheet_sync: {
+        ok: true,
+        confirmed: true,
+        status: lastResult?.status || 'orders_synced',
+        version: lastResult?.version || null,
+        rows: totalRows,
+        synced: totalSynced,
+        path: 'clean-v1-worker-bulk-confirmed',
+      },
+    }, response);
+  } catch (error: any) {
+    return makeJsonResponse({
+      ...data,
+      sheet_sync: {
+        ok: false,
+        confirmed: false,
+        error: String(error?.message || error || 'Bulk Google Sheet sync failed.'),
+        path: 'clean-v1-worker-bulk-confirmed',
+      },
+    }, response);
+  }
+};
+
 const sheetDiagnostic = async (request: Request, env: unknown): Promise<Response | null> => {
   const url = new URL(request.url);
   if (request.method !== 'GET' || url.pathname !== '/api/google-sheets/diagnostic') return null;
@@ -248,6 +333,8 @@ export default {
     if (diagnostic) return diagnostic;
 
     const response = await nodeHandler.fetch(request, env, ctx);
+    const bulkVerified = await guaranteeBulkImportSheetSync(request, env, response);
+    if (bulkVerified !== response) return bulkVerified;
     return guaranteeNewOrderSheetSync(request, env, response);
   },
 };
