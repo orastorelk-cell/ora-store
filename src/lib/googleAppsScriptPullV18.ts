@@ -8,6 +8,7 @@ export const GOOGLE_APPS_SCRIPT_PULL_V18 = String.raw`
 ORA_VERSION = "O-RA Store Google Sheet Sync V18 Pull Fallback";
 var ORA_PULL_API_BASE = "https://ora-store.orastore-lk.workers.dev";
 var ORA_PULL_HANDLER = "oraStablePullOrdersFromServer";
+var ORA_PULL_CATALOG_VERSION_KEY = "ORA_PULL_CATALOG_VERSION";
 
 function oraStableDeploymentId_(){
   var serviceUrl=String(ScriptApp.getService().getUrl()||"").trim();
@@ -26,6 +27,25 @@ function oraStablePullJson_(url,options){
   return data;
 }
 
+function oraStablePullCatalogIfChanged_(remoteVersion,key,headers){
+  var version=Math.max(0,Number(remoteVersion||0));
+  if(!version)return {ok:true,status:"catalog_version_missing",rows:0};
+  var props=PropertiesService.getScriptProperties();
+  var localVersion=Math.max(0,Number(props.getProperty(ORA_PULL_CATALOG_VERSION_KEY)||0));
+  if(localVersion===version)return {ok:true,status:"catalog_current",rows:0};
+
+  var catalog=oraStablePullJson_(ORA_PULL_API_BASE+"/api/google-sheets/catalog-pull",{
+    method:"get",
+    headers:headers,
+    muteHttpExceptions:true,
+    followRedirects:true
+  });
+  var result=oraStableCatalogSync_({products:Array.isArray(catalog.products)?catalog.products:[]});
+  if(!result||result.ok===false)throw new Error((result&&result.message)||"Pulled product catalog could not be written.");
+  props.setProperty(ORA_PULL_CATALOG_VERSION_KEY,String(version));
+  return {ok:true,status:"catalog_pulled",rows:Number(result.rows||0)};
+}
+
 function oraStablePullOrdersFromServer(){
   var key=oraStableDeploymentId_();
   var headers={"x-ora-sheet-key":key,"accept":"application/json"};
@@ -36,8 +56,9 @@ function oraStablePullOrdersFromServer(){
     followRedirects:true
   });
 
+  var catalogResult=oraStablePullCatalogIfChanged_(data.catalog_version,key,headers);
   var orders=Array.isArray(data.orders)?data.orders:[];
-  if(!orders.length)return {ok:true,status:"pull_empty",count:0,version:ORA_VERSION};
+  if(!orders.length)return {ok:true,status:"pull_empty",count:0,catalog_status:catalogResult.status,catalog_rows:Number(catalogResult.rows||0),version:ORA_VERSION};
 
   var result=oraStableSyncOrders_({orders:orders});
   if(!result||result.ok===false)throw new Error((result&&result.message)||"Pulled orders could not be written to Google Sheet.");
@@ -58,6 +79,8 @@ function oraStablePullOrdersFromServer(){
     synced:Number(result.synced||orderNumbers.length||0),
     rows:Number(result.rows||0),
     acknowledged:Number(ack.updated||0),
+    catalog_status:catalogResult.status,
+    catalog_rows:Number(catalogResult.rows||0),
     version:ORA_VERSION
   };
 }
@@ -78,6 +101,7 @@ setupOraCallCenterSheet = function(){
   var ss=SpreadsheetApp.getActiveSpreadsheet();
   if(!ss)throw new Error("Open the target Google Sheet before running setupOraCallCenterSheet.");
   PropertiesService.getScriptProperties().setProperty(ORA_STABLE_SHEET_ID_KEY,ss.getId());
+  PropertiesService.getScriptProperties().deleteProperty(ORA_PULL_CATALOG_VERSION_KEY);
   for(var i=0;i<ORA_STABLE_ORDER_SHEETS.length;i++)oraStableEnsureOrderSheet_(ss,ORA_STABLE_ORDER_SHEETS[i]);
   oraStableEnsureCatalog_(ss);
   if(!ss.getSheetByName("CITY LIST"))ss.insertSheet("CITY LIST");
