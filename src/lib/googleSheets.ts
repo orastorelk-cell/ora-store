@@ -232,7 +232,23 @@ export const buildGoogleAppsScriptCode = (webhookUrl?: string) => {
   return GOOGLE_APPS_SCRIPT_CODE_BASE.replace('__ORA_PULL_KEY__', embeddedKey);
 };
 
-// AdminDashboard imports this value directly for Copy Script Code. It is generated
-// from the exact /exec URL already saved in this browser's O-RA settings, so Apps
-// Script no longer guesses its deployment ID from an editor/dev execution context.
-export const GOOGLE_APPS_SCRIPT_CODE = buildGoogleAppsScriptCode(readSavedSheetWebhookUrl());
+// AdminDashboard imports this as a live ES-module binding. Keep it synchronized
+// with the latest local settings so the Copy Script Code click cannot reuse the
+// deployment ID that existed when this module was first loaded.
+let lastEmbeddedWebhookUrl = readSavedSheetWebhookUrl();
+export let GOOGLE_APPS_SCRIPT_CODE = buildGoogleAppsScriptCode(lastEmbeddedWebhookUrl);
+
+const refreshGoogleAppsScriptCode = () => {
+  const nextWebhookUrl = readSavedSheetWebhookUrl();
+  if (nextWebhookUrl === lastEmbeddedWebhookUrl) return;
+  lastEmbeddedWebhookUrl = nextWebhookUrl;
+  GOOGLE_APPS_SCRIPT_CODE = buildGoogleAppsScriptCode(nextWebhookUrl);
+};
+
+if (typeof window !== 'undefined') {
+  // Capture runs before the Admin button's click handler, so a URL saved moments
+  // earlier is embedded before navigator.clipboard.writeText reads the binding.
+  window.addEventListener('pointerdown', refreshGoogleAppsScriptCode, true);
+  window.addEventListener('focus', refreshGoogleAppsScriptCode);
+  window.addEventListener('pageshow', refreshGoogleAppsScriptCode);
+}
