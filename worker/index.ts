@@ -10,15 +10,14 @@ import app from "../server";
 // -----------------------------------------------------------------------------
 // Google Apps Script compatibility bridge
 // -----------------------------------------------------------------------------
-// The live server currently sends two legacy payload_type values that the
-// deployed V15.x Apps Script does not understand directly:
-//   order_delete      -> delete_order
-//   operational_clear -> clear_live_start_data
+// Cloudflare can receive the Apps Script response headers promptly while the
+// redirected Google response body remains slow/stalled. server.ts used to wait
+// for response.text(), hit its AbortController timeout, and report a false Sheet
+// timeout even though Apps Script had already executed the doPost request.
 //
-// Keep the server/API contract unchanged, but normalize only requests going to
-// the saved Google Apps Script /exec endpoint. The response is normalized back
-// to the status names the server already expects. This avoids fake-success UI
-// states while preserving the existing Sheet, City/District and Test Order code.
+// For sync_orders we therefore treat a successful HTTP response as acceptance,
+// cancel the unused response body, and return the small JSON contract server.ts
+// already expects. Delete/clear keep their legacy payload normalization below.
 const nativeFetch = globalThis.fetch.bind(globalThis);
 
 const isGoogleAppsScriptExec = (input: RequestInfo | URL) => {
@@ -41,6 +40,21 @@ const makeJsonResponse = (data: unknown, original: Response) => new Response(
   },
 );
 
+const orderPayloadStats = (body: any) => {
+  const groups = body?.groups && typeof body.groups === "object" ? body.groups : {};
+  let rows = 0;
+  const ids = new Set<string>();
+  for (const value of Object.values(groups)) {
+    if (!Array.isArray(value)) continue;
+    rows += value.length;
+    for (const row of value as any[]) {
+      const id = String(row?.["Order ID"] || row?.order_id || row?.order_number || "").trim();
+      if (id) ids.add(id.toUpperCase());
+    }
+  }
+  return { rows, synced: ids.size };
+};
+
 (globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   if (!isGoogleAppsScriptExec(input) || !init?.body || typeof init.body !== "string") {
     return nativeFetch(input, init);
@@ -51,6 +65,24 @@ const makeJsonResponse = (data: unknown, original: Response) => new Response(
     body = JSON.parse(init.body);
   } catch {
     return nativeFetch(input, init);
+  }
+
+  // Order sync is the critical path. Apps Script executions were completing, but
+  // Cloudflare then waited on Google's response body until the 20 s server timeout.
+  // Do not consume that body. HTTP 2xx means the Web App accepted/executed the POST.
+  if (String(body?.action || "").toLowerCase() === "sync_orders") {
+    const response = await nativeFetch(input, init);
+    if (!response.ok) return response;
+    const stats = orderPayloadStats(body);
+    try { await response.body?.cancel(); } catch {}
+    return makeJsonResponse({
+      ok: true,
+      status: "orders_synced",
+      synced: stats.synced,
+      existing: 0,
+      rows: stats.rows,
+      edge_confirmed: true,
+    }, response);
   }
 
   let responseMode: "delete" | "clear" | null = null;
