@@ -13,7 +13,20 @@ type SheetRuntime = {
   webhook: string;
 };
 
+type R2LikeBucket = {
+  put: (key: string, value: ArrayBuffer | ArrayBufferView, options?: any) => Promise<any>;
+  get: (key: string) => Promise<any>;
+};
+
 const nativeFetch = globalThis.fetch.bind(globalThis);
+
+const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), {
+  status,
+  headers: {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+  },
+});
 
 const jsonResponseLike = (data: unknown, original: Response) => new Response(JSON.stringify(data), {
   status: original.status,
@@ -29,6 +42,92 @@ const parseJsonResponse = async (response: Response) => {
   let data: any = {};
   try { data = text ? JSON.parse(text) : {}; } catch {}
   return { text, data };
+};
+
+// -----------------------------------------------------------------------------
+// Optional Cloudflare R2 media layer.
+//
+// Safe deployment rule: if ORA_MEDIA_R2 is not bound, nothing changes and the
+// existing Express/Supabase upload path handles the request. Once the binding is
+// attached to an existing R2 bucket, new compressed public images are written to
+// R2 and served through this Worker under /api/media/*.
+// -----------------------------------------------------------------------------
+const mediaBucket = (envValue: unknown): R2LikeBucket | null => {
+  const env = (envValue || {}) as Record<string, any>;
+  const bucket = env.ORA_MEDIA_R2;
+  return bucket && typeof bucket.put === 'function' && typeof bucket.get === 'function' ? bucket as R2LikeBucket : null;
+};
+
+const safeMediaPurpose = (value: unknown) =>
+  String(value || 'public').replace(/[^a-z0-9-]/gi, '').slice(0, 40) || 'public';
+
+const r2MediaHandler = async (request: Request, envValue: unknown): Promise<Response | null> => {
+  const bucket = mediaBucket(envValue);
+  if (!bucket) return null;
+
+  const url = new URL(request.url);
+
+  if (request.method === 'GET' && url.pathname.startsWith('/api/media/')) {
+    const rawKey = url.pathname.slice('/api/media/'.length);
+    const key = rawKey.split('/').map(part => decodeURIComponent(part)).join('/');
+    if (!key || key.includes('..')) return new Response('Not found', { status: 404 });
+    const object = await bucket.get(key);
+    if (!object) return new Response('Not found', { status: 404 });
+
+    const headers = new Headers();
+    try { object.writeHttpMetadata?.(headers); } catch {}
+    if (!headers.has('content-type')) headers.set('content-type', 'application/octet-stream');
+    if (!headers.has('cache-control')) headers.set('cache-control', 'public, max-age=31536000, immutable');
+    if (object.httpEtag) headers.set('etag', object.httpEtag);
+    headers.set('x-ora-storage', 'r2');
+    return new Response(object.body, { headers });
+  }
+
+  if (request.method !== 'POST' || url.pathname !== '/api/uploads/image') return null;
+
+  let body: any = {};
+  try { body = await request.clone().json(); }
+  catch { return json({ error: 'Invalid image upload payload.' }, 400); }
+
+  const purpose = safeMediaPurpose(body?.purpose);
+  const dataUrl = String(body?.dataUrl || '');
+  const match = dataUrl.match(/^data:image\/(jpeg|jpg|png|webp);base64,([A-Za-z0-9+/=]+)$/i);
+  if (!match) return json({ error: 'Invalid image payload.' }, 400);
+
+  const extRaw = match[1].toLowerCase();
+  const ext = extRaw === 'jpg' ? 'jpeg' : extRaw;
+  const bytes = Buffer.from(match[2], 'base64');
+  if (!bytes.length || bytes.length > 750_000) {
+    return json({ error: 'Compressed image must be under 750 KB.' }, 400);
+  }
+
+  const now = new Date();
+  const y = String(now.getUTCFullYear());
+  const m = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(now.getUTCDate()).padStart(2, '0');
+  const fileExt = ext === 'jpeg' ? 'jpg' : ext;
+  const token = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
+  const key = `media/${purpose}/${y}/${m}/${d}/${Date.now()}-${token}.${fileExt}`;
+  const contentType = `image/${ext}`;
+
+  await bucket.put(key, bytes, {
+    httpMetadata: {
+      contentType,
+      cacheControl: 'public, max-age=31536000, immutable',
+    },
+    customMetadata: {
+      purpose,
+      uploadedAt: now.toISOString(),
+      oraArchiveEligibleAfterDays: '21',
+    },
+  });
+
+  return json({
+    ok: true,
+    url: `/api/media/${key}`,
+    storage: 'r2',
+    key,
+  });
 };
 
 const getSheetRuntime = async (envValue: unknown): Promise<SheetRuntime> => {
@@ -196,6 +295,9 @@ const repairBulkSheetSync = async (request: Request, env: unknown, response: Res
 
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
+    const mediaResponse = await r2MediaHandler(request, env);
+    if (mediaResponse) return mediaResponse;
+
     const response = await baseWorker.fetch(request, env, ctx);
     return repairBulkSheetSync(request, env, response);
   },
