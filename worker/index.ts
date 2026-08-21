@@ -18,6 +18,10 @@ type R2LikeBucket = {
   get: (key: string) => Promise<any>;
 };
 
+type WorkersAiLike = {
+  run: (model: string, input: Record<string, any>) => Promise<any>;
+};
+
 const nativeFetch = globalThis.fetch.bind(globalThis);
 
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), {
@@ -128,6 +132,68 @@ const r2MediaHandler = async (request: Request, envValue: unknown): Promise<Resp
     storage: 'r2',
     key,
   });
+};
+
+// -----------------------------------------------------------------------------
+// Sinhala translation fallback.
+//
+// The Express route keeps the existing staff permission/auth checks and tries
+// Gemini first. Only if that already-authorized route returns a server/provider
+// error do we use the Cloudflare Workers AI binding. This avoids exposing a new
+// unauthenticated AI endpoint while removing the hard GEMINI_API_KEY dependency.
+// -----------------------------------------------------------------------------
+const workersAiSinhalaFallback = async (
+  request: Request,
+  envValue: unknown,
+  originalResponse: Response,
+): Promise<Response> => {
+  const url = new URL(request.url);
+  if (request.method !== 'POST' || url.pathname !== '/api/admin/translate-sinhala') return originalResponse;
+  if (originalResponse.status < 500) return originalResponse;
+
+  const env = (envValue || {}) as Record<string, any>;
+  const ai = env.AI as WorkersAiLike | undefined;
+  if (!ai || typeof ai.run !== 'function') return originalResponse;
+
+  let payload: any = {};
+  try { payload = await request.json(); } catch { return originalResponse; }
+  const texts = Array.isArray(payload?.texts)
+    ? payload.texts.map((value: any) => String(value || '').trim()).slice(0, 12)
+    : [];
+  if (!texts.length || texts.every((value: string) => !value)) return originalResponse;
+  if (texts.some((value: string) => value.length > 2500)) return originalResponse;
+
+  try {
+    const numbered = texts.map((value: string, index: number) => `${index + 1}. ${JSON.stringify(value)}`).join('\n');
+    const result = await ai.run('@cf/meta/llama-3.1-8b-instruct-fast', {
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a Sinhala e-commerce translator for Sri Lankan customers. Translate English product names and product descriptions into natural, clear Sinhala. Keep brand names, model numbers, SKUs, technical abbreviations, measurements and units unchanged when appropriate. Do not invent claims or details. Return ONLY valid JSON in this exact shape: {"translations":["..."]}. Keep exactly one translation for each source text and preserve the original order.',
+        },
+        {
+          role: 'user',
+          content: `Translate these ${texts.length} texts to Sinhala:\n${numbered}`,
+        },
+      ],
+      temperature: 0.15,
+      max_tokens: 1800,
+    });
+
+    const raw = String(result?.response ?? result?.result?.response ?? result?.text ?? '').trim();
+    if (!raw) return originalResponse;
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : raw);
+    const translations = Array.isArray(parsed?.translations)
+      ? parsed.translations.map((value: any) => String(value || '').trim())
+      : [];
+    if (translations.length !== texts.length || translations.some((value: string) => !value)) return originalResponse;
+
+    return json({ translations, provider: 'cloudflare-workers-ai' });
+  } catch (error) {
+    console.warn('Cloudflare Workers AI Sinhala fallback failed:', error);
+    return originalResponse;
+  }
 };
 
 const getSheetRuntime = async (envValue: unknown): Promise<SheetRuntime> => {
@@ -298,7 +364,14 @@ export default {
     const mediaResponse = await r2MediaHandler(request, env);
     if (mediaResponse) return mediaResponse;
 
+    // Clone before Express consumes the request body. The fallback is only used
+    // after Express has already authenticated/authorized the translation route.
+    const fallbackRequest = request.clone();
     const response = await baseWorker.fetch(request, env, ctx);
+
+    const translatedResponse = await workersAiSinhalaFallback(fallbackRequest, env, response);
+    if (translatedResponse !== response) return translatedResponse;
+
     return repairBulkSheetSync(request, env, response);
   },
 };
