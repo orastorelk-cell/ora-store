@@ -18,7 +18,7 @@ export const leadItemCodeBlankDefaultPatch = () => ({
     // Staff types the exact code in one box; the matching product name appears
     // read-only in the box beside it. The existing upload handler still blocks
     // blank and invalid codes before a CSV can be parsed/sent.
-    const oldPicker = /                <input\s+[\s\S]*?list="ora-lead-item-codes"[\s\S]*?                <\/p>/;
+    const oldPicker = /                <input\n                  list="ora-lead-item-codes"[\s\S]*?                <\/p>/;
     if (!oldPicker.test(text)) throw new Error('[O-RA lead item code] legacy lead item picker marker not found');
 
     const newPicker = `                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
