@@ -19,6 +19,7 @@ const attachOrderSheetMetadataServer = async (orders:any[]) => {
     const qtyRules=sheetQtyOfferRulesServer(settings);
     for(const order of Array.isArray(orders)?orders:[]){
       if(!order || typeof order!=='object') continue;
+      order.offer_label=orderQtyOfferLabelServer(order,settings);
       order.sheet_qty_offer_rules=qtyRules;
       order.sheet_wrapping_cost=sheetWrappingFeeServer(order,settings);
     }
