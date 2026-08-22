@@ -17,7 +17,8 @@ var ORA_ORDER_HEADERS = [
   'Offer','Discount (Rs)','Normal Total (Rs)','Delivery Fee (Rs)','Final Total (Rs)',
   'Item Action','Order Action','Cancel Reason','Change Item To','Change Preview','Apply Item Change',
   'Source','Order Time','Lead ID','Imported Status','Last Sync',
-  'Original Main Code','Original Variant / Color','Original Item Code','Original Item Name','Original Qty'
+  'Original Main Code','Original Variant / Color','Original Item Code','Original Item Name','Original Qty',
+  'Gift Wrap','Wrapping Cost (Rs)','Qty Offer Rules'
 ];
 
 var ORA_CATALOG_HEADERS = [
@@ -41,6 +42,9 @@ function oraPick_(obj, names) {
   return '';
 }
 function oraRound_(n) { return Math.round(oraNum_(n) * 100) / 100; }
+function oraYes_(v) {
+  return ['YES','TRUE','1','ON','ADD WRAP','GIFT WRAP'].indexOf(oraKey_(v)) >= 0;
+}
 function oraSheetName_(source) {
   var s = oraStr_(source).toLowerCase();
   if (s.indexOf('facebook') >= 0) return 'FACEBOOK ORDERS';
@@ -108,6 +112,11 @@ function oraSetupValidations_(ss, sh, startRow, count) {
     );
   }
   if (hm['Apply Item Change']) sh.getRange(startRow, hm['Apply Item Change'], count, 1).insertCheckboxes();
+  if (hm['Gift Wrap']) {
+    sh.getRange(startRow, hm['Gift Wrap'], count, 1).setDataValidation(
+      SpreadsheetApp.newDataValidation().requireValueInList(['NO','YES'], true).setAllowInvalid(false).build()
+    );
+  }
   var cat = ss.getSheetByName(ORA_CATALOG_TAB);
   if (cat && cat.getLastRow() > 1 && hm['Change Item To']) {
     sh.getRange(startRow, hm['Change Item To'], count, 1).setDataValidation(
@@ -179,6 +188,9 @@ function oraNormalizeOrders_(body) {
         orderTime: oraStr_(oraPick_(src, ['Order Time','created_at','order_time'])),
         leadId: oraStr_(oraPick_(src, ['Lead ID','platform_lead_id','lead_id'])),
         importedStatus: oraStr_(oraPick_(src, ['Imported Status','call_center_status','imported_status']) || 'Pending'),
+        giftWrap: oraYes_(oraPick_(src, ['Gift Wrap','gift_wrap','gift_wrap_selected'])) ? 'YES' : 'NO',
+        wrappingCost: oraRound_(oraPick_(src, ['Wrapping Cost (Rs)','sheet_wrapping_cost','wrapping_cost','gift_wrap_fee','wrappingFee'])),
+        qtyOfferRules: oraStr_(oraPick_(src, ['Qty Offer Rules','sheet_qty_offer_rules','qty_offer_rules','qtyOfferRules'])),
         items: []
       };
       keys.push(key);
@@ -209,7 +221,7 @@ function oraNormalizeOrders_(body) {
 }
 
 function oraCaptureActions_(sh, orderId) {
-  var out = { orderAction: 'PENDING', cancelReason: '', items: {} };
+  var out = { orderAction: 'PENDING', cancelReason: '', giftWrap:'', wrappingCost:'', items: {} };
   if (sh.getLastRow() < 2) return out;
   var hm = oraHeaderMap_(sh);
   if (!hm['Order ID']) return out;
@@ -218,6 +230,8 @@ function oraCaptureActions_(sh, orderId) {
     if (oraKey_(vals[i][hm['Order ID'] - 1]) !== oraKey_(orderId)) continue;
     if (hm['Order Action'] && vals[i][hm['Order Action'] - 1]) out.orderAction = vals[i][hm['Order Action'] - 1];
     if (hm['Cancel Reason'] && vals[i][hm['Cancel Reason'] - 1]) out.cancelReason = vals[i][hm['Cancel Reason'] - 1];
+    if (hm['Gift Wrap'] && vals[i][hm['Gift Wrap'] - 1] && !out.giftWrap) out.giftWrap = vals[i][hm['Gift Wrap'] - 1];
+    if (hm['Wrapping Cost (Rs)'] && vals[i][hm['Wrapping Cost (Rs)'] - 1] && out.wrappingCost === '') out.wrappingCost = vals[i][hm['Wrapping Cost (Rs)'] - 1];
     var itemKey = oraKey_((hm['Item Code'] ? vals[i][hm['Item Code'] - 1] : '') + '|' + (hm['Variant / Color'] ? vals[i][hm['Variant / Color'] - 1] : ''));
     if (itemKey && hm['Item Action'] && vals[i][hm['Item Action'] - 1]) out.items[itemKey] = vals[i][hm['Item Action'] - 1];
   }
@@ -274,6 +288,9 @@ function oraWriteOrder_(ss, o) {
     set('Normal Total (Rs)', first ? o.normalTotal : '');
     set('Delivery Fee (Rs)', first ? o.delivery : '');
     set('Final Total (Rs)', first ? o.finalTotal : '');
+    set('Gift Wrap', first ? (prior.giftWrap || o.giftWrap || 'NO') : '');
+    set('Wrapping Cost (Rs)', first ? (prior.wrappingCost !== '' ? prior.wrappingCost : o.wrappingCost) : '');
+    set('Qty Offer Rules', first ? o.qtyOfferRules : '');
     set('Item Action', prior.items[itemKey] || 'KEEP ITEM');
     set('Order Action', first ? (prior.orderAction || 'PENDING') : '');
     set('Cancel Reason', first ? prior.cancelReason : '');
@@ -411,19 +428,36 @@ function oraRecalcOrder_(sh, orderId) {
   var hm = oraHeaderMap_(sh), idCol = hm['Order ID'];
   if (!idCol) return;
   var vals = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
-  var normal = 0, firstRow = 0;
+  var normal = 0, totalQty = 0, firstRow = 0;
   for (var i = 0; i < vals.length; i++) {
     if (oraKey_(vals[i][idCol - 1]) !== oraKey_(orderId)) continue;
     if (!firstRow) firstRow = i + 2;
     var itemAction = hm['Item Action'] ? oraKey_(vals[i][hm['Item Action'] - 1]) : 'KEEP ITEM';
     if (itemAction === 'CANCEL ITEM') continue;
     normal += oraNum_(hm['Line Total (Rs)'] ? vals[i][hm['Line Total (Rs)'] - 1] : 0);
+    totalQty += Math.max(1,Math.round(oraNum_(hm['Qty'] ? vals[i][hm['Qty'] - 1] : 1)));
   }
   if (!firstRow) return;
-  var discount = hm['Discount (Rs)'] ? oraNum_(sh.getRange(firstRow, hm['Discount (Rs)']).getValue()) : 0;
+  var rules = { enabled:false, tiers:[] };
+  if (hm['Qty Offer Rules']) {
+    try { rules = JSON.parse(oraStr_(sh.getRange(firstRow, hm['Qty Offer Rules']).getValue()) || '{}'); } catch (ignore) {}
+  }
+  var rate = 0, tiers = Array.isArray(rules.tiers) ? rules.tiers : [];
+  if (rules.enabled !== false && totalQty > 1) {
+    for (var t = 0; t < tiers.length; t++) {
+      var tier = tiers[t] || {}, min = Math.max(2,oraNum_(tier.min)), max = Math.max(min,oraNum_(tier.max));
+      if (totalQty >= min && (tier.openEnded === true || totalQty <= max)) { rate = Math.max(0,Math.min(100,oraNum_(tier.rate))); break; }
+    }
+  }
+  var discount = oraRound_(normal * rate / 100);
   var delivery = hm['Delivery Fee (Rs)'] ? oraNum_(sh.getRange(firstRow, hm['Delivery Fee (Rs)']).getValue()) : 0;
+  var wrapChoice = hm['Gift Wrap'] ? sh.getRange(firstRow, hm['Gift Wrap']).getDisplayValue() : 'NO';
+  var wrapCost = hm['Wrapping Cost (Rs)'] ? Math.max(0,oraNum_(sh.getRange(firstRow, hm['Wrapping Cost (Rs)']).getValue())) : 0;
+  var wrapping = oraYes_(wrapChoice) ? wrapCost : 0;
   discount = Math.min(Math.max(0, discount), normal);
-  var total = Math.max(0, oraRound_(normal - discount + delivery));
+  var total = Math.max(0, oraRound_(normal - discount + delivery + wrapping));
+  if (hm['Offer']) sh.getRange(firstRow, hm['Offer']).setValue(rate > 0 ? ('Qty Offer ' + rate + '% (' + totalQty + ' items)') : 'No Qty Offer');
+  if (hm['Discount (Rs)']) sh.getRange(firstRow, hm['Discount (Rs)']).setValue(discount);
   if (hm['Normal Total (Rs)']) sh.getRange(firstRow, hm['Normal Total (Rs)']).setValue(oraRound_(normal));
   if (hm['Final Total (Rs)']) sh.getRange(firstRow, hm['Final Total (Rs)']).setValue(total);
 }
@@ -472,6 +506,7 @@ function onEdit(e) {
       }
     }
     if (hm['Item Action'] && col === hm['Item Action']) oraRecalcOrder_(sh, orderId);
+    if ((hm['Gift Wrap'] && col === hm['Gift Wrap']) || (hm['Wrapping Cost (Rs)'] && col === hm['Wrapping Cost (Rs)'])) oraRecalcOrder_(sh, orderId);
     if (hm['Qty'] && col === hm['Qty']) {
       var qty = Math.max(1, Math.round(oraNum_(e.range.getValue())));
       e.range.setValue(qty);

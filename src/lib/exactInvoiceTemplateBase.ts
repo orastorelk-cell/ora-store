@@ -141,6 +141,7 @@ export function buildExactInvoiceSvg(
   // Keep it separate from the saved supplier-price offer so the invoice stays clear.
   const qtyOfferDiscount = Math.max(0, Number(order.special_offer_discount || 0));
   const normalSubtotal = Math.max(0, Number(order.subtotal || 0) + supplierOfferDiscount);
+  const wrappingCost = order.gift_wrap_selected ? Math.max(0, Number(order.gift_wrap_fee || 0)) : 0;
   const paid = order.payment_status === 'Paid' ? order.total_amount : 0;
   const balance = Math.max(0, order.total_amount-paid);
   const dynamicAdvancePct = Math.min(100, Math.max(1, Number(settings.advance_percentage ?? 50)));
@@ -191,6 +192,18 @@ export function buildExactInvoiceSvg(
   const policyY = itemTableBottom + 18;
 
   const isFinalPage = pageIndex >= totalPages - 1;
+  const invoiceTotalLines = [
+    { label:'Sub Total', value:money(normalSubtotal) },
+    ...(supplierOfferDiscount > 0 ? [{ label:'Special Offer', value:`- ${money(supplierOfferDiscount)}` }] : []),
+    ...(qtyOfferDiscount > 0 ? [{ label:'Qty Offer', value:`- ${money(qtyOfferDiscount)}` }] : []),
+    ...(wrappingCost > 0 ? [{ label:'Wrapping Cost', value:money(wrappingCost) }] : []),
+    { label:'Delivery', value:deliveryFree ? 'FREE' : money(order.delivery_fee) },
+  ];
+  const invoiceTotalLineGap = invoiceTotalLines.length >= 5 ? 28 : 34;
+  const invoiceTotalLinesSvg = invoiceTotalLines.map((line,index) => {
+    const y = policyY + 30 + index * invoiceTotalLineGap;
+    return `<text class="t label" x="1005" y="${y}">${esc(line.label)}</text><text class="t table" x="1475" y="${y}" text-anchor="end">${esc(line.value)}</text>`;
+  }).join('');
 
   const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1536 1090" width="1536" height="1090"${sample ? ' style="width:100%;height:auto;display:block"' : ''}>
@@ -278,10 +291,7 @@ ${Array.from({length:visibleRows}).map((_,i)=>{
 <!-- Readable totals -->
 <rect x="978" y="${policyY}" width="530" height="220" rx="14" fill="#fff" stroke="#111" stroke-width="1.5"/>
 ${isFinalPage ? `
-<text class="t label" x="1005" y="${policyY+34}">Sub Total</text><text class="t table" x="1475" y="${policyY+34}" text-anchor="end">${money(normalSubtotal)}</text>
-<text class="t label" x="1005" y="${policyY+68}">Special Offer</text><text class="t table" x="1475" y="${policyY+68}" text-anchor="end">- ${money(supplierOfferDiscount)}</text>
-<text class="t label" x="1005" y="${policyY+102}">Qty Offer</text><text class="t table" x="1475" y="${policyY+102}" text-anchor="end">- ${money(qtyOfferDiscount)}</text>
-<text class="t label" x="1005" y="${policyY+136}">Delivery</text><text class="t table" x="1475" y="${policyY+136}" text-anchor="end">${deliveryFree?'FREE':money(order.delivery_fee)}</text>
+${invoiceTotalLinesSvg}
 <line x1="995" y1="${policyY+153}" x2="1482" y2="${policyY+153}" class="line"/>
 <text class="t value" x="1005" y="${policyY+191}" style="font-weight:400">TOTAL LKR</text>
 <text class="t table" x="1475" y="${policyY+191}" text-anchor="end">${money(order.total_amount)}</text>

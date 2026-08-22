@@ -19,7 +19,8 @@ function oraCallCenterHiddenHeaders_() {
     'Original Variant / Color',
     'Original Item Code',
     'Original Item Name',
-    'Original Qty'
+    'Original Qty',
+    'Qty Offer Rules'
   ];
 }
 
@@ -40,6 +41,7 @@ function oraApplyCallCenterView_(sh) {
       'Address': 230, 'City': 180, 'District': 120, 'Item Name': 190, 'Item Code': 110,
       'Variant / Color': 120, 'Qty': 55, 'Unit Price (Rs)': 95, 'Line Total (Rs)': 100,
       'Offer': 140, 'Final Total (Rs)': 110, 'Item Action': 115, 'Order Action': 150,
+      'Gift Wrap': 90, 'Wrapping Cost (Rs)': 120,
       'Cancel Reason': 180, 'Change Item To': 200, 'Change Preview': 220,
       'Apply Item Change': 120, 'Order Time': 145
     };

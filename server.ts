@@ -1,23 +1,60 @@
+const sheetQtyOfferRulesServer = (settings: Record<string, any>) => JSON.stringify({
+  enabled: settings?.multi_buy_discount_enabled !== false,
+  tiers: [
+    { min:Number(settings?.multi_buy_tier1_min ?? 2), max:Number(settings?.multi_buy_tier1_max ?? 3), rate:Number(settings?.multi_buy_tier1_rate ?? 5) },
+    { min:Number(settings?.multi_buy_tier2_min ?? 4), max:Number(settings?.multi_buy_tier2_max ?? 5), rate:Number(settings?.multi_buy_tier2_rate ?? 7.5) },
+    { min:Number(settings?.multi_buy_tier3_min ?? 6), max:Number(settings?.multi_buy_tier3_max ?? 10), rate:Number(settings?.multi_buy_tier3_rate ?? 10), openEnded:true },
+  ],
+});
+
+const sheetWrappingFeeServer = (order:any, settings:Record<string,any>) => {
+  if(order?.gift_wrap_selected) return Math.max(0,Number(order?.gift_wrap_fee || settings?.gift_wrap_fee || 0));
+  return settings?.gift_wrap_enabled ? Math.max(0,Number(settings?.gift_wrap_fee || 0)) : 0;
+};
+
+const attachOrderSheetMetadataServer = async (orders:any[]) => {
+  try {
+    const state=await readSharedStorefrontState();
+    const settings=(state?.settings&&typeof state.settings==='object')?state.settings:{};
+    const qtyRules=sheetQtyOfferRulesServer(settings);
+    for(const order of Array.isArray(orders)?orders:[]){
+      if(!order || typeof order!=='object') continue;
+      order.sheet_qty_offer_rules=qtyRules;
+      order.sheet_wrapping_cost=sheetWrappingFeeServer(order,settings);
+    }
+  } catch (error:any) {
+    console.warn('Could not attach Google Sheet pricing metadata:',error?.message||error);
+  }
+};
+
 const buildOrderSheetRowServer = (order: any, item: any, isFirst: boolean, settings: Record<string, any>) => ({
   'Order ID': String(order?.order_number || ''),
   'Customer Name': isFirst ? String(order?.customer_name || '') : '',
   'Phone Number': isFirst ? String(order?.phone || '') : '',
   'Address': isFirst ? String(order?.address || '') : '',
   'Item Name': String(item?.product_name || item?.name || item?.item_name || order?.items?.[0]?.product_name || ''),
-'Item Code': String(item?.sku || item?.item_code || order?.items?.[0]?.sku || ''),
-'Qty': Math.max(1, Number(item?.quantity ?? item?.qty ?? 1)),
-'Unit Price (Rs)': Number(item?.unit_price ?? item?.price ?? order?.items?.[0]?.unit_price ?? 0),
-'Final Total (Rs)': isFirst ? Number(order?.total_amount ?? order?.total ?? 0) : 0,
-'Variant / Color': String(item?.variant_name || order?.items?.[0]?.variant_name || ''),
-'Order Action': 'PENDING',
-'Discount (Rs)': isFirst ? Number(order?.discount || 0) : 0,
-'Source': String(order?.order_source || order?.source || 'Website'),
-'Delivery Fee (Rs)': isFirst ? Number(order?.delivery_fee || 0) : 0,
-'WhatsApp Number': isFirst ? String(order?.whatsapp || '') : '',
-'Order Time': String(order?.created_at || new Date().toISOString()),
-'Imported Status': String(order?.call_center_status || 'Pending'),
-'City': isFirst ? String(order?.city || '') : '',
-'District': isFirst ? String(order?.district || '') : ''
+  'Main Code': String(item?.main_sku || item?.sku || item?.item_code || order?.items?.[0]?.sku || ''),
+  'Item Code': String(item?.sku || item?.item_code || order?.items?.[0]?.sku || ''),
+  'Qty': Math.max(1, Number(item?.quantity ?? item?.qty ?? 1)),
+  'Unit Price (Rs)': Number(item?.unit_price ?? item?.price ?? order?.items?.[0]?.unit_price ?? 0),
+  'Line Total (Rs)': Number(item?.subtotal ?? (Math.max(1, Number(item?.quantity ?? item?.qty ?? 1)) * Number(item?.unit_price ?? item?.price ?? order?.items?.[0]?.unit_price ?? 0))),
+  'Offer': isFirst ? orderQtyOfferLabelServer(order,settings) : '',
+  'Discount (Rs)': isFirst ? Number(order?.special_offer_discount || 0) : '',
+  'Normal Total (Rs)': isFirst ? Number(order?.subtotal || 0) : '',
+  'Delivery Fee (Rs)': isFirst ? Number(order?.delivery_fee || 0) : '',
+  'Final Total (Rs)': isFirst ? Number(order?.total_amount ?? order?.total ?? 0) : '',
+  'Variant / Color': String(item?.variant_name || order?.items?.[0]?.variant_name || ''),
+  'Item Action': 'KEEP ITEM',
+  'Order Action': isFirst ? 'PENDING' : '',
+  'Gift Wrap': isFirst ? (order?.gift_wrap_selected ? 'YES' : 'NO') : '',
+  'Wrapping Cost (Rs)': isFirst ? sheetWrappingFeeServer(order,settings) : '',
+  'Qty Offer Rules': isFirst ? sheetQtyOfferRulesServer(settings) : '',
+  'Source': String(order?.order_source || order?.source || 'Website'),
+  'WhatsApp Number': isFirst ? String(order?.whatsapp || '') : '',
+  'Order Time': isFirst ? String(order?.created_at || new Date().toISOString()) : '',
+  'Imported Status': isFirst ? String(order?.call_center_status || 'Pending') : '',
+  'City': isFirst ? String(order?.city || '') : '',
+  'District': isFirst ? String(order?.district || '') : ''
 });
 
 import express from "express";
@@ -902,13 +939,13 @@ const orderQtyOfferLabelServer = (order:any, settings:Record<string,any>) => {
   const qty=(Array.isArray(order?.items)?order.items:[]).reduce((sum:number,it:any)=>sum+Math.max(1,Number(it?.quantity||1)),0);
   const discount=Math.max(0,Number(order?.special_offer_discount||0));
   if(discount<=0) return 'No Qty Offer';
-  if(settings?.multi_buy_discount_enabled){
+  if(settings?.multi_buy_discount_enabled !== false){
     const tiers=[
       {min:Number(settings.multi_buy_tier1_min??2),max:Number(settings.multi_buy_tier1_max??3),rate:Number(settings.multi_buy_tier1_rate??5)},
       {min:Number(settings.multi_buy_tier2_min??4),max:Number(settings.multi_buy_tier2_max??5),rate:Number(settings.multi_buy_tier2_rate??7.5)},
       {min:Number(settings.multi_buy_tier3_min??6),max:Number(settings.multi_buy_tier3_max??10),rate:Number(settings.multi_buy_tier3_rate??10)},
     ];
-    const tier=tiers.find(t=>qty>=t.min&&qty<=t.max&&t.rate>0);
+    const tier=tiers.find((t,index)=>qty>=t.min&&(index===tiers.length-1||qty<=t.max)&&t.rate>0);
     if(tier) return `Qty Offer ${tier.rate}% (${qty} items)`;
   }
   return `Order Offer Rs. ${Math.round(discount*100)/100}`;
@@ -931,6 +968,9 @@ discount:Number(order?.special_offer_discount||0),
 deliveryFee:Number(order?.delivery_fee||0),
 normalTotal:Number(order?.subtotal||0),
 finalTotal:Number(order?.total_amount||0),
+giftWrap:order?.gift_wrap_selected?'YES':'NO',
+wrappingCost:sheetWrappingFeeServer(order,settings),
+qtyOfferRules:sheetQtyOfferRulesServer(settings),
 items:(Array.isArray(order?.items)?order.items:[]).map((it:any)=>({
 mainCode:String(it?.main_sku||it?.sku||''),
 variant:String(it?.variant_name||''),
@@ -1418,6 +1458,11 @@ app.post('/api/orders', async (req,res)=>{
       order.order_number=`${prefix}-${String(max+1).padStart(6,'0')}`;
     }
 
+    // Keep the Worker retry payload self-contained. If the primary Sheet mirror
+    // is briefly unavailable, Qty edits and Call Center Gift Wrap still use the
+    // exact Store Settings that were active when this order was saved.
+    await attachOrderSheetMetadataServer([order]);
+
     // Durable order FIRST. Customer success is never shown before this checkpoint.
     await saveOrderSnapshot(order);
 
@@ -1518,6 +1563,7 @@ app.post('/api/admin/orders/bulk-import', requireStaffAnyPermission(['lead_impor
       used.add(no);
     }
 
+    await attachOrderSheetMetadataServer(uniqueIncoming);
     await saveOrderSnapshotsBatch(uniqueIncoming);
     const sheetSync=await syncOrdersToGoogleSheetsServer(uniqueIncoming);
     if(sheetSync.ok){
@@ -1581,6 +1627,55 @@ app.post('/api/orders/invoice-download-status', requireAdminSession, async (req,
     });
   }catch(e:any){
     return res.status(500).json({error:e?.message || 'Invoice download status could not be saved.'});
+  }
+});
+app.post('/api/orders/:id/dispatch-scan', requireAdminSession, async (req,res)=>{
+  try{
+    const id=String(req.params.id || '').trim();
+    const barcode=String(req.body?.barcode || '').trim();
+    const current=await getOrderSnapshots();
+    const order=current.find((candidate:any)=>String(candidate?.id || '')===id);
+    if(!order) return res.status(404).json({error:'Order not found in the durable order store.'});
+
+    const matchesBarcode=!barcode
+      || String(order.waybill_number || '').trim()===barcode
+      || String(order.order_number || '').trim()===barcode;
+    if(!matchesBarcode) return res.status(409).json({error:'The scanned barcode no longer matches this order.'});
+    if(!order.invoice_locked) return res.status(409).json({error:`${order.order_number}: invoice is not generated yet.`});
+    if(!order.stock_allocated) return res.status(409).json({error:`${order.order_number}: stock is not allocated.`});
+
+    if(order.dispatch_status==='Handed Over'){
+      return res.json({
+        ok:false,
+        duplicate:true,
+        message:`${order.order_number} was already scanned for courier handover.`,
+        order,
+      });
+    }
+
+    const actor=(req as any).staffSessionUser as ServerStaffAccount | undefined;
+    const scannedAt=new Date().toISOString();
+    const scannedBy=String(actor?.display_name || actor?.username || 'Admin');
+    const updated={
+      ...order,
+      dispatch_status:'Handed Over',
+      dispatch_scanned_at:scannedAt,
+      dispatch_scanned_by:scannedBy,
+      order_status:'Shipped',
+      delivery_status:'Handed Over to Courier',
+      tracking_status:'Awaiting Fardar Scan',
+    };
+
+    // The browser must not report success until the durable order snapshot write
+    // has completed. This keeps phone/PC views consistent after refresh.
+    await saveOrderSnapshot(updated);
+    return res.json({
+      ok:true,
+      message:`${updated.order_number} marked Handed Over to Courier.`,
+      order:updated,
+    });
+  }catch(e:any){
+    return res.status(500).json({error:e?.message || 'Dispatch scan could not be saved.'});
   }
 });
 app.put('/api/orders/:id', requireAdminSession, async (req,res)=>{

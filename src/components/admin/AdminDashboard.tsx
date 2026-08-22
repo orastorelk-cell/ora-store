@@ -629,8 +629,10 @@ export const AdminDashboard: React.FC = () => {
   const [dispatchScanValue, setDispatchScanValue] = useState('');
   const [dispatchScanMessage, setDispatchScanMessage] = useState('');
   const [dispatchScanOk, setDispatchScanOk] = useState<boolean | null>(null);
+  const [dispatchScanBusy, setDispatchScanBusy] = useState(false);
   const [cameraScannerMode,setCameraScannerMode]=useState<'dispatch'|'return'|null>(null);
   const scanAudioContextRef = useRef<AudioContext | null>(null);
+  const dispatchScanBusyRef = useRef(false);
 
   const ensureScanAudio = () => {
     try {
@@ -698,15 +700,24 @@ export const AdminDashboard: React.FC = () => {
     return true;
   };
 
-  const processDispatchWaybill = (rawValue:string) => {
+  const processDispatchWaybill = async (rawValue:string) => {
+    if(dispatchScanBusyRef.current) return false;
     const value=String(rawValue || '').trim();
-    setDispatchScanValue(value);
-    const result=scanDispatchBarcode(value,adminUser?.name || 'Admin');
-    const isDuplicate = !result.success && /already scanned|already.*handover/i.test(String(result.message || ''));
-    setDispatchScanMessage(isDuplicate ? `Already Scanned — ${result.message} Not recorded again.` : result.message);
-    setDispatchScanOk(result.success);
-    playDispatchScanFeedback(result.success ? 'success' : isDuplicate ? 'duplicate' : 'error');
-    return result.success;
+    dispatchScanBusyRef.current=true;
+    setDispatchScanBusy(true);
+    setDispatchScanOk(null);
+    setDispatchScanMessage('Saving scan...');
+    try{
+      const result=await scanDispatchBarcode(value,adminUser?.name || 'Admin');
+      const isDuplicate = !result.success && /already scanned|already.*handover/i.test(String(result.message || ''));
+      setDispatchScanMessage(isDuplicate ? `Already Scanned — ${result.message} Not recorded again.` : result.message);
+      setDispatchScanOk(result.success);
+      playDispatchScanFeedback(result.success ? 'success' : isDuplicate ? 'duplicate' : 'error');
+      return result.success;
+    }finally{
+      dispatchScanBusyRef.current=false;
+      setDispatchScanBusy(false);
+    }
   };
 
   const handleWaybillCsvUpload = (file: File) => {
@@ -896,9 +907,9 @@ export const AdminDashboard: React.FC = () => {
   const downloadDecisionTemplate = (source: 'Website'|'Facebook Ads'|'TikTok Ads' = 'Website') => {
     const prefix = source === 'Facebook Ads' ? 'FB' : source === 'TikTok Ads' ? 'TK' : 'WEB';
     const csv = [
-      'Order ID,Customer Name,Phone Number,Address,Item Name,Variant / Color,Qty,Unit Price (Rs),Item Action,Order Action,Cancel Reason,Main Code,Item Code,Cancelled By',
-      `${prefix}-000001,Sample Customer,0770000000,Sample Address,Sample Product,,1,1500,KEEP ITEM,CONFIRM ORDER,,S0001,S0001,`,
-      `${prefix}-000002,Sample Customer,0770000000,Sample Address,Sample Product 2,,1,1000,CANCEL ITEM,CANCEL ENTIRE ORDER,Customer changed mind,S0002,S0002,Call Center`,
+      'Order ID,Customer Name,Phone Number,Address,Item Name,Variant / Color,Qty,Unit Price (Rs),Item Action,Order Action,Cancel Reason,Main Code,Item Code,Cancelled By,Gift Wrap,Wrapping Cost (Rs)',
+      `${prefix}-000001,Sample Customer,0770000000,Sample Address,Sample Product,,1,1500,KEEP ITEM,CONFIRM ORDER,,S0001,S0001,,YES,250`,
+      `${prefix}-000002,Sample Customer,0770000000,Sample Address,Sample Product 2,,1,1000,CANCEL ITEM,CANCEL ENTIRE ORDER,Customer changed mind,S0002,S0002,Call Center,NO,0`,
     ].join('\n');
     const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
     const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url;
@@ -2110,7 +2121,10 @@ export const AdminDashboard: React.FC = () => {
         onClose={()=>setCameraScannerMode(null)}
         onDetected={(value)=>{
           if(cameraScannerMode==='return') loadReturnByWaybill(value);
-          if(cameraScannerMode==='dispatch') processDispatchWaybill(value);
+          if(cameraScannerMode==='dispatch') {
+            setDispatchScanValue(value);
+            void processDispatchWaybill(value);
+          }
           setCameraScannerMode(null);
         }}
       />
@@ -3770,7 +3784,7 @@ export const AdminDashboard: React.FC = () => {
             </div>
 
             <p className="text-xs text-neutral-400">
-              Website orders sync to CALL CENTER ORDERS. New Facebook Lead CSV rows sync to FACEBOOK ORDERS and TikTok Lead CSV rows sync to TIKTOK ORDERS. Call Center may edit only Variant/Color, Qty, Item Status, the controlled Change Product dropdown, Decision and Cancel Reason. Qty uses the same O-RA Qty Offer tiers. Product/variant add-edit-delete changes auto-sync to PRODUCT CATALOG. Sheet Decision never changes O-RA by itself — Confirm + Cancel CSV Upload is the manual checkpoint.
+              Website orders sync to CALL CENTER ORDERS. New Facebook Lead CSV rows sync to FACEBOOK ORDERS and TikTok Lead CSV rows sync to TIKTOK ORDERS. Call Center may edit Variant/Color, Qty, Gift Wrap, Item Status, the controlled Change Product dropdown, Decision and Cancel Reason. Qty uses the same O-RA Qty Offer tiers and Gift Wrap updates the final total. Product/variant add-edit-delete changes auto-sync to PRODUCT CATALOG. Sheet Decision never changes O-RA by itself — Confirm + Cancel CSV Upload is the manual checkpoint.
             </p>
             <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3 text-[10px] leading-5 text-emerald-200"><b>Existing Google Sheet tabs: DO NOT DELETE.</b> Replace/deploy the Apps Script, then run <code>setupOraCallCenterSheet()</code> once. It upgrades the existing CALL CENTER ORDERS / PRODUCT CATALOG tabs and creates FACEBOOK ORDERS / TIKTOK ORDERS only if missing. Use the O-RA Call Center menu in Google Sheets → <b>Show Pending Only</b> / <b>Show All Orders</b>.</div>
             {localOnlyCatalogImages > 0 && (
@@ -3892,14 +3906,14 @@ export const AdminDashboard: React.FC = () => {
         <div data-ora-action="dispatch_scan" className="space-y-5">
           <div className="bg-neutral-900 border border-orange-500/30 rounded-2xl p-5 sm:p-6 space-y-4">
             <div><h2 className="text-lg font-bold text-white flex items-center gap-2"><ScanLine className="w-5 h-5 text-orange-400" />Dispatch Scan / Courier Handover</h2><p className="text-xs text-neutral-400">After packing, scan the printed waybill barcode once before handing the parcel to the courier/lorry. Scanner devices that send Enter work directly here.</p></div>
-            <form onSubmit={(e) => { e.preventDefault(); processDispatchWaybill(dispatchScanValue); setDispatchScanValue(''); }} className="flex flex-col sm:flex-row gap-2">
-              <input autoFocus value={dispatchScanValue} onChange={(e) => setDispatchScanValue(e.target.value)} placeholder="Scan / type waybill barcode here..." className="flex-1 bg-neutral-950 border-2 border-orange-500/40 focus:border-orange-500 rounded-xl px-4 py-3 text-white font-mono text-lg outline-none" />
-              <button type="submit" className="px-5 py-3 rounded-xl bg-orange-500 text-black font-bold">Confirm Scan</button>
-              <button type="button" onClick={()=>{ ensureScanAudio(); setCameraScannerMode('dispatch'); }} className="px-5 py-3 rounded-xl border border-blue-500/40 bg-blue-500/10 text-blue-300 font-bold">
+            <form onSubmit={(e) => { e.preventDefault(); const value=dispatchScanValue; setDispatchScanValue(''); void processDispatchWaybill(value); }} className="flex flex-col sm:flex-row gap-2">
+              <input autoFocus disabled={dispatchScanBusy} value={dispatchScanValue} onChange={(e) => setDispatchScanValue(e.target.value)} placeholder="Scan / type waybill barcode here..." className="flex-1 bg-neutral-950 border-2 border-orange-500/40 focus:border-orange-500 rounded-xl px-4 py-3 text-white font-mono text-lg outline-none disabled:opacity-60" />
+              <button type="submit" disabled={dispatchScanBusy} className="px-5 py-3 rounded-xl bg-orange-500 text-black font-bold disabled:opacity-60">{dispatchScanBusy ? 'Saving...' : 'Confirm Scan'}</button>
+              <button type="button" disabled={dispatchScanBusy} onClick={()=>{ ensureScanAudio(); setCameraScannerMode('dispatch'); }} className="px-5 py-3 rounded-xl border border-blue-500/40 bg-blue-500/10 text-blue-300 font-bold disabled:opacity-60">
                 <Camera className="inline h-4 w-4 mr-1"/>Phone Camera
               </button>
             </form>
-            {dispatchScanMessage && <div className={`rounded-xl p-3 text-xs font-bold ${dispatchScanOk ? 'bg-emerald-950/40 border border-emerald-700 text-emerald-300':'bg-red-950/40 border border-red-800 text-red-300'}`}>{dispatchScanMessage}</div>}
+            {dispatchScanMessage && <div className={`rounded-xl p-3 text-xs font-bold ${dispatchScanOk === true ? 'bg-emerald-950/40 border border-emerald-700 text-emerald-300' : dispatchScanOk === false ? 'bg-red-950/40 border border-red-800 text-red-300' : 'bg-blue-950/40 border border-blue-700 text-blue-300'}`}>{dispatchScanMessage}</div>}
             <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 px-3 py-2 text-[10px] text-blue-200">Successful Waybill scan = short beep + phone vibration. The same Waybill can be recorded only once; a second scan shows <b>Already Scanned</b> and is not recorded again.</div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-3"><p className="text-[10px] text-neutral-500">READY TO SCAN</p><p className="text-xl font-bold text-orange-400">{orders.filter((o) => o.invoice_locked && o.stock_allocated && o.waybill_number && o.dispatch_status !== 'Handed Over').length}</p></div>
@@ -4297,7 +4311,7 @@ export const AdminDashboard: React.FC = () => {
                   <div>
                     <p className="text-xs font-black text-orange-300">🎉 Special Multi-Buy Offer</p>
                     <p className="mt-1 text-[10px] text-neutral-400">
-                      Percentage discount shown to customers when Free Delivery Display Mode is ON. Qty 1 always gets no multi-buy discount.
+                      Percentage discount shown to customers whenever this offer is ON. It works independently from Free Delivery Display Mode. Qty 1 always gets no multi-buy discount.
                     </p>
                   </div>
                   <label className="flex items-center gap-2 text-[11px] font-bold text-neutral-300">

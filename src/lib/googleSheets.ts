@@ -64,7 +64,21 @@ const orderQtyOfferLabel = (order: any): string => {
   return discount > 0 ? `Qty Offer Rs. ${discount} (${totalQty} items)` : 'No Qty Offer';
 };
 
-const buildOrderSheetRow = (order: any, item: any, isFirst: boolean) => {
+const sheetQtyOfferRules = (settings: Record<string, any>) => JSON.stringify({
+  enabled: settings?.multi_buy_discount_enabled !== false,
+  tiers: [
+    { min:Number(settings?.multi_buy_tier1_min ?? 2), max:Number(settings?.multi_buy_tier1_max ?? 3), rate:Number(settings?.multi_buy_tier1_rate ?? 5) },
+    { min:Number(settings?.multi_buy_tier2_min ?? 4), max:Number(settings?.multi_buy_tier2_max ?? 5), rate:Number(settings?.multi_buy_tier2_rate ?? 7.5) },
+    { min:Number(settings?.multi_buy_tier3_min ?? 6), max:Number(settings?.multi_buy_tier3_max ?? 10), rate:Number(settings?.multi_buy_tier3_rate ?? 10), openEnded:true },
+  ],
+});
+
+const sheetWrappingFee = (order:any, settings:Record<string,any>) => {
+  if(order?.gift_wrap_selected) return Math.max(0,roundMoney(order?.gift_wrap_fee || settings?.gift_wrap_fee || 0));
+  return settings?.gift_wrap_enabled ? Math.max(0,roundMoney(settings?.gift_wrap_fee || 0)) : 0;
+};
+
+const buildOrderSheetRow = (order: any, item: any, isFirst: boolean, settings:Record<string,any>) => {
   const qty = Math.max(1, Number(item?.quantity ?? 1));
   const unitPrice = roundMoney(item?.unit_price ?? 0);
   const lineTotal = roundMoney(item?.subtotal ?? qty * unitPrice);
@@ -88,6 +102,9 @@ const buildOrderSheetRow = (order: any, item: any, isFirst: boolean) => {
     'Normal Total (Rs)': isFirst ? roundMoney(order?.subtotal || 0) : '',
     'Delivery Fee (Rs)': isFirst ? roundMoney(order?.delivery_fee || 0) : '',
     'Final Total (Rs)': isFirst ? roundMoney(order?.total_amount || 0) : '',
+    'Gift Wrap': isFirst ? (order?.gift_wrap_selected ? 'YES' : 'NO') : '',
+    'Wrapping Cost (Rs)': isFirst ? sheetWrappingFee(order,settings) : '',
+    'Qty Offer Rules': isFirst ? sheetQtyOfferRules(settings) : '',
     'Item Action': 'KEEP ITEM',
     'Order Action': isFirst ? 'PENDING' : '',
     'Cancel Reason': '',
@@ -106,14 +123,14 @@ const buildOrderSheetRow = (order: any, item: any, isFirst: boolean) => {
   };
 };
 
-const buildOrderGroups = (orders: any[]) => {
+const buildOrderGroups = (orders: any[], settings:Record<string,any>) => {
   const groups: Record<string, any[]> = {};
   for (const order of orders || []) {
     const source = String(order?.order_source || 'Website');
     if (!groups[source]) groups[source] = [];
     const items = Array.isArray(order?.items) && order.items.length ? order.items : [{}];
     items.forEach((item: any, index: number) => {
-      groups[source].push(buildOrderSheetRow(order, item, index === 0));
+      groups[source].push(buildOrderSheetRow(order, item, index === 0, settings));
     });
   }
   return groups;
@@ -127,10 +144,10 @@ const expectStatus = (result: any, allowed: string[]) => {
 export async function syncOrderToGoogleSheets(
   order: any,
   webhookUrl: string,
-  _settings: Record<string, any>,
+  settings: Record<string, any>,
   _products?: any[],
 ): Promise<SheetActionResult> {
-  const posted = await postToAppsScript(webhookUrl, { action: 'sync_orders', groups: buildOrderGroups([order]) });
+  const posted = await postToAppsScript(webhookUrl, { action: 'sync_orders', groups: buildOrderGroups([order],settings) });
   if (!posted.ok) return { success: false, message: posted.error || 'Google Sheet sync failed.' };
   const err = expectStatus(posted.result, ['orders_synced']);
   if (err) return { success: false, message: err };
@@ -150,10 +167,10 @@ export async function syncOrderToGoogleSheets(
 export async function syncOrdersBatchToGoogleSheets(
   orders: any[],
   webhookUrl: string,
-  _settings: Record<string, any>,
+  settings: Record<string, any>,
 ): Promise<SheetActionResult> {
   if (!orders?.length) return { success: true, message: 'Nothing to sync.', synced: 0, rows: 0 };
-  const posted = await postToAppsScript(webhookUrl, { action: 'sync_orders', groups: buildOrderGroups(orders) });
+  const posted = await postToAppsScript(webhookUrl, { action: 'sync_orders', groups: buildOrderGroups(orders,settings) });
   if (!posted.ok) return { success: false, message: posted.error || 'Google Sheet batch sync failed.' };
   const err = expectStatus(posted.result, ['orders_synced']);
   if (err) return { success: false, message: err };

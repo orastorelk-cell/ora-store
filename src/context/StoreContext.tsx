@@ -187,7 +187,7 @@ interface StoreContextType {
   unassignWaybill: (orderId: string) => void;
   markInvoicesGenerated: (orderIds: string[], generatedBy?: string) => Order[];
   markInvoiceBatchDownloaded: (orderIds: string[], downloadedBy?: string, downloadSet?: { date: string; number: number }) => Promise<void>;
-  scanDispatchBarcode: (barcode: string, scannedBy?: string) => { success: boolean; message: string; order?: Order };
+  scanDispatchBarcode: (barcode: string, scannedBy?: string) => Promise<{ success: boolean; message: string; order?: Order }>;
   recordCodPayments: (entries: { waybill: string; amount?: number; received_at?: string; reference?: string; source?: 'Fardar CSV' | 'Manual' | 'System' }[], recordedBy?: string) => Promise<{ updatedCount: number; notFound: string[] }>;
   syncOrderToSheet: (orderId: string) => Promise<boolean>;
   syncAllUnsyncedOrders: () => Promise<number>;
@@ -1030,7 +1030,7 @@ useEffect(() => {
 
   const cartItemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
   const getMultiBuyDiscountRate = (qty: number) => {
-    if (!settings.free_delivery_enabled || !settings.multi_buy_discount_enabled || qty <= 1) return 0;
+    if (settings.multi_buy_discount_enabled === false || qty <= 1) return 0;
     const t1Min = Math.max(2, Number(settings.multi_buy_tier1_min ?? 2));
     const t1Max = Math.max(t1Min, Number(settings.multi_buy_tier1_max ?? 3));
     const t1Rate = Math.max(0, Math.min(100, Number(settings.multi_buy_tier1_rate ?? 5)));
@@ -1778,6 +1778,8 @@ useEffect(() => {
     const callResultI=idx(['call_result','call_status','result']);
     const reasonI=idx(['cancel_reason','reason','notes']);
     const cancelledByI=idx(['cancelled_by','updated_by','call_center_by']);
+    const giftWrapI=idx(['gift_wrap','gift_wrapping','wrap']);
+    const wrappingCostI=idx(['wrapping_cost_rs','wrapping_cost','gift_wrap_fee','wrapping_fee_rs','wrapping_fee']);
     if(idI<0||codeI<0||(decisionI<0&&callResultI<0))return{confirmedCount:0,notFoundCount:0,ignoredCount:0,orderNumbers:[],errors:['Required columns: Order ID, Item Code, and Order Action (CONFIRM ORDER / CANCEL ENTIRE ORDER). Older Decision/Call Result CSV files are still supported.']};
 
     const wantedPrefix=source==='Facebook Ads'?'FB':source==='TikTok Ads'?'TK':source==='Website'?'WEB':'';
@@ -1830,11 +1832,19 @@ useEffect(() => {
         try{nextItems.push(buildOrderItemSnapshot(selection.product,qty,settings,selection.variant,products));}catch(e:any){errors.push(`${id}: ${e?.message||'Invalid item selection.'}`);bad=true;}
       });
       if(bad)return;
-      const totalQty=nextItems.reduce((n,it)=>n+it.quantity,0),subtotal=nextItems.reduce((n,it)=>n+it.subtotal,0),rate=getMultiBuyDiscountRate(totalQty),special_offer_discount=Math.round(subtotal*(rate/100)*100)/100,total_amount=Math.round(Math.max(0,subtotal-special_offer_discount+order.delivery_fee)),threshold=Math.max(0,Number(settings.advance_qty_threshold??4)),adv=totalQty>threshold,pct=Math.min(100,Math.max(1,Number(settings.advance_percentage??50)));
+      const giftWrapRaw=giftWrapI>=0?String(rows.map(c=>c[giftWrapI]).find(v=>String(v||'').trim())||'').trim():'';
+      const gift_wrap_selected=giftWrapRaw
+        ? ['yes','true','1','on','add wrap','gift wrap'].includes(giftWrapRaw.toLowerCase())
+        : Boolean(order.gift_wrap_selected);
+      const sheetWrappingCost=wrappingCostI>=0?Number(String(rows.map(c=>c[wrappingCostI]).find(v=>String(v||'').trim())||0).replace(/[^0-9.-]/g,'')):0;
+      const gift_wrap_fee=gift_wrap_selected
+        ? Math.max(0,Number(sheetWrappingCost || order.gift_wrap_fee || settings.gift_wrap_fee || 0))
+        : 0;
+      const totalQty=nextItems.reduce((n,it)=>n+it.quantity,0),subtotal=nextItems.reduce((n,it)=>n+it.subtotal,0),rate=getMultiBuyDiscountRate(totalQty),special_offer_discount=Math.round(subtotal*(rate/100)*100)/100,total_amount=Math.round(Math.max(0,subtotal-special_offer_discount+order.delivery_fee+gift_wrap_fee)),threshold=Math.max(0,Number(settings.advance_qty_threshold??4)),adv=totalQty>threshold,pct=Math.min(100,Math.max(1,Number(settings.advance_percentage??50)));
       const oldShape=(order.items||[]).map(it=>({sku:it.sku,product_name:it.product_name,variant_name:it.variant_name,quantity:it.quantity,unit_price:it.unit_price}));
       const newShape=nextItems.map(it=>({sku:it.sku,product_name:it.product_name,variant_name:it.variant_name,quantity:it.quantity,unit_price:it.unit_price}));
       const changed=JSON.stringify(oldShape)!==JSON.stringify(newShape);
-      updates.set(id,{items:nextItems,subtotal,special_offer_discount,total_amount,is_advance_required:adv,advance_amount:adv?Math.round(total_amount*pct/100):0,call_center_status:'Confirmed',order_status:'Processing',call_center_updated_at:now,stock_allocated:false,stock_status:'Waiting for Stock',product_change_history:changed?[...(order.product_change_history||[]),{changed_at:now,changed_by:'Call Center Confirm Upload',old_items:oldShape,new_items:newShape,reason:reason||undefined}]:(order.product_change_history||[]),notes:[order.notes,cancelled.length?`Call Center cancelled ${cancelled.length} item row(s).`:'',reason?`Call Center: ${reason}`:''].filter(Boolean).join(' | ')});
+      updates.set(id,{items:nextItems,subtotal,special_offer_discount,gift_wrap_selected,gift_wrap_fee,total_amount,is_advance_required:adv,advance_amount:adv?Math.round(total_amount*pct/100):0,call_center_status:'Confirmed',order_status:'Processing',call_center_updated_at:now,stock_allocated:false,stock_status:'Waiting for Stock',product_change_history:changed?[...(order.product_change_history||[]),{changed_at:now,changed_by:'Call Center Confirm Upload',old_items:oldShape,new_items:newShape,reason:reason||undefined}]:(order.product_change_history||[]),notes:[order.notes,cancelled.length?`Call Center cancelled ${cancelled.length} item row(s).`:'',reason?`Call Center: ${reason}`:''].filter(Boolean).join(' | ')});
       orderNumbers.push(id);
     });
 
@@ -2130,7 +2140,7 @@ useEffect(() => {
     return { updatedCount: updates.length, notFound };
   };
 
-  const scanDispatchBarcode = (barcode: string, scannedBy = adminUser?.name || 'Admin') => {
+  const scanDispatchBarcode = async (barcode: string, scannedBy = adminUser?.name || 'Admin'): Promise<{ success: boolean; message: string; order?: Order }> => {
     const clean = String(barcode || '').trim();
     if (!clean) return { success: false, message: 'Scan a waybill barcode first.' };
     const order = orders.find((o) => o.waybill_number === clean || o.order_number === clean);
@@ -2138,12 +2148,37 @@ useEffect(() => {
     if (!order.invoice_locked) return { success: false, message: `${order.order_number}: invoice is not generated yet.` };
     if (!order.stock_allocated) return { success: false, message: `${order.order_number}: stock is not allocated.` };
     if (order.dispatch_status === 'Handed Over') return { success: false, message: `${order.order_number} was already scanned for courier handover.` , order};
-    const now = new Date().toISOString();
-    const updated: Order = { ...order, dispatch_status: 'Handed Over', dispatch_scanned_at: now, dispatch_scanned_by: scannedBy, order_status: 'Shipped', delivery_status: 'Handed Over to Courier', tracking_status: 'Awaiting Fardar Scan' };
-    setOrders((prev) => prev.map((o) => o.id === order.id ? updated : o));
-    setWaybillRecords((prev) => prev.map((w) => w.waybill_number === order.waybill_number ? { ...w, status: 'Used' } : w));
-    logActivity({ action: 'Courier Handover Scanned', module: 'Dispatch', target_id: order.id, target_label: order.order_number, details: `${order.waybill_number} • ${scannedBy}` });
-    return { success: true, message: `${order.order_number} marked Handed Over to Courier.`, order: updated };
+    try {
+      const result = await sharedStaffRequest(`/api/orders/${encodeURIComponent(order.id)}/dispatch-scan`, {
+        method: 'POST',
+        body: JSON.stringify({ barcode: clean }),
+      });
+      const savedOrder = result?.order as Order | undefined;
+      if (!savedOrder) return { success: false, message: 'The scan was not saved. Please retry.' };
+
+      setOrders((prev) => prev.map((candidate) => candidate.id === savedOrder.id ? savedOrder : candidate));
+      setWaybillRecords((prev) => prev.map((record) => record.waybill_number === savedOrder.waybill_number ? { ...record, status: 'Used' } : record));
+
+      if (result?.duplicate) {
+        return {
+          success: false,
+          message: String(result?.message || `${savedOrder.order_number} was already scanned for courier handover.`),
+          order: savedOrder,
+        };
+      }
+
+      logActivity({ action: 'Courier Handover Scanned', module: 'Dispatch', target_id: savedOrder.id, target_label: savedOrder.order_number, details: `${savedOrder.waybill_number} • ${savedOrder.dispatch_scanned_by || scannedBy}` });
+      return {
+        success: true,
+        message: String(result?.message || `${savedOrder.order_number} marked Handed Over to Courier.`),
+        order: savedOrder,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        message: `Scan was not saved. ${String(error?.message || 'Check the connection and retry.')}`,
+      };
+    }
   };
 
   const findReturnOrderByWaybill = (waybill: string): Order | null => {

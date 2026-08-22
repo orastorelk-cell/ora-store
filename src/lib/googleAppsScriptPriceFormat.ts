@@ -14,6 +14,7 @@ function oraApplyMoneyFormat_(sh, startRow, count) {
     'Discount (Rs)',
     'Normal Total (Rs)',
     'Delivery Fee (Rs)',
+    'Wrapping Cost (Rs)',
     'Final Total (Rs)'
   ];
   for (var i = 0; i < moneyHeaders.length; i++) {

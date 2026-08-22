@@ -78,6 +78,9 @@ function oraBuildStableOrderValues_(sh, o, prior, priorLocation) {
     set('Normal Total (Rs)', first ? o.normalTotal : '');
     set('Delivery Fee (Rs)', first ? o.delivery : '');
     set('Final Total (Rs)', first ? o.finalTotal : '');
+    set('Gift Wrap', first ? (prior.giftWrap || o.giftWrap || 'NO') : '');
+    set('Wrapping Cost (Rs)', first ? (prior.wrappingCost !== '' && prior.wrappingCost !== undefined ? prior.wrappingCost : o.wrappingCost) : '');
+    set('Qty Offer Rules', first ? o.qtyOfferRules : '');
     set('Item Action', prior.items[itemKey] || 'KEEP ITEM');
     set('Order Action', first ? (prior.orderAction || 'PENDING') : '');
     set('Cancel Reason', first ? prior.cancelReason : '');

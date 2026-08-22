@@ -73,6 +73,15 @@ function oraBulkSetupFreshRows_(ss, sh, startRow, rowCount, blocks) {
         .build()
     );
   }
+  if (hm['Gift Wrap']) {
+    sh.getRange(startRow, hm['Gift Wrap'], rowCount, 1).setDataValidation(
+      SpreadsheetApp.newDataValidation()
+        .requireValueInList(['NO','YES'], true)
+        .setAllowInvalid(false)
+        .setHelpText('YES adds the saved wrapping cost to this order.')
+        .build()
+    );
+  }
   if (hm['Apply Item Change']) {
     try { sh.getRange(startRow, hm['Apply Item Change'], rowCount, 1).insertCheckboxes(); } catch (e) {}
   }
