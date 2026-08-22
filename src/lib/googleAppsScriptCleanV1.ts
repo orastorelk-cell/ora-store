@@ -83,13 +83,15 @@ function oraStyleOrderHeader_(sh) {
   } catch (e) {}
 }
 function oraRepairOrderColumnRules_(ss, sh, startRow, count) {
-  if (!ss || !sh || !count || startRow < 2) return;
+  if (!ss || !sh || startRow < 2) return;
   var hm = oraHeaderMap_(sh);
   var repairStart = hm['Normal Total (Rs)'] || hm['Offer'];
   var repairEnd = hm['Order Action'] || hm['Final Total (Rs)'];
-  if (repairStart && repairEnd && repairEnd >= repairStart) {
-    try { sh.getRange(startRow, repairStart, count, repairEnd - repairStart + 1).clearDataValidations(); } catch (e) {}
+  var validationRows = Math.max(0, sh.getMaxRows() - startRow + 1);
+  if (repairStart && repairEnd && repairEnd >= repairStart && validationRows > 0) {
+    try { sh.getRange(startRow, repairStart, validationRows, repairEnd - repairStart + 1).clearDataValidations(); } catch (e) {}
   }
+  if (!count) return;
   var textHeaders = ['Offer','Gift Wrap','Item Action','Order Action'];
   for (var i = 0; i < textHeaders.length; i++) {
     var textCol = hm[textHeaders[i]];
@@ -205,7 +207,10 @@ function setupOraGoogleSheetsCleanV1() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   if (!ss) throw new Error('Open the NEW target Google Sheet before running setup.');
   PropertiesService.getScriptProperties().setProperty(ORA_TARGET_KEY, ss.getId());
-  for (var i = 0; i < ORA_ORDER_SHEETS.length; i++) oraEnsureOrderSheet_(ss, ORA_ORDER_SHEETS[i]);
+  for (var i = 0; i < ORA_ORDER_SHEETS.length; i++) {
+    var orderSheet = oraEnsureOrderSheet_(ss, ORA_ORDER_SHEETS[i]);
+    oraRepairOrderColumnRules_(ss, orderSheet, 2, Math.max(0, orderSheet.getLastRow() - 1));
+  }
   oraEnsureCatalog_(ss);
   if (!ss.getSheetByName(ORA_CITY_TAB)) ss.insertSheet(ORA_CITY_TAB);
   if (!ss.getSheetByName(ORA_DELETED_TAB)) ss.insertSheet(ORA_DELETED_TAB);
