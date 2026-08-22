@@ -7,10 +7,11 @@ import { adminDashboardVisibleTemplatePatch } from './src/lib/adminDashboardVisi
 import { adminDashboardLeadPreviewPatch } from './src/lib/adminDashboardLeadPreviewPatch';
 import { adminDashboardLeadServerPreviewPatch } from './src/lib/adminDashboardLeadServerPreviewPatch';
 import { adminDashboardProductAutoPopularPatch } from './src/lib/adminDashboardProductAutoPopularPatch';
+import { customerCartWordingPatch } from './src/lib/customerCartWordingPatch';
 
 export default defineConfig(() => {
   return {
-    plugins: [adminDashboardUnifiedUploadPatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
+    plugins: [customerCartWordingPatch(), adminDashboardUnifiedUploadPatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
