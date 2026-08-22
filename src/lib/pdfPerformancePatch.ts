@@ -19,6 +19,13 @@ export const pdfPerformancePatch = () => ({
       text = text.replace(existingMarker, existingReplacement);
     }
 
+    const fetchMarker = "    const response = await fetch('/api/google-sheets/proxy', {\n      method:'POST',\n      headers:{'Content-Type':'application/json'},\n      body:JSON.stringify({\n        webhookUrl,\n        payload:{ action:'order_details', orderId },\n      }),\n    });";
+    const fetchReplacement = "    const controller = new AbortController();\n    const timeout = window.setTimeout(() => controller.abort(), 700);\n    const response = await fetch('/api/google-sheets/proxy', {\n      method:'POST',\n      headers:{'Content-Type':'application/json'},\n      body:JSON.stringify({\n        webhookUrl,\n        payload:{ action:'order_details', orderId },\n      }),\n      signal: controller.signal,\n    }).finally(() => window.clearTimeout(timeout));";
+    if (!text.includes(fetchReplacement)) {
+      if (!text.includes(fetchMarker)) throw new Error('[O-RA PDF performance] district fetch marker not found');
+      text = text.replace(fetchMarker, fetchReplacement);
+    }
+
     const successMarker = "    return String(result?.district || '').trim();";
     const successReplacement = "    const district = String(result?.district || '').trim();\n    if (cacheKey) invoiceDistrictCache.set(cacheKey, district);\n    return district;";
     if (!text.includes(successReplacement)) {
@@ -26,19 +33,9 @@ export const pdfPerformancePatch = () => ({
       text = text.replace(successMarker, successReplacement);
     }
 
-    const a4Marker = "  const invalid=singles.filter(o=>validateInvoiceOrder(o).length>0);\n  if(invalid.length) throw new Error(`${invalid.length} invoice(s) failed validation.`);";
-    const a4Replacement = a4Marker + "\n\n  // Prefetch missing districts in parallel. Rendering then reuses the in-memory cache\n  // instead of waiting on one Apps Script round-trip per invoice.\n  await Promise.all(singles.map(o=>resolveInvoiceDistrict(o,settings)));";
-    if (!text.includes('await Promise.all(singles.map(o=>resolveInvoiceDistrict(o,settings)))')) {
-      if (!text.includes(a4Marker)) throw new Error('[O-RA PDF performance] A4 prefetch marker not found');
-      text = text.replace(a4Marker, a4Replacement);
-    }
-
-    const batchMarker = "  const invalid=batch.filter(o=>validateInvoiceOrder(o).length>0);\n  if(invalid.length) throw new Error(`${invalid.length} invoice(s) failed validation.`);";
-    const batchReplacement = batchMarker + "\n\n  // Parallel network prefetch removes the biggest delay for 20-50 invoice batches.\n  await Promise.all(batch.map(o=>resolveInvoiceDistrict(o,settings)));";
-    if (!text.includes('await Promise.all(batch.map(o=>resolveInvoiceDistrict(o,settings)))')) {
-      if (!text.includes(batchMarker)) throw new Error('[O-RA PDF performance] batch prefetch marker not found');
-      text = text.replace(batchMarker, batchReplacement);
-    }
+    // Do not make PDF generation wait for a full batch of optional district lookups.
+    // Each invoice still attempts the lookup when needed, but it is capped at 700ms
+    // and falls back to a blank District on timeout/failure.
 
     return text === code ? null : { code: text, map: null };
   },
