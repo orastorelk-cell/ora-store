@@ -15,13 +15,14 @@ export const adminDashboardVisibleTemplatePatch = () => ({
       throw new Error('[O-RA copied Sheet CSV template patch] unified template header block not found');
     }
 
-    // IMPORTANT: this is intentionally the exact 27-column structure produced
+    // IMPORTANT: this is intentionally the exact 29-column visible structure produced
     // by the user's Google Sheet copy/export workflow. Do not append hidden
     // Lead ID / audit / original fields here: adding them shifts pasted values.
     const copiedSheetHeaders = `    const headers = [
       'Order ID','Customer Name','Phone Number','WhatsApp Number','Address','City','District',
-      'Item Name','Main Code','Item Code','Variant / Color','Qty','Unit Price (Rs)','Line Total (Rs)','Offer',
-      'Discount (Rs)','Normal Total (Rs)','Delivery Fee (Rs)','Final Total (Rs)','Item Action','Order Action',
+      'Item Name','Main Code','Item Code','Variant / Color','Qty','Unit Price (Rs)','Line Total (Rs)',
+      'Normal Total (Rs)','Offer','Discount (Rs)','Delivery Fee (Rs)','Gift Wrap','Wrapping Cost (Rs)',
+      'Final Total (Rs)','Item Action','Order Action',
       'Cancel Reason','Change Item To','Change Preview','Apply Item Change','Source','Order Time'
     ];`;
 
@@ -44,7 +45,7 @@ export const adminDashboardVisibleTemplatePatch = () => ({
       'Template matches the copied Sheet CSV exactly'
     );
 
-    const help = 'This template has the exact 27 columns from the CSV produced when you copy/export the orders from Google Sheets: Order ID through Order Time. Paste the copied order rows starting at A2, save as CSV, then upload. Hidden Lead ID/audit/original columns are intentionally not added, so pasted values never shift.';
+    const help = 'This template has the exact 29 visible columns from the CSV produced when you copy/export the orders from Google Sheets: Order ID through Order Time, including Gift Wrap and Wrapping Cost. Paste the copied order rows starting at A2, save as CSV, then upload. Hidden Lead ID/audit/original columns are intentionally not added, so pasted values never shift.';
     text = text.replace(
       'You can export a completed CALL CENTER ORDERS / FACEBOOK ORDERS / TIKTOK ORDERS tab as CSV and upload it directly. Or copy the complete Sheet rows into the common template. Full Sheet columns are accepted; O-RA reads only the fields needed for Confirm / Cancel / item changes.',
       help

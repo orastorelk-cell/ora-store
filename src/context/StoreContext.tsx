@@ -152,6 +152,7 @@ interface StoreContextType {
     whatsapp: string;
     address: string;
     city: string;
+    district?: string;
     payment_method: PaymentMethod;
     notes?: string;
     order_source?: OrderSource;
@@ -1160,6 +1161,7 @@ useEffect(() => {
     whatsapp: string;
     address: string;
     city: string;
+    district?: string;
     payment_method: PaymentMethod;
     notes?: string;
     order_source?: OrderSource;
@@ -1218,6 +1220,7 @@ useEffect(() => {
       whatsapp: formData.whatsapp,
       address: formData.address,
       city: formData.city,
+      district: String(formData.district || '').trim(),
       payment_method: formData.payment_method,
       payment_status: 'Pending',
       order_status: formData.payment_method === 'Bank Payment' ? 'Pending Payment' : 'New Orders',

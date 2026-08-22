@@ -157,6 +157,7 @@ export interface Order {
   whatsapp: string;
   address: string;
   city: string;
+  district?: string;
   fardar_city?: string;
   city_verified?: boolean;
   city_mapping_source?: 'exact' | 'saved_mapping' | 'manual';

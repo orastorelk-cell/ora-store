@@ -906,10 +906,17 @@ export const AdminDashboard: React.FC = () => {
 
   const downloadDecisionTemplate = (source: 'Website'|'Facebook Ads'|'TikTok Ads' = 'Website') => {
     const prefix = source === 'Facebook Ads' ? 'FB' : source === 'TikTok Ads' ? 'TK' : 'WEB';
+    const headers = [
+      'Order ID','Customer Name','Phone Number','WhatsApp Number','Address','City','District',
+      'Item Name','Main Code','Item Code','Variant / Color','Qty','Unit Price (Rs)','Line Total (Rs)',
+      'Normal Total (Rs)','Offer','Discount (Rs)','Delivery Fee (Rs)','Gift Wrap','Wrapping Cost (Rs)',
+      'Final Total (Rs)','Item Action','Order Action','Cancel Reason','Change Item To','Change Preview',
+      'Apply Item Change','Source','Order Time'
+    ];
     const csv = [
-      'Order ID,Customer Name,Phone Number,Address,Item Name,Variant / Color,Qty,Unit Price (Rs),Item Action,Order Action,Cancel Reason,Main Code,Item Code,Cancelled By,Gift Wrap,Wrapping Cost (Rs)',
-      `${prefix}-000001,Sample Customer,0770000000,Sample Address,Sample Product,,1,1500,KEEP ITEM,CONFIRM ORDER,,S0001,S0001,,YES,250`,
-      `${prefix}-000002,Sample Customer,0770000000,Sample Address,Sample Product 2,,1,1000,CANCEL ITEM,CANCEL ENTIRE ORDER,Customer changed mind,S0002,S0002,Call Center,NO,0`,
+      headers.join(','),
+      [`${prefix}-000001`,'Sample Customer','0770000000','0770000000','Sample Address','Colombo','Colombo','Sample Product','S0001','S0001','',1,1500,1500,1500,'No Qty Offer',0,0,'YES',250,1750,'KEEP ITEM','CONFIRM ORDER','','','','FALSE',source,''].join(','),
+      [`${prefix}-000002`,'Sample Customer','0770000000','0770000000','Sample Address','Colombo','Colombo','Sample Product 2','S0002','S0002','',1,1000,1000,1000,'No Qty Offer',0,0,'NO',0,1000,'CANCEL ITEM','CANCEL ENTIRE ORDER','Customer changed mind','','','FALSE',source,''].join(','),
     ].join('\n');
     const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
     const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url;

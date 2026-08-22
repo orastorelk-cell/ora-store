@@ -53,10 +53,9 @@ export const adminDashboardUnifiedUploadPatch = () => ({
     const headers = [
       'Order ID','Customer Name','Phone Number','WhatsApp Number','Address','City','District',
       'Item Name','Main Code','Item Code','Variant / Color','Qty','Unit Price (Rs)','Line Total (Rs)',
-      'Offer','Discount (Rs)','Normal Total (Rs)','Delivery Fee (Rs)','Final Total (Rs)',
+      'Normal Total (Rs)','Offer','Discount (Rs)','Delivery Fee (Rs)','Gift Wrap','Wrapping Cost (Rs)','Final Total (Rs)',
       'Item Action','Order Action','Cancel Reason','Change Item To','Change Preview','Apply Item Change',
-      'Source','Order Time','Lead ID','Imported Status','Last Sync',
-      'Original Main Code','Original Variant / Color','Original Item Code','Original Item Name','Original Qty'
+      'Source','Order Time'
     ];
     const csv = headers.join(',') + '\n';
     const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
