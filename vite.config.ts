@@ -12,10 +12,11 @@ import { welcomeSplashAppPatch } from './src/lib/welcomeSplashAppPatch';
 import { deliveryCityAcceptancePatch } from './src/lib/deliveryCityAcceptancePatch';
 import { waybillDuplicateSafetyPatch } from './src/lib/waybillDuplicateSafetyPatch';
 import { waybillExistingGarbageCleanupPatch } from './src/lib/waybillExistingGarbageCleanupPatch';
+import { leadItemCodeBlankDefaultPatch } from './src/lib/leadItemCodeBlankDefaultPatch';
 
 export default defineConfig(() => {
   return {
-    plugins: [waybillExistingGarbageCleanupPatch(), waybillDuplicateSafetyPatch(), deliveryCityAcceptancePatch(), welcomeSplashAppPatch(), customerCartWordingPatch(), adminDashboardUnifiedUploadPatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
+    plugins: [leadItemCodeBlankDefaultPatch(), waybillExistingGarbageCleanupPatch(), waybillDuplicateSafetyPatch(), deliveryCityAcceptancePatch(), welcomeSplashAppPatch(), customerCartWordingPatch(), adminDashboardUnifiedUploadPatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
