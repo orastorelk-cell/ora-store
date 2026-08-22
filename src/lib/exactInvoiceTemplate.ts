@@ -38,10 +38,13 @@ export function buildExactInvoiceSvg(
   const marker = '<!-- Waybill: no redundant courier name -->';
   if (!svg.includes(marker)) return svg;
 
+  // District values can contain multiple words (for example "Gampaha District").
+  // Keep the complete value on one line and start it far enough to the right so it
+  // can never overlap the fixed "District -" label.
   const districtLine = [
     '<text class="t label" x="650" y="350">District</text>',
     '<text class="t label" x="760" y="350">-</text>',
-    `<text class="t value" x="790" y="350">${escInvoiceDistrict(district)}</text>`,
+    `<text class="t value" x="805" y="350">${escInvoiceDistrict(district)}</text>`,
   ].join('');
 
   return svg.replace(marker, `${districtLine}\n\n${marker}`);
