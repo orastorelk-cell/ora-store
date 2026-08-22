@@ -10,10 +10,11 @@ import { adminDashboardProductAutoPopularPatch } from './src/lib/adminDashboardP
 import { customerCartWordingPatch } from './src/lib/customerCartWordingPatch';
 import { welcomeSplashAppPatch } from './src/lib/welcomeSplashAppPatch';
 import { deliveryCityAcceptancePatch } from './src/lib/deliveryCityAcceptancePatch';
+import { waybillDuplicateSafetyPatch } from './src/lib/waybillDuplicateSafetyPatch';
 
 export default defineConfig(() => {
   return {
-    plugins: [deliveryCityAcceptancePatch(), welcomeSplashAppPatch(), customerCartWordingPatch(), adminDashboardUnifiedUploadPatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
+    plugins: [waybillDuplicateSafetyPatch(), deliveryCityAcceptancePatch(), welcomeSplashAppPatch(), customerCartWordingPatch(), adminDashboardUnifiedUploadPatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
