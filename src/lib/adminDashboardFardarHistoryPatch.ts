@@ -8,6 +8,15 @@ export const adminDashboardFardarHistoryPatch = () => ({
 
     let text = code;
 
+    const oldDownloadSignature = '  const downloadFardarUploadCsv = (selectedOrders: Order[]) => {';
+    if (text.includes(oldDownloadSignature)) {
+      text = text.replace(oldDownloadSignature, '  const downloadFardarUploadCsv = (selectedOrders: Order[], fileLabel?: string) => {');
+    }
+    const oldDownloadName = "    link.download=`ora_fardar_ready_${new Date().toISOString().slice(0,10)}.csv`;";
+    if (text.includes(oldDownloadName)) {
+      text = text.replace(oldDownloadName, "    const safeFileLabel = String(fileLabel || new Date().toISOString().slice(0,10)).replace(/[^0-9A-Za-z_-]+/g, '-');\n    link.download=`ora_fardar_ready_${safeFileLabel}.csv`;");
+    }
+
     const stateMarker = "  // Branding changes stay as a draft until the admin explicitly saves them.\n";
     if (!text.includes('const [unifiedConfirmHistory, setUnifiedConfirmHistory]')) {
       if (!text.includes(stateMarker)) throw new Error('[O-RA Fardar history] state marker not found');
@@ -33,6 +42,12 @@ export const adminDashboardFardarHistoryPatch = () => ({
     const d = new Date(value);
     if (Number.isNaN(d.getTime())) return '';
     return [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-');
+  };
+  const unifiedHistoryTimeKey = (value?: string) => {
+    if (!value) return 'batch';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return 'batch';
+    return [String(d.getHours()).padStart(2, '0'), String(d.getMinutes()).padStart(2, '0'), String(d.getSeconds()).padStart(2, '0')].join('-');
   };
 
 `;
@@ -117,7 +132,7 @@ export const adminDashboardFardarHistoryPatch = () => ({
                   <button
                     type="button"
                     disabled={selectedDateReadyOrders.length === 0}
-                    onClick={()=>downloadFardarUploadCsv(selectedDateOrders)}
+                    onClick={()=>downloadFardarUploadCsv(selectedDateOrders, selectedFardarHistoryDate || 'selected-date')}
                     className="rounded-xl border border-violet-300 bg-violet-50 px-4 py-2.5 text-xs font-black text-violet-800 disabled:opacity-40"
                   ><Download className="mr-1 inline h-4 w-4"/> Download Date CSV ({selectedDateReadyOrders.length})</button>
                 </div>
@@ -142,6 +157,7 @@ export const adminDashboardFardarHistoryPatch = () => ({
                       Boolean(order.waybill_number) &&
                       order.order_status !== 'Cancelled'
                     );
+                    const historyFileLabel = unifiedHistoryDateKey(historyBatch.at) + '_' + unifiedHistoryTimeKey(historyBatch.at);
                     return (
                       <div key={historyBatch.at + '-' + index} className="flex flex-col gap-3 rounded-2xl border border-gray-200 bg-gray-50 p-3 sm:flex-row sm:items-center sm:justify-between">
                         <div>
@@ -151,7 +167,7 @@ export const adminDashboardFardarHistoryPatch = () => ({
                         <button
                           type="button"
                           disabled={historyBatchReady.length === 0}
-                          onClick={()=>downloadFardarUploadCsv(historyBatchOrders)}
+                          onClick={()=>downloadFardarUploadCsv(historyBatchOrders, historyFileLabel)}
                           className="rounded-xl border border-violet-300 bg-white px-3 py-2 text-[11px] font-black text-violet-800 disabled:opacity-40"
                         ><Download className="mr-1 inline h-3.5 w-3.5"/> Fardar CSV ({historyBatchReady.length})</button>
                       </div>
