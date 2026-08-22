@@ -14,11 +14,11 @@ var ORA_GUIDE_TAB = 'GOOGLE SHEETS GUIDE';
 var ORA_ORDER_HEADERS = [
   'Order ID','Customer Name','Phone Number','WhatsApp Number','Address','City','District',
   'Item Name','Main Code','Item Code','Variant / Color','Qty','Unit Price (Rs)','Line Total (Rs)',
-  'Offer','Discount (Rs)','Normal Total (Rs)','Delivery Fee (Rs)','Final Total (Rs)',
+  'Offer','Discount (Rs)','Normal Total (Rs)','Delivery Fee (Rs)','Gift Wrap','Wrapping Cost (Rs)','Final Total (Rs)',
   'Item Action','Order Action','Cancel Reason','Change Item To','Change Preview','Apply Item Change',
   'Source','Order Time','Lead ID','Imported Status','Last Sync',
   'Original Main Code','Original Variant / Color','Original Item Code','Original Item Name','Original Qty',
-  'Gift Wrap','Wrapping Cost (Rs)','Qty Offer Rules'
+  'Qty Offer Rules'
 ];
 
 var ORA_CATALOG_HEADERS = [
@@ -65,12 +65,49 @@ function oraHeaderMap_(sh) {
 function oraEnsureColumns_(sh, count) {
   if (sh.getMaxColumns() < count) sh.insertColumnsAfter(sh.getMaxColumns(), count - sh.getMaxColumns());
 }
+function oraStyleOrderHeader_(sh) {
+  if (!sh) return;
+  try {
+    sh.getRange(1, 1, 1, ORA_ORDER_HEADERS.length)
+      .setBackground('#1e1e1e')
+      .setFontColor('#ffffff')
+      .setFontWeight('bold')
+      .setHorizontalAlignment('center')
+      .setVerticalAlignment('middle');
+  } catch (e) {}
+}
 function oraEnsureOrderSheet_(ss, name) {
   var sh = ss.getSheetByName(name) || ss.insertSheet(name);
+  var oldColumnCount = Math.max(1, sh.getLastColumn());
+  var oldHeaders = sh.getRange(1, 1, 1, oldColumnCount).getDisplayValues()[0];
+  var oldMap = {};
+  for (var h = 0; h < oldHeaders.length; h++) {
+    var oldName = oraStr_(oldHeaders[h]);
+    if (oldName && oldMap[oldName] === undefined) oldMap[oldName] = h;
+  }
+  var layoutChanged = false;
+  for (var c = 0; c < ORA_ORDER_HEADERS.length; c++) {
+    if (oldHeaders[c] !== ORA_ORDER_HEADERS[c]) { layoutChanged = true; break; }
+  }
   oraEnsureColumns_(sh, ORA_ORDER_HEADERS.length);
+  var dataRows = Math.max(0, sh.getLastRow() - 1);
+  if (layoutChanged && oldMap['Order ID'] !== undefined && dataRows > 0) {
+    var oldValues = sh.getRange(2, 1, dataRows, oldColumnCount).getValues();
+    var remapped = [];
+    for (var r = 0; r < oldValues.length; r++) {
+      var nextRow = [];
+      for (var n = 0; n < ORA_ORDER_HEADERS.length; n++) {
+        var sourceIndex = oldMap[ORA_ORDER_HEADERS[n]];
+        nextRow.push(sourceIndex === undefined ? '' : oldValues[r][sourceIndex]);
+      }
+      remapped.push(nextRow);
+    }
+    sh.getRange(2, 1, dataRows, Math.max(oldColumnCount, ORA_ORDER_HEADERS.length)).clearContent();
+    sh.getRange(2, 1, remapped.length, ORA_ORDER_HEADERS.length).setValues(remapped);
+  }
   sh.getRange(1, 1, 1, ORA_ORDER_HEADERS.length).setValues([ORA_ORDER_HEADERS]);
   sh.setFrozenRows(1);
-  sh.getRange(1, 1, 1, ORA_ORDER_HEADERS.length).setFontWeight('bold');
+  oraStyleOrderHeader_(sh);
   sh.autoResizeColumns(1, Math.min(ORA_ORDER_HEADERS.length, 30));
   return sh;
 }
@@ -144,6 +181,26 @@ function setupOraGoogleSheetsCleanV1() {
   return { ok: true, status: 'setup_complete', version: ORA_VERSION, spreadsheet_id: ss.getId(), spreadsheet_name: ss.getName() };
 }
 function setupOraCallCenterSheet() { return setupOraGoogleSheetsCleanV1(); }
+
+// Standalone Web App projects do not receive the bound-sheet simple onEdit event.
+// Run this once after setup so Qty, Gift Wrap and action dropdown edits recalculate.
+function oraInstalledSheetEdit_(e) { return onEdit(e); }
+function installOraSheetEditTrigger() {
+  var ss = oraTarget_();
+  var triggers = ScriptApp.getProjectTriggers();
+  var found = false;
+  for (var i = 0; i < triggers.length; i++) {
+    var trigger = triggers[i];
+    var sameHandler = trigger.getHandlerFunction() === 'oraInstalledSheetEdit_';
+    var sameSheet = false;
+    try { sameSheet = trigger.getTriggerSourceId() === ss.getId(); } catch (ignore) {}
+    if (!sameHandler || !sameSheet) continue;
+    if (!found) found = true;
+    else ScriptApp.deleteTrigger(trigger);
+  }
+  if (!found) ScriptApp.newTrigger('oraInstalledSheetEdit_').forSpreadsheet(ss).onEdit().create();
+  return { ok:true, spreadsheet_id:ss.getId(), trigger:found?'already_installed':'installed' };
+}
 
 function oraFlattenIncoming_(body) {
   var flat = [];
@@ -506,7 +563,15 @@ function onEdit(e) {
       }
     }
     if (hm['Item Action'] && col === hm['Item Action']) oraRecalcOrder_(sh, orderId);
-    if ((hm['Gift Wrap'] && col === hm['Gift Wrap']) || (hm['Wrapping Cost (Rs)'] && col === hm['Wrapping Cost (Rs)'])) oraRecalcOrder_(sh, orderId);
+    if ((hm['Gift Wrap'] && col === hm['Gift Wrap']) || (hm['Wrapping Cost (Rs)'] && col === hm['Wrapping Cost (Rs)'])) {
+      var wrapFirst = oraFindOrderFirstRow_(sh, orderId);
+      if (wrapFirst && wrapFirst !== row) {
+        sh.getRange(wrapFirst, col).setValue(e.value || e.range.getValue());
+        e.range.clearContent();
+        row = wrapFirst;
+      }
+      oraRecalcOrder_(sh, orderId);
+    }
     if (hm['Qty'] && col === hm['Qty']) {
       var qty = Math.max(1, Math.round(oraNum_(e.range.getValue())));
       e.range.setValue(qty);

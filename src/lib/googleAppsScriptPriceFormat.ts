@@ -50,7 +50,14 @@ setupOraGoogleSheetsCleanV1 = function() {
   if (catalog && catalog.getLastRow() > 1) {
     try { catalog.getRange(2, 7, catalog.getLastRow() - 1, 1).setNumberFormat('Rs. #,##0.00'); } catch (e) {}
   }
-  SpreadsheetApp.flush();
+  // Earlier setup layers already flush the structural changes. A final formatting
+  // flush can occasionally throw a transient Google Sheets service error even
+  // though the upgrade succeeded, so retry once without reporting a false failure.
+  try { SpreadsheetApp.flush(); }
+  catch (firstFlushError) {
+    Utilities.sleep(500);
+    try { SpreadsheetApp.flush(); } catch (ignoredFlushError) {}
+  }
   result.version = ORA_VERSION;
   result.currency_format = true;
   return result;

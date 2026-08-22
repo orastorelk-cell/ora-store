@@ -11,10 +11,36 @@ ORA_VERSION = 'O-RA Store Google Sheets Clean V1 + Exact City 8549 + Stable Call
 // only by oraApplyCallCenterView_ instead.
 oraEnsureOrderSheet_ = function(ss, name) {
   var sh = ss.getSheetByName(name) || ss.insertSheet(name);
+  var oldColumnCount = Math.max(1, sh.getLastColumn());
+  var oldHeaders = sh.getRange(1, 1, 1, oldColumnCount).getDisplayValues()[0];
+  var oldMap = {};
+  for (var h = 0; h < oldHeaders.length; h++) {
+    var oldName = oraStr_(oldHeaders[h]);
+    if (oldName && oldMap[oldName] === undefined) oldMap[oldName] = h;
+  }
+  var layoutChanged = false;
+  for (var c = 0; c < ORA_ORDER_HEADERS.length; c++) {
+    if (oldHeaders[c] !== ORA_ORDER_HEADERS[c]) { layoutChanged = true; break; }
+  }
   oraEnsureColumns_(sh, ORA_ORDER_HEADERS.length);
+  var dataRows = Math.max(0, sh.getLastRow() - 1);
+  if (layoutChanged && oldMap['Order ID'] !== undefined && dataRows > 0) {
+    var oldValues = sh.getRange(2, 1, dataRows, oldColumnCount).getValues();
+    var remapped = [];
+    for (var r = 0; r < oldValues.length; r++) {
+      var nextRow = [];
+      for (var n = 0; n < ORA_ORDER_HEADERS.length; n++) {
+        var sourceIndex = oldMap[ORA_ORDER_HEADERS[n]];
+        nextRow.push(sourceIndex === undefined ? '' : oldValues[r][sourceIndex]);
+      }
+      remapped.push(nextRow);
+    }
+    sh.getRange(2, 1, dataRows, Math.max(oldColumnCount, ORA_ORDER_HEADERS.length)).clearContent();
+    sh.getRange(2, 1, remapped.length, ORA_ORDER_HEADERS.length).setValues(remapped);
+  }
   sh.getRange(1, 1, 1, ORA_ORDER_HEADERS.length).setValues([ORA_ORDER_HEADERS]);
   sh.setFrozenRows(1);
-  sh.getRange(1, 1, 1, ORA_ORDER_HEADERS.length).setFontWeight('bold');
+  oraStyleOrderHeader_(sh);
   return sh;
 };
 
