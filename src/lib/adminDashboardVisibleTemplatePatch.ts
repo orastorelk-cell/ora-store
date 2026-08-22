@@ -12,50 +12,60 @@ export const adminDashboardVisibleTemplatePatch = () => ({
     const headersEndMarker = '    ];';
     const headersEnd = text.indexOf(headersEndMarker, headersStart);
     if (fnStart < 0 || headersStart < 0 || headersEnd < 0) {
-      throw new Error('[O-RA full Sheet template patch] unified template header block not found');
+      throw new Error('[O-RA copied Sheet CSV template patch] unified template header block not found');
     }
 
-    // Exact A:AI header order used by CALL CENTER ORDERS / FACEBOOK ORDERS /
-    // TIKTOK ORDERS. Keep this aligned 1:1 with the live Google Sheet so users
-    // can copy rows (including hidden columns) and paste them straight into A2.
-    const fullSheetHeaders = `    const headers = [
+    // IMPORTANT: this is intentionally the exact 27-column structure produced
+    // by the user's Google Sheet copy/export workflow. Do not append hidden
+    // Lead ID / audit / original fields here: adding them shifts pasted values.
+    const copiedSheetHeaders = `    const headers = [
       'Order ID','Customer Name','Phone Number','WhatsApp Number','Address','City','District',
       'Item Name','Main Code','Item Code','Variant / Color','Qty','Unit Price (Rs)','Line Total (Rs)','Offer',
       'Discount (Rs)','Normal Total (Rs)','Delivery Fee (Rs)','Final Total (Rs)','Item Action','Order Action',
-      'Cancel Reason','Change Item To','Change Preview','Apply Item Change','Source','Order Time','Lead ID',
-      'Imported Status','Last Sync','Original Main Code','Original Variant / Color','Original Item Code',
-      'Original Item Name','Original Qty'
+      'Cancel Reason','Change Item To','Change Preview','Apply Item Change','Source','Order Time'
     ];`;
 
-    text = text.slice(0, headersStart) + fullSheetHeaders + text.slice(headersEnd + headersEndMarker.length);
+    text = text.slice(0, headersStart) + copiedSheetHeaders + text.slice(headersEnd + headersEndMarker.length);
 
     text = text.replace(
       'Template headers are exactly the same as the order Sheets',
-      'Template headers match the Google Sheet exactly'
+      'Template matches the copied Sheet CSV exactly'
     );
     text = text.replace(
       'Template contains every Google Sheet order header',
-      'Template headers match the Google Sheet exactly'
+      'Template matches the copied Sheet CSV exactly'
+    );
+    text = text.replace(
+      'Template headers match the Google Sheet exactly',
+      'Template matches the copied Sheet CSV exactly'
     );
     text = text.replace(
       'Template matches the visible Sheet columns exactly',
-      'Template headers match the Google Sheet exactly'
+      'Template matches the copied Sheet CSV exactly'
     );
+
+    const help = 'This template has the exact 27 columns from the CSV produced when you copy/export the orders from Google Sheets: Order ID through Order Time. Paste the copied order rows starting at A2, save as CSV, then upload. Hidden Lead ID/audit/original columns are intentionally not added, so pasted values never shift.';
     text = text.replace(
       'You can export a completed CALL CENTER ORDERS / FACEBOOK ORDERS / TIKTOK ORDERS tab as CSV and upload it directly. Or copy the complete Sheet rows into the common template. Full Sheet columns are accepted; O-RA reads only the fields needed for Confirm / Cancel / item changes.',
-      'The template uses the exact A-to-AI header order from CALL CENTER ORDERS / FACEBOOK ORDERS / TIKTOK ORDERS, including hidden columns. Copy selected Sheet rows and paste them starting at A2, save as CSV, then upload.'
+      help
+    );
+    text = text.replace(
+      'The template uses the exact A-to-AI header order from CALL CENTER ORDERS / FACEBOOK ORDERS / TIKTOK ORDERS, including hidden columns. Copy selected Sheet rows and paste them starting at A2, save as CSV, then upload.',
+      help
     );
     text = text.replace(
       'The template uses the exact full header order from CALL CENTER ORDERS / FACEBOOK ORDERS / TIKTOK ORDERS, including hidden technical columns. Copy the selected Sheet rows and paste them starting at A2, then save as CSV and upload. O-RA reads decision fields by header name.',
-      'The template uses the exact A-to-AI header order from CALL CENTER ORDERS / FACEBOOK ORDERS / TIKTOK ORDERS, including hidden columns. Copy selected Sheet rows and paste them starting at A2, save as CSV, then upload.'
+      help
     );
     text = text.replace(
       'Hidden technical/audit columns are intentionally left out of this template. Copy the visible cells from CALL CENTER ORDERS / FACEBOOK ORDERS / TIKTOK ORDERS and paste them starting at A2; the column order matches exactly. A full Sheet CSV export with hidden columns is still accepted because O-RA reads fields by header name.',
-      'The template uses the exact A-to-AI header order from CALL CENTER ORDERS / FACEBOOK ORDERS / TIKTOK ORDERS, including hidden columns. Copy selected Sheet rows and paste them starting at A2, save as CSV, then upload.'
+      help
     );
-    text = text.replace('Download Visible-Columns Template', 'Download Exact Sheet Template');
-    text = text.replace('Download Sheet-Matching Common Template', 'Download Exact Sheet Template');
-    text = text.replace('Download Full Sheet-Headers Template', 'Download Exact Sheet Template');
+
+    text = text.replace('Download Visible-Columns Template', 'Download Copy-Paste CSV Template');
+    text = text.replace('Download Sheet-Matching Common Template', 'Download Copy-Paste CSV Template');
+    text = text.replace('Download Full Sheet-Headers Template', 'Download Copy-Paste CSV Template');
+    text = text.replace('Download Exact Sheet Template', 'Download Copy-Paste CSV Template');
 
     return text === code ? null : { code: text, map: null };
   },
