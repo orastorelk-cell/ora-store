@@ -14,7 +14,7 @@ var ORA_GUIDE_TAB = 'GOOGLE SHEETS GUIDE';
 var ORA_ORDER_HEADERS = [
   'Order ID','Customer Name','Phone Number','WhatsApp Number','Address','City','District',
   'Item Name','Main Code','Item Code','Variant / Color','Qty','Unit Price (Rs)','Line Total (Rs)',
-  'Offer','Discount (Rs)','Normal Total (Rs)','Delivery Fee (Rs)','Gift Wrap','Wrapping Cost (Rs)','Final Total (Rs)',
+  'Normal Total (Rs)','Offer','Discount (Rs)','Delivery Fee (Rs)','Gift Wrap','Wrapping Cost (Rs)','Final Total (Rs)',
   'Item Action','Order Action','Cancel Reason','Change Item To','Change Preview','Apply Item Change',
   'Source','Order Time','Lead ID','Imported Status','Last Sync',
   'Original Main Code','Original Variant / Color','Original Item Code','Original Item Name','Original Qty',
@@ -74,7 +74,39 @@ function oraStyleOrderHeader_(sh) {
       .setFontWeight('bold')
       .setHorizontalAlignment('center')
       .setVerticalAlignment('middle');
+    var hm = oraHeaderMap_(sh);
+    if (hm['Qty'] && hm['Final Total (Rs)']) {
+      sh.getRange(1, hm['Qty'], 1, hm['Final Total (Rs)'] - hm['Qty'] + 1)
+        .setBackground('#0f4c5c')
+        .setFontColor('#ffffff');
+    }
   } catch (e) {}
+}
+function oraRepairOrderColumnRules_(ss, sh, startRow, count) {
+  if (!ss || !sh || !count || startRow < 2) return;
+  var hm = oraHeaderMap_(sh);
+  var repairStart = hm['Normal Total (Rs)'] || hm['Offer'];
+  var repairEnd = hm['Order Action'] || hm['Final Total (Rs)'];
+  if (repairStart && repairEnd && repairEnd >= repairStart) {
+    try { sh.getRange(startRow, repairStart, count, repairEnd - repairStart + 1).clearDataValidations(); } catch (e) {}
+  }
+  var textHeaders = ['Offer','Gift Wrap','Item Action','Order Action'];
+  for (var i = 0; i < textHeaders.length; i++) {
+    var textCol = hm[textHeaders[i]];
+    if (textCol) try { sh.getRange(startRow, textCol, count, 1).setNumberFormat('@'); } catch (e) {}
+  }
+  try {
+    if (hm['Gift Wrap']) sh.getRange(startRow, hm['Gift Wrap'], count, 1).setDataValidation(
+      SpreadsheetApp.newDataValidation().requireValueInList(['NO','YES'], true).setAllowInvalid(false).build()
+    );
+    if (hm['Item Action']) sh.getRange(startRow, hm['Item Action'], count, 1).setDataValidation(
+      SpreadsheetApp.newDataValidation().requireValueInList(['KEEP ITEM','CANCEL ITEM'], true).setAllowInvalid(false).build()
+    );
+    if (hm['Order Action']) sh.getRange(startRow, hm['Order Action'], count, 1).setDataValidation(
+      SpreadsheetApp.newDataValidation().requireValueInList(['PENDING','CONFIRM ORDER','CANCEL ENTIRE ORDER'], true).setAllowInvalid(false).build()
+    );
+  } catch (e) {}
+  try { if (typeof oraApplyMoneyFormat_ === 'function') oraApplyMoneyFormat_(sh, startRow, count); } catch (e) {}
 }
 function oraEnsureOrderSheet_(ss, name) {
   var sh = ss.getSheetByName(name) || ss.insertSheet(name);
@@ -108,6 +140,7 @@ function oraEnsureOrderSheet_(ss, name) {
   sh.getRange(1, 1, 1, ORA_ORDER_HEADERS.length).setValues([ORA_ORDER_HEADERS]);
   sh.setFrozenRows(1);
   oraStyleOrderHeader_(sh);
+  if (layoutChanged && dataRows > 0) oraRepairOrderColumnRules_(ss, sh, 2, dataRows);
   sh.autoResizeColumns(1, Math.min(ORA_ORDER_HEADERS.length, 30));
   return sh;
 }

@@ -41,6 +41,7 @@ oraEnsureOrderSheet_ = function(ss, name) {
   sh.getRange(1, 1, 1, ORA_ORDER_HEADERS.length).setValues([ORA_ORDER_HEADERS]);
   sh.setFrozenRows(1);
   oraStyleOrderHeader_(sh);
+  if (layoutChanged && dataRows > 0) oraRepairOrderColumnRules_(ss, sh, 2, dataRows);
   return sh;
 };
 
