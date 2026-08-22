@@ -30,17 +30,18 @@ export function buildExactInvoiceSvg(
   pageIndex = 0,
   totalPages = 1,
 ) {
-  const baseSvg = buildExactInvoiceSvgBase(order, settings, sample, pageItems, pageIndex, totalPages);
-  const svg = normalizeGeneratedByFooter(baseSvg);
+  // Add District to the base SVG before its text-style/text-content pass. This keeps
+  // every existing Invoice Design text ID stable and prevents a saved override from
+  // being applied to the District value (the cause of the overlapping duplicate word).
   const district = String((order as any)?.district || '').trim();
+  const baseOrder = district ? ({ ...(order as any), district: '' } as Order) : order;
+  let svg = buildExactInvoiceSvgBase(baseOrder, settings, sample, pageItems, pageIndex, totalPages);
+  svg = normalizeGeneratedByFooter(svg);
   if (!district) return svg;
 
   const marker = '<!-- Waybill: no redundant courier name -->';
   if (!svg.includes(marker)) return svg;
 
-  // District values can contain multiple words (for example "Gampaha District").
-  // Keep the complete value on one line and start it far enough to the right so it
-  // can never overlap the fixed "District -" label.
   const districtLine = [
     '<text class="t label" x="650" y="350">District</text>',
     '<text class="t label" x="760" y="350">-</text>',
