@@ -27,6 +27,25 @@ function oraApplyMoneyFormat_(sh, startRow, count) {
   }
 }
 
+// Qty, item, Gift Wrap and cancellation edits recalculate totals after the row
+// was first written. Re-assert the currency display after every recalculation so
+// Wrapping Cost and Final Total never fall back to plain values such as 250 or
+// 8112.5 while the underlying cells remain numeric for formulas and CSV export.
+var oraRecalcOrderMoneyBase_ = oraRecalcOrder_;
+oraRecalcOrder_ = function(sh, orderId) {
+  var result = oraRecalcOrderMoneyBase_(sh, orderId);
+  try {
+    var rows = typeof oraStableOrderRows_ === 'function'
+      ? oraStableOrderRows_(sh, orderId)
+      : oraOrderRows_(sh, orderId);
+    if (rows && rows.length) {
+      var first = rows[0], last = rows[rows.length - 1];
+      oraApplyMoneyFormat_(sh, first, Math.max(1, last - first + 1));
+    }
+  } catch (e) {}
+  return result;
+};
+
 var oraWriteOrderMoneyBase_ = oraWriteOrder_;
 oraWriteOrder_ = function(ss, o) {
   var written = oraWriteOrderMoneyBase_(ss, o);

@@ -150,6 +150,33 @@ const getSupabaseAdmin = () => {
   return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
 };
 
+const reserveOrderNumberServer = async (order:any) => {
+  const current=String(order?.order_number||'').trim().toUpperCase();
+  if (/^(WEB-TEST-|TEST-|ORA-DIAG-)/.test(current)) return current;
+  const source=String(order?.order_source||'Website');
+  const prefix=source==='Facebook Ads'?'FB':source==='TikTok Ads'?'TK':source==='Manual Admin'?'MAN':'WEB';
+  const sb=getSupabaseAdmin();
+  if(!sb) return current;
+  try{
+    const {data,error}=await sb.rpc('next_ora_order_number',{p_prefix:prefix});
+    if(error) throw error;
+    const reserved=String(data||'').trim().toUpperCase();
+    if(new RegExp(`^${prefix}-\\d{6,}$`).test(reserved)) return reserved;
+    throw new Error('Supabase returned an invalid reserved order number.');
+  }catch(e:any){
+    // Safe rollout fallback: an older/local database can keep the existing
+    // collision check below until the migration is available.
+    console.warn('Atomic order-number reservation unavailable; using compatibility allocator:',e?.message||e);
+    return current;
+  }
+};
+
+const resetOrderNumberSequencesServer = async (sb:ReturnType<typeof getSupabaseAdmin>) => {
+  if(!sb) return;
+  const {error}=await sb.rpc('reset_ora_order_number_sequences');
+  if(error) throw error;
+};
+
 app.get('/api/health', async (_req, res) => {
   const sb = getSupabaseAdmin();
   if (!sb) return res.status(503).json({ ok:false, runtime:runtimeName, supabase:false, error:'Supabase server configuration is missing.' });
@@ -1391,7 +1418,12 @@ const saveOrderSnapshot = async (order:any) => {
       const {error}=await sb.from('order_snapshots').upsert(row,{onConflict:'order_id'});
       if(error) throw error;
       return order;
-    }catch(e){ console.warn('order_snapshots Supabase save failed; using local store:',(e as any)?.message||e); }
+    }catch(e){
+      // /tmp is not durable in Cloudflare Workers. Never acknowledge a live order
+      // that exists only in an ephemeral fallback file.
+      if(isLiveServerlessRuntime) throw e;
+      console.warn('order_snapshots Supabase save failed; using local store:',(e as any)?.message||e);
+    }
   }
   const rows=readOrderSnapshotsLocal();
   const idx=rows.findIndex((o:any)=>o.id===order.id || o.order_number===order.order_number);
@@ -1450,6 +1482,9 @@ app.post('/api/orders', async (req,res)=>{
       delete order.customer_email;
     }
     const existing=await getOrderSnapshots();
+    const existingSameId=existing.find((o:any)=>String(o?.id)===String(order.id));
+    if(existingSameId?.order_number) order.order_number=String(existingSameId.order_number);
+    else order.order_number=await reserveOrderNumberServer(order);
     const collision=existing.find((o:any)=>o.order_number===order.order_number && o.id!==order.id);
     if(collision){
       const prefix=String(order.order_number||'WEB-000000').split('-')[0] || 'WEB';
@@ -1728,6 +1763,7 @@ app.delete('/api/orders', requireSuperAdmin, async (_req,res)=>{
     try{
       const {error}=await sb.from('order_snapshots').delete().neq('order_id','__never__');
       if(error) throw error;
+      await resetOrderNumberSequencesServer(sb);
     }catch(e){ console.warn('Supabase order snapshot reset failed:',(e as any)?.message||e); }
   }
   writeOrderSnapshotsLocal([]);
@@ -1754,6 +1790,7 @@ app.delete('/api/operational-test-data', requireSuperAdmin, async (_req,res)=>{
       try{
         const {error}=await sb.from('order_snapshots').delete().neq('order_id','__never__');
         if(error) throw error;
+        await resetOrderNumberSequencesServer(sb);
       }catch(e){
         console.warn('Supabase operational reset failed:',(e as any)?.message||e);
       }
@@ -1821,6 +1858,8 @@ app.delete('/api/live-start-reset', requireSuperAdmin, async (_req,res)=>{
           if(error) throw error;
         }catch(e:any){ warnings.push(`${table}: ${e?.message||'clear failed'}`); }
       }
+      try { await resetOrderNumberSequencesServer(sb); }
+      catch(e:any){ warnings.push(`order number reset: ${e?.message||'reset failed'}`); }
     }
 
     try { await writeSharedStorefrontState({products:[],categories:[],settings:resetSettings}); }

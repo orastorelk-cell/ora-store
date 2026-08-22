@@ -1209,7 +1209,9 @@ useEffect(() => {
     const advance_amount = is_advance_required ? Math.round(total_amount * (advancePercentage / 100)) : 0;
 
     const newOrder: Order = {
-      id: `ord-${Date.now()}`,
+      id: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? `ord-${crypto.randomUUID()}`
+        : `ord-${Date.now()}-${Math.random().toString(36).slice(2,10)}`,
       order_number: nextOrderNum,
       customer_name: formData.customer_name,
       phone: formData.phone,
@@ -2324,7 +2326,9 @@ useEffect(() => {
       created_at: now,
     };
 
-    const savedTestOrder=await publicOrderSave(testOrder, undefined, false, false);
+    // Test buttons are an end-to-end Sheet check, so do not report completion
+    // until the Worker has received the Apps Script confirmation (or timeout).
+    const savedTestOrder=await publicOrderSave(testOrder, undefined, false, true);
     setOrders(prev => [savedTestOrder, ...prev.filter(o=>o.id!==savedTestOrder.id&&o.order_number!==savedTestOrder.order_number)]);
     logActivity({ action: count === 5 ? 'Website 5-Item Test Order Created' : 'Website Test Order Created', module:'Google Sheets', target_id:savedTestOrder.id, target_label:savedTestOrder.order_number });
     return savedTestOrder;
