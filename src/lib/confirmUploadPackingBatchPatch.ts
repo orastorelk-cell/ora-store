@@ -5,6 +5,17 @@ export const confirmUploadPackingBatchPatch = () => ({
     const id = rawId.split('?')[0].replace(/\\/g, '/');
     let text = code;
 
+    if (id.endsWith('/src/types.ts')) {
+      const typeMarker = "  invoice_pack_batch_id?: string;";
+      if (!text.includes(typeMarker)) throw new Error('[O-RA packing batch] Order batch type marker not found');
+      if (!text.includes('confirm_upload_batch_id?: string;')) {
+        text = text.replace(
+          typeMarker,
+          "  /** Shared hidden batch seed from one Confirm/Cancel upload action. */\n  confirm_upload_batch_id?: string;\n" + typeMarker
+        );
+      }
+    }
+
     if (id.endsWith('/src/context/StoreContext.tsx')) {
       const oldType = "  importConfirmedOrdersCsv: (csvText: string, source?: OrderSource) => { confirmedCount: number; notFoundCount: number; ignoredCount: number; orderNumbers: string[]; errors: string[] };";
       const newType = "  importConfirmedOrdersCsv: (csvText: string, source?: OrderSource, packingBatchId?: string) => { confirmedCount: number; notFoundCount: number; ignoredCount: number; orderNumbers: string[]; errors: string[] };";
@@ -23,10 +34,20 @@ export const confirmUploadPackingBatchPatch = () => ({
         "    const now=new Date().toISOString(); const updates=new Map<string,Partial<Order>>();\n    const uploadPackingBatchId = String(packingBatchId || ('PACK-UPLOAD-' + now.replace(/[^0-9]/g,'').slice(0,14)));"
       );
 
+      // Keep the upload group separate from invoice_pack_batch_id until the
+      // order is actually invoice-ready. This preserves the existing Packing
+      // sidebar counts and readiness rules.
       const confirmedMarker = "call_center_status:'Confirmed',order_status:'Processing',call_center_updated_at:now,stock_allocated:false";
-      const confirmedReplacement = "call_center_status:'Confirmed',order_status:'Processing',call_center_updated_at:now,invoice_pack_batch_id:uploadPackingBatchId,stock_allocated:false";
+      const confirmedReplacement = "call_center_status:'Confirmed',order_status:'Processing',call_center_updated_at:now,confirm_upload_batch_id:uploadPackingBatchId,stock_allocated:false";
       if (!text.includes(confirmedMarker)) throw new Error('[O-RA packing batch] confirmed order update marker not found');
       text = text.replace(confirmedMarker, confirmedReplacement);
+
+      // Both the automatic invoice queue and the manual invoice-lock path must
+      // respect the shared upload seed. A slower stock/waybill arrival can no
+      // longer create a second PACK-AUTO set for the same upload.
+      const invoiceBatchMarker = "invoice_pack_batch_id:o.invoice_pack_batch_id || batchId,";
+      if (!text.includes(invoiceBatchMarker)) throw new Error('[O-RA packing batch] invoice batch assignment marker not found');
+      text = text.split(invoiceBatchMarker).join("invoice_pack_batch_id:o.invoice_pack_batch_id || o.confirm_upload_batch_id || batchId,");
     }
 
     if (id.endsWith('/src/components/admin/AdminDashboard.tsx')) {
