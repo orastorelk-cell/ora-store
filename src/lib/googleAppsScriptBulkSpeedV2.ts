@@ -1,14 +1,50 @@
 export const GOOGLE_APPS_SCRIPT_BULK_SPEED_V2 = String.raw`
 // ============================================================
-// O-RA STORE - BULK LEAD SPEED V2
-// Values are written in one block and FLUSHED immediately so FB/TikTok leads
-// become visible in Google Sheets before non-critical validation/format work.
-// Single-item lead rows avoid per-order grouping/style calls entirely.
+// O-RA STORE - BULK LEAD SPEED V3
+// FB/TikTok: narrow duplicate scan + one block write + immediate flush.
+// No row grouping/borders for lead tabs. Website/CALL CENTER keeps grouping.
 // ============================================================
-ORA_VERSION = 'O-RA Store Google Sheets Clean V1 + Bulk Lead Speed V2';
+ORA_VERSION = 'O-RA Store Google Sheets Clean V1 + Bulk Lead Speed V3';
 
+function oraIsWebsiteOrderSheet_(sh) {
+  return !!sh && sh.getName() === 'CALL CENTER ORDERS';
+}
+
+// The older fast layer read every column from Order ID through Lead ID for every
+// existing row. On large FB/TikTok tabs that becomes expensive. Read only the two
+// columns actually needed for idempotency and Lead-ID duplicate protection.
+oraBulkExistingLeadState_ = function(sh) {
+  var out = { orders:{}, leads:{} };
+  if (!sh || sh.getLastRow() < 2) return out;
+  var hm = oraHeaderMap_(sh);
+  var idCol = hm['Order ID'], leadCol = hm['Lead ID'];
+  if (!idCol && !leadCol) return out;
+
+  var rowCount = sh.getLastRow() - 1;
+  var ids = idCol ? sh.getRange(2, idCol, rowCount, 1).getDisplayValues() : [];
+  var leads = leadCol ? sh.getRange(2, leadCol, rowCount, 1).getDisplayValues() : [];
+  for (var i = 0; i < rowCount; i++) {
+    var id = idCol ? oraKey_(ids[i][0]) : '';
+    var lead = leadCol ? oraKey_(leads[i][0]) : '';
+    if (id) out.orders[id] = Number(out.orders[id] || 0) + 1;
+    if (lead) out.leads[lead] = id || true;
+  }
+  return out;
+};
+
+var oraBulkSetupFreshRowsWebsiteBase_ = oraBulkSetupFreshRows_;
 oraBulkSetupFreshRows_ = function(ss, sh, startRow, rowCount, blocks) {
   if (!rowCount) return;
+
+  // Website/CALL CENTER keeps the complete existing visual/validation behaviour,
+  // including grouping and order borders for multi-item order management.
+  if (oraIsWebsiteOrderSheet_(sh)) {
+    return oraBulkSetupFreshRowsWebsiteBase_(ss, sh, startRow, rowCount, blocks);
+  }
+
+  // FB/TikTok leads are single-row operational records. Install only the useful
+  // editing rules after the already-flushed value write. No grouping, no borders,
+  // no per-order styling and no whole-sheet view formatting.
   var hm = oraHeaderMap_(sh);
 
   if (hm['Item Action']) {
@@ -35,12 +71,14 @@ oraBulkSetupFreshRows_ = function(ss, sh, startRow, rowCount, blocks) {
 
   var cat = ss.getSheetByName(ORA_CATALOG_TAB);
   if (cat && cat.getLastRow() > 1 && hm['Change Item To']) {
-    sh.getRange(startRow, hm['Change Item To'], rowCount, 1).setDataValidation(
-      SpreadsheetApp.newDataValidation()
-        .requireValueInRange(cat.getRange(2, 11, cat.getLastRow() - 1, 1), true)
-        .setAllowInvalid(true)
-        .build()
-    );
+    try {
+      sh.getRange(startRow, hm['Change Item To'], rowCount, 1).setDataValidation(
+        SpreadsheetApp.newDataValidation()
+          .requireValueInRange(cat.getRange(2, 11, cat.getLastRow() - 1, 1), true)
+          .setAllowInvalid(true)
+          .build()
+      );
+    } catch (e) {}
   }
 
   if (hm['City']) {
@@ -49,17 +87,19 @@ oraBulkSetupFreshRows_ = function(ss, sh, startRow, rowCount, blocks) {
     catch (e) { city = ss.getSheetByName(ORA_CITY_TAB); }
     if (city && city.getLastRow() > 1) {
       var cityCol = city.getLastColumn() >= 3 ? 3 : 1;
-      sh.getRange(startRow, hm['City'], rowCount, 1).setDataValidation(
-        SpreadsheetApp.newDataValidation()
-          .requireValueInRange(city.getRange(2, cityCol, city.getLastRow() - 1, 1), true)
-          .setAllowInvalid(true)
-          .build()
-      );
+      try {
+        sh.getRange(startRow, hm['City'], rowCount, 1).setDataValidation(
+          SpreadsheetApp.newDataValidation()
+            .requireValueInRange(city.getRange(2, cityCol, city.getLastRow() - 1, 1), true)
+            .setAllowInvalid(true)
+            .build()
+        );
+      } catch (e) {}
     }
   }
 
-  // CSV imports normally use one selected Item Code for all rows. Apply one
-  // validation per contiguous Main Code run instead of one validation call per row.
+  // Variant rules remain available, but are applied per contiguous Main Code run
+  // instead of one Spreadsheet service call for every lead row.
   if (hm['Variant / Color'] && hm['Main Code']) {
     var variantMap = oraBulkCatalogVariantMap_(ss);
     var mains = sh.getRange(startRow, hm['Main Code'], rowCount, 1).getDisplayValues();
@@ -90,31 +130,8 @@ oraBulkSetupFreshRows_ = function(ss, sh, startRow, rowCount, blocks) {
     }
   }
 
-  try {
-    if (hm['Item Action']) sh.getRange(startRow, hm['Item Action'], rowCount, 1)
-      .setFontWeight('bold').setFontColor('#137333').setHorizontalAlignment('center').setVerticalAlignment('middle');
-    if (hm['Order Action']) sh.getRange(startRow, hm['Order Action'], rowCount, 1)
-      .setFontWeight('bold').setFontColor('#B06000').setHorizontalAlignment('center').setVerticalAlignment('middle');
-  } catch (e) {}
-
-  try {
-    sh.getRange(startRow, 1, rowCount, ORA_ORDER_HEADERS.length)
-      .setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP)
-      .setVerticalAlignment('middle');
-    sh.setRowHeightsForced(startRow, rowCount, 34);
-  } catch (e) {}
+  // Keep the currency display that Call Center expects, but avoid row/group style.
   try { if (typeof oraApplyMoneyFormat_ === 'function') oraApplyMoneyFormat_(sh, startRow, rowCount); } catch (e) {}
-
-  // Most FB/TikTok leads are one row. Styling/grouping every single row is very
-  // expensive and does not add useful grouping. Preserve it only for true
-  // multi-item orders where visual grouping matters.
-  for (var b = 0; b < blocks.length; b++) {
-    var count = blocks[b].count;
-    if (count <= 1) continue;
-    var blockStart = startRow + blocks[b].offset;
-    try { sh.getRange(blockStart, 1, count, ORA_ORDER_HEADERS.length).shiftRowGroupDepth(1); } catch (e) {}
-    try { if (typeof oraStyleOrderBlock_ === 'function') oraStyleOrderBlock_(sh, blockStart, count); } catch (e) {}
-  }
 };
 
 oraBulkAppendFreshOrders_ = function(ss, sh, orders) {
@@ -132,13 +149,36 @@ oraBulkAppendFreshOrders_ = function(ss, sh, orders) {
   if (!allRows.length) return { rows:0, orders:0 };
 
   var start = sh.getLastRow() + 1;
-  sh.getRange(start, 1, allRows.length, ORA_ORDER_HEADERS.length).setValues(allRows);
 
-  // Critical speed point: make all new order values physically visible now.
+  // All fresh FB/TikTok orders in this source tab are physically written in ONE
+  // setValues call. Flush immediately so they appear together, not one by one.
+  sh.getRange(start, 1, allRows.length, ORA_ORDER_HEADERS.length).setValues(allRows);
   SpreadsheetApp.flush();
 
-  // Non-critical UI rules are range-based and run after the physical write.
+  // Editing rules are secondary and run only after the complete batch is visible.
   oraBulkSetupFreshRows_(ss, sh, start, allRows.length, blocks);
   return { rows:allRows.length, orders:blocks.length };
 };
+
+// Borders are a Website/CALL CENTER concept only. Prevent any later stable writer
+// or fallback layer from painting FB/TikTok lead rows.
+if (typeof oraStyleOrderBlock_ === 'function') {
+  var oraStyleOrderBlockSpeedV3Base_ = oraStyleOrderBlock_;
+  oraStyleOrderBlock_ = function(sh, startRow, count) {
+    if (!oraIsWebsiteOrderSheet_(sh)) return;
+    return oraStyleOrderBlockSpeedV3Base_(sh, startRow, count);
+  };
+}
+
+// Regroup existing orders only on the Website/CALL CENTER tab. If this helper is
+// invoked for a lead tab during cleanup/setup, remove row-group depth and leave it
+// as a flat single-row list.
+if (typeof oraRegroupExistingOrders_ === 'function') {
+  var oraRegroupExistingOrdersSpeedV3Base_ = oraRegroupExistingOrders_;
+  oraRegroupExistingOrders_ = function(sh) {
+    if (oraIsWebsiteOrderSheet_(sh)) return oraRegroupExistingOrdersSpeedV3Base_(sh);
+    if (!sh || sh.getLastRow() < 2) return;
+    try { sh.getRange(2, 1, sh.getLastRow() - 1, ORA_ORDER_HEADERS.length).shiftRowGroupDepth(-8); } catch (e) {}
+  };
+}
 `;
