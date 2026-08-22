@@ -1,12 +1,11 @@
 
 import { Order, StoreSettings } from '../types';
+import { formatLkr } from './currency';
 
 const esc = (v: unknown) => String(v ?? '')
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-const money = (v: number) => Math.max(0, Number(v || 0)).toLocaleString('en-US', {
-  minimumFractionDigits: 2, maximumFractionDigits: 2
-});
+const money = (v: number) => formatLkr(Math.max(0, Number(v || 0)));
 
 const code39: Record<string,string> = {
   '0':'101001101101','1':'110100101011','2':'101100101011','3':'110110010101','4':'101001101011',

@@ -4,6 +4,7 @@ import { useStore } from '../context/StoreContext';
 import { analyzeReceiptLocally } from '../lib/receiptOcr';
 import { compressImageFile, uploadPublicImage } from '../lib/imageUpload';
 import { productSearchScore } from '../lib/productSearch';
+import { formatLkr } from '../lib/currency';
 
 type ChatMessage = { id: string; role: 'assistant' | 'user' | 'agent'; text: string };
 type FlowMode = 'chat' | 'track-method' | 'track-a-order' | 'track-a-phone' | 'track-b-phone' | 'track-b-name' | 'track-c-order' | 'track-c-name' | 'track-c-last4' | 'payment-id' | 'payment-phone' | 'payment-upload' | 'agent-awaiting-message' | 'agent-live';
@@ -64,7 +65,7 @@ const copy = {
     paymentApproved: 'This bank payment has already been approved.',
     paymentRejected: 'Your previous payment receipt could not be verified and was rejected. Please upload the correct bank-transfer receipt again.',
     codNoReceipt: 'This is a Cash on Delivery (COD) order, so you do not need to upload a bank-transfer receipt.',
-    expectedPayment: (amount: number) => `Order verified. Amount to verify: Rs. ${amount.toLocaleString()}. Please upload the real bank-transfer receipt/screenshot here.`,
+    expectedPayment: (amount: number) => `Order verified. Amount to verify: Rs. ${formatLkr(amount)}. Please upload the real bank-transfer receipt/screenshot here.`,
     aiUnavailable: 'Smart AI is temporarily unavailable, but O-RA Basic Support is still online.',
     receiptSelected: (id: string) => `Receipt selected for ${id}`,
     proofSaved: 'Payment receipt received. It is now waiting for manual bank confirmation. This does NOT mean the payment is approved yet.',
@@ -104,7 +105,7 @@ const copy = {
     paymentApproved: 'මෙම Bank Transfer ගෙවීම දැනටමත් approve කර ඇත.',
     paymentRejected: 'ඔබ කලින් යොමු කළ payment receipt එක තහවුරු කළ නොහැකි නිසා reject කර ඇත. කරුණාකර නිවැරදි Bank Transfer receipt එක නැවත upload කරන්න.',
     codNoReceipt: 'මෙය Cash on Delivery (COD) order එකක්. ඒ නිසා Bank Transfer receipt එකක් upload කරන්න අවශ්‍ය නැහැ.',
-    expectedPayment: (amount: number) => `Order එක verify වුණා. පරීක්ෂා කළ යුතු මුදල: Rs. ${amount.toLocaleString()}. දැන් සැබෑ Bank Transfer receipt/screenshot එක upload කරන්න.`,
+    expectedPayment: (amount: number) => `Order එක verify වුණා. පරීක්ෂා කළ යුතු මුදල: Rs. ${formatLkr(amount)}. දැන් සැබෑ Bank Transfer receipt/screenshot එක upload කරන්න.`,
     aiUnavailable: 'Smart AI තාවකාලිකව ලබාගත නොහැක. O-RA Basic Support තවම online.',
     receiptSelected: (id: string) => `${id} සඳහා receipt එක තෝරාගෙන ඇත`,
     proofSaved: 'Payment receipt එක ලැබුණා. දැන් එය bank account එක අතින් පරීක්ෂා කර තහවුරු කිරීමට බලාපොරොත්තු වේ. මේක Payment Approved කියන එක නොවේ.',
@@ -144,7 +145,7 @@ const copy = {
     paymentApproved: 'இந்த Bank Transfer payment ஏற்கனவே approve செய்யப்பட்டுள்ளது.',
     paymentRejected: 'நீங்கள் முன்பு அனுப்பிய payment receipt-ஐ உறுதிப்படுத்த முடியாததால் அது நிராகரிக்கப்பட்டது. சரியான Bank Transfer receipt-ஐ மீண்டும் upload செய்யவும்.',
     codNoReceipt: 'இது Cash on Delivery (COD) order. Bank Transfer receipt upload செய்ய தேவையில்லை.',
-    expectedPayment: (amount: number) => `Order உறுதிப்படுத்தப்பட்டது. சரிபார்க்க வேண்டிய தொகை: Rs. ${amount.toLocaleString()}. உண்மையான Bank Transfer receipt/screenshot-ஐ upload செய்யவும்.`,
+    expectedPayment: (amount: number) => `Order உறுதிப்படுத்தப்பட்டது. சரிபார்க்க வேண்டிய தொகை: Rs. ${formatLkr(amount)}. உண்மையான Bank Transfer receipt/screenshot-ஐ upload செய்யவும்.`,
     aiUnavailable: 'Smart AI தற்காலிகமாக கிடைக்கவில்லை. O-RA Basic Support இன்னும் online.',
     receiptSelected: (id: string) => `${id} க்கான receipt தேர்ந்தெடுக்கப்பட்டது`,
     proofSaved: 'Payment receipt பெறப்பட்டது. Bank account-ல் பணம் வந்ததா என்பதை மனிதர் சரிபார்க்கும் வரை இது pending. இது Payment Approved என்று பொருள் அல்ல.',
@@ -297,7 +298,7 @@ export const OraAssistant: React.FC = () => {
   };
 
   const deliveryHelp = () => {
-    const fee = Number(settings.delivery_fee || 0).toLocaleString();
+    const fee = formatLkr(settings.delivery_fee || 0);
     if (lang === 'si') return settings.free_delivery_enabled ? 'දැනට දිවයින පුරා Delivery FREE. Order ID එකෙන් delivery/dispatch status බලන්න පුළුවන්.' : `Delivery fee එක Rs. ${fee}. Order ID එකෙන් dispatch status track කරන්න පුළුවන්.`;
     if (lang === 'ta') return settings.free_delivery_enabled ? 'தற்போது நாடு முழுவதும் Delivery FREE. Order ID மூலம் delivery/dispatch status பார்க்கலாம்.' : `Delivery fee Rs. ${fee}. Order ID மூலம் dispatch status track செய்யலாம்.`;
     return settings.free_delivery_enabled ? 'Delivery is currently FREE islandwide. You can check delivery/dispatch status with your Order ID.' : `Delivery fee is Rs. ${fee}. You can track dispatch status with your Order ID.`;
@@ -362,9 +363,9 @@ export const OraAssistant: React.FC = () => {
       order.waybill_number ? `🚚 Delivery: ${translateStatus(order.delivery_status || 'Waybill Assigned',lang)}` : `🚚 Delivery: ${translateStatus(order.delivery_status || order.tracking_status || 'Pending',lang)}`,
       order.waybill_number ? `Waybill: ${order.waybill_number}` : '',
       packingLine(order),
-      `සාමාන්‍ය එකතුව: Rs. ${Number(order.subtotal||0).toLocaleString()}`,
-      Number(order.special_offer_discount||0)>0 ? `🏷️ Offer / Discount: -Rs. ${Number(order.special_offer_discount||0).toLocaleString()}` : `🏷️ Offer / Discount: Rs. 0`,
-      `💰 අවසන් මුදල: Rs. ${Number(order.total_amount||0).toLocaleString()}`,
+      `සාමාන්‍ය එකතුව: Rs. ${formatLkr(order.subtotal||0)}`,
+      Number(order.special_offer_discount||0)>0 ? `🏷️ Offer / Discount: -Rs. ${formatLkr(order.special_offer_discount||0)}` : `🏷️ Offer / Discount: Rs. 0`,
+      `💰 අවසන් මුදල: Rs. ${formatLkr(order.total_amount||0)}`,
       itemLines.length ? `🛍️ භාණ්ඩ (${(order.items||[]).reduce((s,x)=>s+x.quantity,0)}):\n${itemLines.join('\n')}${more?`\n• තවත් ${more} භාණ්ඩ`:''}` : '',
     ].filter(Boolean).join('\n');
     if (lang === 'ta') return [
@@ -378,9 +379,9 @@ export const OraAssistant: React.FC = () => {
       `🚚 Delivery: ${translateStatus(order.delivery_status || order.tracking_status || 'Pending',lang)}`,
       order.waybill_number ? `Waybill: ${order.waybill_number}` : '',
       packingLine(order),
-      `Normal Total: Rs. ${Number(order.subtotal||0).toLocaleString()}`,
-      `Offer / Discount: -Rs. ${Number(order.special_offer_discount||0).toLocaleString()}`,
-      `💰 Final Amount: Rs. ${Number(order.total_amount||0).toLocaleString()}`,
+      `Normal Total: Rs. ${formatLkr(order.subtotal||0)}`,
+      `Offer / Discount: -Rs. ${formatLkr(order.special_offer_discount||0)}`,
+      `💰 Final Amount: Rs. ${formatLkr(order.total_amount||0)}`,
       itemLines.length ? `🛍️ Items:\n${itemLines.join('\n')}${more?`\n• மேலும் ${more}`:''}` : '',
     ].filter(Boolean).join('\n');
     return [
@@ -394,9 +395,9 @@ export const OraAssistant: React.FC = () => {
       `🚚 Delivery: ${translateStatus(order.delivery_status || order.tracking_status || 'Pending',lang)}`,
       order.waybill_number ? `Waybill: ${order.waybill_number}` : '',
       packingLine(order),
-      `Normal Total: Rs. ${Number(order.subtotal||0).toLocaleString()}`,
-      `Offer / Discount: -Rs. ${Number(order.special_offer_discount||0).toLocaleString()}`,
-      `💰 Final Amount: Rs. ${Number(order.total_amount||0).toLocaleString()}`,
+      `Normal Total: Rs. ${formatLkr(order.subtotal||0)}`,
+      `Offer / Discount: -Rs. ${formatLkr(order.special_offer_discount||0)}`,
+      `💰 Final Amount: Rs. ${formatLkr(order.total_amount||0)}`,
       itemLines.length ? `🛍️ Items:\n${itemLines.join('\n')}${more?`\n• ${more} more`:''}` : '',
     ].filter(Boolean).join('\n');
   };

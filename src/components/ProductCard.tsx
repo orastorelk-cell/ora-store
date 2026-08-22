@@ -3,6 +3,7 @@ import { ShoppingBag, Zap, Eye, Image as ImageIcon } from 'lucide-react';
 import { Product } from '../types';
 import { useStore } from '../context/StoreContext';
 import { activeVariants, normalizedProductType, productPriceRange, regularDisplayUnitPrice, selectionDiscountPercent } from '../lib/productVariants';
+import { formatLkr } from '../lib/currency';
 
 interface ProductCardProps {
   product: Product;
@@ -98,10 +99,10 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
 
         <div>
           {hasDiscount && type !== 'variant' && (
-            <div className="text-xs sm:text-sm text-gray-400 line-through font-bold">Rs. {regularPrice.toLocaleString()}</div>
+            <div className="text-xs sm:text-sm text-gray-400 line-through font-bold">Rs. {formatLkr(regularPrice)}</div>
           )}
           <span className="text-base sm:text-lg font-black text-orange-600">
-            {range.min === range.max ? `Rs. ${range.min.toLocaleString()}` : `Rs. ${range.min.toLocaleString()} - ${range.max.toLocaleString()}`}
+            {range.min === range.max ? `Rs. ${formatLkr(range.min)}` : `Rs. ${formatLkr(range.min)} - ${formatLkr(range.max)}`}
           </span>
         </div>
       </div>

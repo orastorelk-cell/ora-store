@@ -14,6 +14,7 @@ import {
   variantOptions,
   variantOptionSummary,
 } from '../lib/productVariants';
+import { formatLkr } from '../lib/currency';
 
 const LEGACY_DEFAULT_IMAGE = 'photo-1523275335684-37898b6baf30';
 
@@ -251,8 +252,8 @@ export const ProductDetailModal: React.FC = () => {
             </div>
 
             <div className="rounded-3xl border border-gray-100 bg-gray-50 p-5">
-              {hasDiscount && <div className="mb-1 text-sm font-bold text-gray-400 line-through">Rs. {regularUnitPrice.toLocaleString()}</div>}
-              <div className="flex flex-wrap items-center gap-2"><span className="text-3xl font-black text-orange-600">Rs. {unitPrice.toLocaleString()}</span>{hasDiscount && <span className="rounded-full bg-orange-100 px-2 py-1 text-[10px] font-black text-orange-700">SPECIAL OFFER</span>}</div>
+              {hasDiscount && <div className="mb-1 text-sm font-bold text-gray-400 line-through">Rs. {formatLkr(regularUnitPrice)}</div>}
+              <div className="flex flex-wrap items-center gap-2"><span className="text-3xl font-black text-orange-600">Rs. {formatLkr(unitPrice)}</span>{hasDiscount && <span className="rounded-full bg-orange-100 px-2 py-1 text-[10px] font-black text-orange-700">SPECIAL OFFER</span>}</div>
               <p className="mt-1 text-[10px] text-gray-500">{settings.free_delivery_enabled ? 'Displayed unit price follows current FREE delivery pricing rule.' : 'Delivery fee is added separately at checkout.'}</p>
             </div>
 

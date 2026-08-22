@@ -10,6 +10,7 @@ import {
 import { useStore } from '../context/StoreContext';
 import { getTranslation } from '../lib/i18n';
 import { displayUnitPrice } from '../lib/productVariants';
+import { formatLkr } from '../lib/currency';
 
 export const CartDrawer: React.FC = () => {
   const {
@@ -97,7 +98,7 @@ export const CartDrawer: React.FC = () => {
                     </p>
                     <div className="flex items-center justify-between pt-1">
                       <span className="text-xs font-black text-orange-600">
-                        Rs. {itemTotal.toLocaleString()}
+                        Rs. {formatLkr(itemTotal)}
                       </span>
 
                       {/* Quantity Controls */}
@@ -144,10 +145,10 @@ export const CartDrawer: React.FC = () => {
                   <span>{advancePercentage}% Advance Payment Required / {advancePercentage}% අත්තිකාරම් ගෙවීම අවශ්‍යයි</span>
                 </div>
                 <p className="text-[11px] text-orange-900 leading-relaxed">
-                  Your cart contains <b>{cartItemCount} items</b> (&gt; {advanceQtyThreshold} items). A <b>{advancePercentage}% advance payment of Rs. {advanceAmount.toLocaleString()}</b> is required to confirm this order.
+                  Your cart contains <b>{cartItemCount} items</b> (&gt; {advanceQtyThreshold} items). A <b>{advancePercentage}% advance payment of Rs. {formatLkr(advanceAmount)}</b> is required to confirm this order.
                 </p>
                 <p className="text-[11px] text-orange-900 leading-relaxed">
-                  ඔබගේ කරත්තයේ <b>භාණ්ඩ {cartItemCount}ක්</b> ඇත ({advanceQtyThreshold}කට වැඩි). මෙම ඇණවුම තහවුරු කිරීමට <b>Rs. {advanceAmount.toLocaleString()} ක {advancePercentage}% අත්තිකාරම් ගෙවීමක්</b> අවශ්‍ය වේ.
+                  ඔබගේ කරත්තයේ <b>භාණ්ඩ {cartItemCount}ක්</b> ඇත ({advanceQtyThreshold}කට වැඩි). මෙම ඇණවුම තහවුරු කිරීමට <b>Rs. {formatLkr(advanceAmount)} ක {advancePercentage}% අත්තිකාරම් ගෙවීමක්</b> අවශ්‍ය වේ.
                 </p>
               </div>
             )}
@@ -156,24 +157,24 @@ export const CartDrawer: React.FC = () => {
             <div className="space-y-1.5 text-xs">
               <div className="flex justify-between text-gray-500">
                 <span>{getTranslation(language, 'subtotal')}</span>
-                <span>Rs. {cartSubtotal.toLocaleString()}</span>
+                <span>Rs. {formatLkr(cartSubtotal)}</span>
               </div>
               {cartSpecialOfferDiscount > 0 && (
                 <div className="my-2 rounded-xl border border-orange-200 bg-orange-50 p-2">
                   <div className="flex justify-between font-black text-orange-700">
                     <span>🎉 Special Multi-Buy Offer ({cartMultiBuyDiscountRate}% OFF)</span>
-                    <span>- Rs. {cartSpecialOfferDiscount.toLocaleString()}</span>
+                    <span>- Rs. {formatLkr(cartSpecialOfferDiscount)}</span>
                   </div>
                   <p className="mt-1 text-[10px] font-semibold text-orange-600">You save more when you buy more!</p>
                 </div>
               )}
               <div className="flex justify-between text-gray-500">
                 <span>{getTranslation(language, 'deliveryFee')}</span>
-                <span>{settings.free_delivery_enabled ? 'FREE' : `Rs. ${deliveryFee.toLocaleString()}`}</span>
+                <span>{settings.free_delivery_enabled ? 'FREE' : `Rs. ${formatLkr(deliveryFee)}`}</span>
               </div>
               <div className="flex justify-between text-sm font-bold text-gray-900 pt-2 border-t border-gray-200">
                 <span>{getTranslation(language, 'total')}</span>
-                <span className="text-orange-600 font-black">Rs. {finalTotal.toLocaleString()}</span>
+                <span className="text-orange-600 font-black">Rs. {formatLkr(finalTotal)}</span>
               </div>
             </div>
 

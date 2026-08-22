@@ -20,7 +20,7 @@ function oraApplyMoneyFormat_(sh, startRow, count) {
   for (var i = 0; i < moneyHeaders.length; i++) {
     var col = hm[moneyHeaders[i]];
     if (!col) continue;
-    try { sh.getRange(startRow, col, count, 1).setNumberFormat('Rs. #,##0.00'); } catch (e) {}
+    try { sh.getRange(startRow, col, count, 1).setNumberFormat('Rs. #,##0'); } catch (e) {}
   }
   // Keep the Website/Call Center final amount easy to spot without changing
   // any values, formulas or the styling of Facebook/TikTok order tabs.
@@ -76,7 +76,7 @@ setupOraGoogleSheetsCleanV1 = function() {
   }
   var catalog = ss.getSheetByName(ORA_CATALOG_TAB);
   if (catalog && catalog.getLastRow() > 1) {
-    try { catalog.getRange(2, 7, catalog.getLastRow() - 1, 1).setNumberFormat('Rs. #,##0.00'); } catch (e) {}
+    try { catalog.getRange(2, 7, catalog.getLastRow() - 1, 1).setNumberFormat('Rs. #,##0'); } catch (e) {}
   }
   // Earlier setup layers already flush the structural changes. A final formatting
   // flush can occasionally throw a transient Google Sheets service error even

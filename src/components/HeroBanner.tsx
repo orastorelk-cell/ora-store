@@ -12,6 +12,7 @@ import {
 import { useStore } from '../context/StoreContext';
 import { getTranslation } from '../lib/i18n';
 import { displayUnitPrice, normalizedProductType } from '../lib/productVariants';
+import { formatLkr } from '../lib/currency';
 import { HeroBannerSlide } from '../types';
 
 export const HeroBanner: React.FC = () => {
@@ -86,7 +87,7 @@ export const HeroBanner: React.FC = () => {
 
           <div className="relative z-10 flex items-center justify-between gap-3">
             {heroTag ? <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-orange-600 text-white text-[11px] font-bold uppercase tracking-wider"><Sparkles className="w-3 h-3"/><span>{heroTag}</span></span> : <span/>}
-            {slideProduct && <span className="rounded-full border border-white/15 bg-black/45 px-3 py-1 text-[11px] font-black text-orange-300 backdrop-blur-sm">Rs. {displayUnitPrice(slideProduct,settings).toLocaleString()}</span>}
+            {slideProduct && <span className="rounded-full border border-white/15 bg-black/45 px-3 py-1 text-[11px] font-black text-orange-300 backdrop-blur-sm">Rs. {formatLkr(displayUnitPrice(slideProduct,settings))}</span>}
           </div>
 
           <div className="relative z-10 space-y-3 mt-6 max-w-2xl">
@@ -113,7 +114,7 @@ export const HeroBanner: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="bg-white border border-gray-100 rounded-2xl p-4 flex items-center space-x-3 shadow-xs hover:border-gray-200 transition-all"><div className="p-2.5 rounded-xl bg-orange-50 text-orange-600 shrink-0"><Truck className="w-5 h-5" /></div><div><p className="text-xs font-bold text-gray-900">{settings.free_delivery_enabled ? 'FREE Islandwide Delivery' : `Flat Rs. ${Number(settings.delivery_fee || 0).toLocaleString('en-US')} Delivery`}</p><p className="text-[10px] text-gray-500">{settings.free_delivery_enabled ? 'No Delivery Fee • Islandwide' : 'Islandwide Express Dispatch'}</p></div></div>
+        <div className="bg-white border border-gray-100 rounded-2xl p-4 flex items-center space-x-3 shadow-xs hover:border-gray-200 transition-all"><div className="p-2.5 rounded-xl bg-orange-50 text-orange-600 shrink-0"><Truck className="w-5 h-5" /></div><div><p className="text-xs font-bold text-gray-900">{settings.free_delivery_enabled ? 'FREE Islandwide Delivery' : `Flat Rs. ${formatLkr(settings.delivery_fee || 0)} Delivery`}</p><p className="text-[10px] text-gray-500">{settings.free_delivery_enabled ? 'No Delivery Fee • Islandwide' : 'Islandwide Express Dispatch'}</p></div></div>
         <div className="bg-white border border-gray-100 rounded-2xl p-4 flex items-center space-x-3 shadow-xs hover:border-gray-200 transition-all"><div className="p-2.5 rounded-xl bg-orange-50 text-orange-600 shrink-0"><ShieldCheck className="w-5 h-5" /></div><div><p className="text-xs font-bold text-gray-900">100% Genuine</p><p className="text-[10px] text-gray-500">Quality Verified Products</p></div></div>
         <div className="bg-white border border-gray-100 rounded-2xl p-4 flex items-center space-x-3 shadow-xs hover:border-gray-200 transition-all"><div className="p-2.5 rounded-xl bg-orange-50 text-orange-600 shrink-0"><Zap className="w-5 h-5" /></div><div><p className="text-xs font-bold text-gray-900">COD &amp; Bank Transfer</p><p className="text-[10px] text-gray-500">Flexible Payment Options</p></div></div>
         <button type="button" onClick={() => window.dispatchEvent(new CustomEvent('ora:assistant-open'))} className="bg-white border border-gray-100 rounded-2xl p-4 flex items-center space-x-3 shadow-xs hover:border-orange-200 transition-all text-left"><div className="p-2.5 rounded-xl bg-orange-50 text-orange-600 shrink-0"><Bot className="w-5 h-5" /></div><div><p className="text-xs font-bold text-gray-900">24/7 O-RA Assistant</p><p className="text-[10px] text-gray-500">සිංහල • English • தமிழ்</p></div></button>

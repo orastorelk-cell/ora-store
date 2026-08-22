@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useStore } from '../context/StoreContext';
 import { generateOrderInvoicePDF } from '../lib/pdfGenerator';
+import { formatLkr } from '../lib/currency';
 
 const trackingSteps = [
   'Confirmed',
@@ -148,12 +149,12 @@ export const OrderTrackingModal: React.FC = () => {
                       <p className="font-bold text-gray-900">Items Ordered:</p>
                       {order.items.map((it, i) => (
                         <p key={i} className="text-gray-500">
-                          • {it.product_name}{it.variant_name ? ` - ${it.variant_name}` : ''} (x{it.quantity}) - Rs. {it.subtotal.toLocaleString()}
+                          • {it.product_name}{it.variant_name ? ` - ${it.variant_name}` : ''} (x{it.quantity}) - Rs. {formatLkr(it.subtotal)}
                         </p>
                       ))}
                       <div className="flex justify-between font-extrabold text-orange-600 pt-2 border-t border-gray-200">
                         <span>Total Amount:</span>
-                        <span>Rs. {order.total_amount.toLocaleString()}</span>
+                        <span>Rs. {formatLkr(order.total_amount)}</span>
                       </div>
                     </div>
 

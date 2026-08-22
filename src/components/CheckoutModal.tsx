@@ -27,6 +27,7 @@ import { generateOrderInvoicePDF } from '../lib/pdfGenerator';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { analyzeReceiptLocally } from '../lib/receiptOcr';
 import { compressImageFile, uploadPublicImage } from '../lib/imageUpload';
+import { formatLkr, roundLkr } from '../lib/currency';
 
 export const CheckoutModal: React.FC = () => {
   const {
@@ -175,7 +176,7 @@ export const CheckoutModal: React.FC = () => {
 Branch: ${settings.bank_branch}
 Account Holder: ${settings.bank_account_holder}
 Account Number: ${settings.bank_account_number}
-Amount to Pay: Rs. ${Number(amount || 0).toLocaleString()}`;
+Amount to Pay: Rs. ${formatLkr(amount)}`;
     void copyPaymentText(info, 'all');
   };
 
@@ -329,7 +330,7 @@ Amount to Pay: Rs. ${Number(amount || 0).toLocaleString()}`;
     }
 
     if (isAdvanceRequired && paymentMethod === 'COD') {
-      alert(`⚠️ ${advancePercentage}% Advance Payment Required / ${advancePercentage}% අත්තිකාරම් ගෙවීම අවශ්‍යයි\n\nThis order contains more than ${advanceQtyThreshold} items. Please select Bank Transfer and pay at least Rs. ${advanceAmount.toLocaleString()} as the required advance. The remaining balance can be collected on delivery.\n\nමෙම ඇණවුමේ භාණ්ඩ ${advanceQtyThreshold}කට වඩා වැඩිය. කරුණාකර Bank Transfer තෝරා අවම වශයෙන් Rs. ${advanceAmount.toLocaleString()} ක ${advancePercentage}% අත්තිකාරම් මුදල ගෙවන්න. ඉතිරි මුදල භාණ්ඩ ලැබෙන විට ගෙවිය හැක.`);
+      alert(`⚠️ ${advancePercentage}% Advance Payment Required / ${advancePercentage}% අත්තිකාරම් ගෙවීම අවශ්‍යයි\n\nThis order contains more than ${advanceQtyThreshold} items. Please select Bank Transfer and pay at least Rs. ${formatLkr(advanceAmount)} as the required advance. The remaining balance can be collected on delivery.\n\nමෙම ඇණවුමේ භාණ්ඩ ${advanceQtyThreshold}කට වඩා වැඩිය. කරුණාකර Bank Transfer තෝරා අවම වශයෙන් Rs. ${formatLkr(advanceAmount)} ක ${advancePercentage}% අත්තිකාරම් මුදල ගෙවන්න. ඉතිරි මුදල භාණ්ඩ ලැබෙන විට ගෙවිය හැක.`);
       return;
     }
 
@@ -431,10 +432,10 @@ Amount to Pay: Rs. ${Number(amount || 0).toLocaleString()}`;
                   <span>{advancePercentage}% Advance Payment Notice / {advancePercentage}% අත්තිකාරම් ගෙවීමේ දැනුම්දීම</span>
                 </div>
                 <p className="text-[11px] text-orange-800 leading-relaxed">
-                  Please deposit the {advancePercentage}% advance payment of <b>Rs. {completedOrder.advance_amount.toLocaleString()}</b> to our bank account. After the transfer, upload the receipt below. Final payment approval is done only after an admin confirms the bank credit.
+                  Please deposit the {advancePercentage}% advance payment of <b>Rs. {formatLkr(completedOrder.advance_amount)}</b> to our bank account. After the transfer, upload the receipt below. Final payment approval is done only after an admin confirms the bank credit.
                 </p>
                 <p className="text-[11px] text-orange-800 leading-relaxed">
-                  කරුණාකර <b>Rs. {completedOrder.advance_amount.toLocaleString()}</b> ක {advancePercentage}% අත්තිකාරම් මුදල අපගේ බැංකු ගිණුමට තැන්පත් කරන්න. මුදල් හුවමාරුවෙන් පසු receipt එක පහළින් upload කරන්න. බැංකු ගිණුමට මුදල් ලැබී ඇති බව Admin තහවුරු කළ පසු පමණක් ගෙවීම අනුමත වේ.
+                  කරුණාකර <b>Rs. {formatLkr(completedOrder.advance_amount)}</b> ක {advancePercentage}% අත්තිකාරම් මුදල අපගේ බැංකු ගිණුමට තැන්පත් කරන්න. මුදල් හුවමාරුවෙන් පසු receipt එක පහළින් upload කරන්න. බැංකු ගිණුමට මුදල් ලැබී ඇති බව Admin තහවුරු කළ පසු පමණක් ගෙවීම අනුමත වේ.
                 </p>
               </div>
             )}
@@ -482,7 +483,7 @@ Amount to Pay: Rs. ${Number(amount || 0).toLocaleString()}`;
                   </div>
                   <div className="rounded-xl border-2 border-emerald-200 bg-emerald-50 p-3">
                     <span className="block text-[9px] font-black uppercase tracking-wider text-emerald-600">{completedOrder.is_advance_required && !completedOrder.advance_confirmed ? `${advancePercentage}% Advance to Transfer Now` : 'Amount to Transfer Now'}</span>
-                    <div className="mt-1 flex items-center justify-between gap-2"><span className="text-base font-black text-emerald-800">Rs. {(completedOrder.is_advance_required && !completedOrder.advance_confirmed ? Number(completedOrder.advance_amount || 0) : Number(completedOrder.total_amount || 0)).toLocaleString()}</span><button type="button" onClick={() => void copyPaymentText(String(completedOrder.is_advance_required && !completedOrder.advance_confirmed ? Number(completedOrder.advance_amount || 0) : Number(completedOrder.total_amount || 0)), 'amount')} className="rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 text-[10px] font-black text-emerald-700">{copiedPaymentField === 'amount' ? 'Copied ✓' : 'Copy'}</button></div>
+                    <div className="mt-1 flex items-center justify-between gap-2"><span className="text-base font-black text-emerald-800">Rs. {formatLkr(completedOrder.is_advance_required && !completedOrder.advance_confirmed ? completedOrder.advance_amount : completedOrder.total_amount)}</span><button type="button" onClick={() => void copyPaymentText(String(roundLkr(completedOrder.is_advance_required && !completedOrder.advance_confirmed ? completedOrder.advance_amount : completedOrder.total_amount)), 'amount')} className="rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 text-[10px] font-black text-emerald-700">{copiedPaymentField === 'amount' ? 'Copied ✓' : 'Copy'}</button></div>
                   </div>
                 </div>
 
@@ -536,7 +537,7 @@ Amount to Pay: Rs. ${Number(amount || 0).toLocaleString()}`;
 
               <div className="flex justify-between font-extrabold text-orange-600 pt-2 border-t border-gray-200 text-sm">
                 <span>Total Amount Payable:</span>
-                <span>Rs. {completedOrder.total_amount.toLocaleString()}</span>
+                <span>Rs. {formatLkr(completedOrder.total_amount)}</span>
               </div>
             </div>
 
@@ -636,7 +637,7 @@ Amount to Pay: Rs. ${Number(amount || 0).toLocaleString()}`;
                         </p>
                         <p className="mt-0.5 text-[10px] text-gray-500">SKU: {item.variant?.sku || item.product.sku}{item.variant?.option_value ? ` • ${item.variant.option_value}` : ''}</p>
                         <p className="mt-1 text-xs font-black text-orange-600">
-                          Rs. {(unitPrice * item.quantity).toLocaleString()}
+                          Rs. {formatLkr(unitPrice * item.quantity)}
                         </p>
                       </div>
 
@@ -683,30 +684,30 @@ Amount to Pay: Rs. ${Number(amount || 0).toLocaleString()}`;
               <div className="rounded-2xl border border-gray-100 bg-white px-3 py-2.5 text-[11px]">
                 <div className="flex justify-between text-gray-500">
                   <span>Products Subtotal</span>
-                  <span className="font-bold text-gray-800">Rs. {cartSubtotal.toLocaleString()}</span>
+                  <span className="font-bold text-gray-800">Rs. {formatLkr(cartSubtotal)}</span>
                 </div>
                 {cartSpecialOfferDiscount > 0 && (
                   <div className="my-2 rounded-xl border border-orange-200 bg-orange-50 px-3 py-2">
                     <div className="flex items-center justify-between text-orange-700">
                       <span className="font-black">🎉 SPECIAL MULTI-BUY OFFER • {cartMultiBuyDiscountRate}% OFF</span>
-                      <span className="font-black">- Rs. {cartSpecialOfferDiscount.toLocaleString()}</span>
+                      <span className="font-black">- Rs. {formatLkr(cartSpecialOfferDiscount)}</span>
                     </div>
                     <p className="mt-0.5 text-[9px] font-semibold text-orange-600">You save more when you buy more!</p>
                   </div>
                 )}
                 <div className="mt-1 flex justify-between text-gray-500">
                   <span>Delivery</span>
-                  <span className="font-bold text-gray-800">{settings.free_delivery_enabled ? 'FREE' : `Rs. ${deliveryFee.toLocaleString()}`}</span>
+                  <span className="font-bold text-gray-800">{settings.free_delivery_enabled ? 'FREE' : `Rs. ${formatLkr(deliveryFee)}`}</span>
                 </div>
                 {settings.gift_wrap_enabled && giftWrapSelected && (
                   <div className="mt-1 flex justify-between text-gray-500">
                     <span>Gift Wrapping</span>
-                    <span className="font-bold text-gray-800">Rs. {giftWrapFee.toLocaleString()}</span>
+                    <span className="font-bold text-gray-800">Rs. {formatLkr(giftWrapFee)}</span>
                   </div>
                 )}
                 <div className="mt-2 flex justify-between border-t border-gray-100 pt-2 text-sm font-black text-gray-900">
                   <span>Total</span>
-                  <span className="text-orange-600">Rs. {finalTotal.toLocaleString()}</span>
+                  <span className="text-orange-600">Rs. {formatLkr(finalTotal)}</span>
                 </div>
               </div>
             </div>
@@ -719,10 +720,10 @@ Amount to Pay: Rs. ${Number(amount || 0).toLocaleString()}`;
                   <span>{advancePercentage}% Advance Payment Required / {advancePercentage}% අත්තිකාරම් ගෙවීම අවශ්‍යයි</span>
                 </div>
                 <p className="text-[11px] text-orange-800 leading-relaxed">
-                  Your cart contains <b>{cartItemCount} items</b> (&gt; {advanceQtyThreshold} items). A {advancePercentage}% advance payment of <b>Rs. {advanceAmount.toLocaleString()}</b> is required.
+                  Your cart contains <b>{cartItemCount} items</b> (&gt; {advanceQtyThreshold} items). A {advancePercentage}% advance payment of <b>Rs. {formatLkr(advanceAmount)}</b> is required.
                 </p>
                 <p className="text-[11px] text-orange-800 leading-relaxed">
-                  ඔබගේ කරත්තයේ <b>භාණ්ඩ {cartItemCount}ක්</b> ඇත ({advanceQtyThreshold}කට වැඩි). <b>Rs. {advanceAmount.toLocaleString()}</b> ක {advancePercentage}% අත්තිකාරම් ගෙවීමක් අවශ්‍ය වේ.
+                  ඔබගේ කරත්තයේ <b>භාණ්ඩ {cartItemCount}ක්</b> ඇත ({advanceQtyThreshold}කට වැඩි). <b>Rs. {formatLkr(advanceAmount)}</b> ක {advancePercentage}% අත්තිකාරම් ගෙවීමක් අවශ්‍ය වේ.
                 </p>
               </div>
             )}
@@ -731,7 +732,7 @@ Amount to Pay: Rs. ${Number(amount || 0).toLocaleString()}`;
               <label className="flex items-center justify-between gap-3 rounded-2xl border border-pink-100 bg-pink-50 p-3.5 cursor-pointer">
                 <div>
                   <p className="text-xs font-bold text-gray-900">Gift Wrapping</p>
-                  <p className="text-[10px] text-gray-500">Add gift wrapping for Rs. {Math.max(0, Number(settings.gift_wrap_fee || 0)).toLocaleString()}</p>
+                  <p className="text-[10px] text-gray-500">Add gift wrapping for Rs. {formatLkr(Math.max(0, Number(settings.gift_wrap_fee || 0)))}</p>
                 </div>
                 <input type="checkbox" checked={giftWrapSelected} onChange={(e) => setGiftWrapSelected(e.target.checked)} className="h-4 w-4 accent-orange-600" />
               </label>
@@ -872,7 +873,7 @@ Amount to Pay: Rs. ${Number(amount || 0).toLocaleString()}`;
             <div className="bg-gray-50 p-3.5 rounded-2xl border border-gray-200 flex items-center justify-between text-xs">
               <span className="text-gray-700 font-bold">Total Amount Payable:</span>
               <span className="text-base font-black text-orange-600">
-                Rs. {finalTotal.toLocaleString()}
+                Rs. {formatLkr(finalTotal)}
               </span>
             </div>
 

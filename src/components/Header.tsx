@@ -17,6 +17,7 @@ import { productSearchScore } from '../lib/productSearch';
 import { InstallAppButton } from './InstallAppButton';
 import { CustomerAccountButton } from './CustomerAccount';
 import { CustomerNotifications } from './CustomerNotifications';
+import { formatLkr } from '../lib/currency';
 
 export const Header: React.FC = () => {
   const {
@@ -52,10 +53,10 @@ export const Header: React.FC = () => {
     language === 'si'
       ? settings.free_delivery_enabled
         ? 'දිවයින පුරා නොමිලේ බෙදාහැරීම'
-        : `දිවයිනටම බෙදාහැරීම රු. ${deliveryFee.toLocaleString()}`
+        : `දිවයිනටම බෙදාහැරීම රු. ${formatLkr(deliveryFee)}`
       : settings.free_delivery_enabled
         ? 'Islandwide FREE Delivery'
-        : `Islandwide Delivery Rs. ${deliveryFee.toLocaleString()}`;
+        : `Islandwide Delivery Rs. ${formatLkr(deliveryFee)}`;
 
   // Keep any custom non-delivery announcement parts, but always generate the
   // delivery part from the current Store Settings so an old fixed fee can
@@ -234,7 +235,7 @@ export const Header: React.FC = () => {
                         {language === 'si' ? p.name_si : p.name_en}
                       </p>
                       <p className="text-[11px] text-orange-600 font-bold">
-                        Rs. {(((p.discount_enabled !== false && p.discount_price && p.discount_price < p.selling_price ? p.discount_price : p.selling_price)) + (settings.free_delivery_enabled ? Math.max(0, Number(settings.delivery_fee || 0)) : 0)).toLocaleString()}
+                        Rs. {formatLkr(((p.discount_enabled !== false && p.discount_price && p.discount_price < p.selling_price ? p.discount_price : p.selling_price)) + (settings.free_delivery_enabled ? Math.max(0, Number(settings.delivery_fee || 0)) : 0))}
                       </p>
                     </div>
                   </button>
@@ -307,9 +308,9 @@ export const Header: React.FC = () => {
                     <span className="rounded-full bg-gray-100 px-2 py-1 text-[10px] font-bold text-gray-600">{cartItemCount} item{cartItemCount === 1 ? '' : 's'}</span>
                   </div>
                   <div className="space-y-2 text-xs">
-                    <div className="flex justify-between text-gray-600"><span>Subtotal</span><span>Rs. {cartSubtotal.toLocaleString()}</span></div>
-                    <div className="flex justify-between text-emerald-700"><span>Offer Saving</span><span>- Rs. {cartSpecialOfferDiscount.toLocaleString()}</span></div>
-                    <div className="border-t border-gray-200 pt-2 flex justify-between text-sm font-black"><span>Total</span><span>Rs. {cartFinalProductsTotal.toLocaleString()}</span></div>
+                    <div className="flex justify-between text-gray-600"><span>Subtotal</span><span>Rs. {formatLkr(cartSubtotal)}</span></div>
+                    <div className="flex justify-between text-emerald-700"><span>Offer Saving</span><span>- Rs. {formatLkr(cartSpecialOfferDiscount)}</span></div>
+                    <div className="border-t border-gray-200 pt-2 flex justify-between text-sm font-black"><span>Total</span><span>Rs. {formatLkr(cartFinalProductsTotal)}</span></div>
                   </div>
                   <button
                     type="button"
@@ -376,7 +377,7 @@ export const Header: React.FC = () => {
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-bold text-gray-900 truncate">{p.name_en}</p>
                     <p className="text-[10px] text-orange-600 font-bold">
-                      Rs. {(((p.discount_enabled !== false && p.discount_price && p.discount_price < p.selling_price ? p.discount_price : p.selling_price)) + (settings.free_delivery_enabled ? Math.max(0, Number(settings.delivery_fee || 0)) : 0)).toLocaleString()}
+                      Rs. {formatLkr(((p.discount_enabled !== false && p.discount_price && p.discount_price < p.selling_price ? p.discount_price : p.selling_price)) + (settings.free_delivery_enabled ? Math.max(0, Number(settings.delivery_fee || 0)) : 0))}
                     </p>
                   </div>
                 </button>

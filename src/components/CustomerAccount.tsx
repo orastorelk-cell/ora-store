@@ -4,6 +4,7 @@ import { LogIn, LogOut, UserCircle2, ArrowLeft, Package, Award, Save } from 'luc
 import type { Session } from '@supabase/supabase-js';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import type { CustomerProfile, Order } from '../types';
+import { formatLkr } from '../lib/currency';
 
 const authHeaders = (session: Session | null) => ({
   'Content-Type': 'application/json',
@@ -225,7 +226,7 @@ export const CustomerAccountButton: React.FC = () => {
                             <p className="font-black text-xs text-gray-900">{order.order_number}</p>
                             <span className="text-[10px] rounded-full bg-gray-100 px-2 py-1 font-bold text-gray-600">{order.order_status}</span>
                           </div>
-                          <p className="mt-1 text-xs text-gray-500">{new Date(order.created_at).toLocaleDateString()} • Rs. {Number(order.total_amount || 0).toLocaleString()}</p>
+                          <p className="mt-1 text-xs text-gray-500">{new Date(order.created_at).toLocaleDateString()} • Rs. {formatLkr(order.total_amount)}</p>
                         </div>
                       ))}
                     </div>
