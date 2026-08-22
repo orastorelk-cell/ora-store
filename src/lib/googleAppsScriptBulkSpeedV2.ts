@@ -1,10 +1,10 @@
 export const GOOGLE_APPS_SCRIPT_BULK_SPEED_V2 = String.raw`
 // ============================================================
-// O-RA STORE - BULK LEAD SPEED V3
+// O-RA STORE - BULK LEAD SPEED V3.1
 // FB/TikTok: narrow duplicate scan + one block write + immediate flush.
 // No row grouping/borders for lead tabs. Website/CALL CENTER keeps grouping.
 // ============================================================
-ORA_VERSION = 'O-RA Store Google Sheets Clean V1 + Bulk Lead Speed V3';
+ORA_VERSION = 'O-RA Store Google Sheets Clean V1 + Bulk Lead Speed V3.1';
 
 function oraIsWebsiteOrderSheet_(sh) {
   return !!sh && sh.getName() === 'CALL CENTER ORDERS';
@@ -134,6 +134,18 @@ oraBulkSetupFreshRows_ = function(ss, sh, startRow, rowCount, blocks) {
   try { if (typeof oraApplyMoneyFormat_ === 'function') oraApplyMoneyFormat_(sh, startRow, rowCount); } catch (e) {}
 };
 
+// Google Sheets can automatically extend an existing row group/border when rows
+// are appended directly under it. Lead tabs must always remain flat. One range
+// operation removes any inherited/stale row grouping and custom borders. Website
+// orders are explicitly excluded.
+function oraFlattenLeadSheet_(sh) {
+  if (!sh || oraIsWebsiteOrderSheet_(sh) || sh.getLastRow() < 2) return;
+  var count = sh.getLastRow() - 1;
+  var range = sh.getRange(2, 1, count, ORA_ORDER_HEADERS.length);
+  try { range.shiftRowGroupDepth(-8); } catch (e) {}
+  try { range.setBorder(false, false, false, false, false, false); } catch (e) {}
+}
+
 oraBulkAppendFreshOrders_ = function(ss, sh, orders) {
   if (!orders || !orders.length) return { rows:0, orders:0 };
   var allRows = [], blocks = [];
@@ -154,6 +166,10 @@ oraBulkAppendFreshOrders_ = function(ss, sh, orders) {
   // setValues call. Flush immediately so they appear together, not one by one.
   sh.getRange(start, 1, allRows.length, ORA_ORDER_HEADERS.length).setValues(allRows);
   SpreadsheetApp.flush();
+
+  // Flatten lead tabs after values are already visible. This also removes an old
+  // inherited group like the first-row group seen in the live FB test.
+  if (!oraIsWebsiteOrderSheet_(sh)) oraFlattenLeadSheet_(sh);
 
   // Editing rules are secondary and run only after the complete batch is visible.
   oraBulkSetupFreshRows_(ss, sh, start, allRows.length, blocks);
@@ -177,8 +193,7 @@ if (typeof oraRegroupExistingOrders_ === 'function') {
   var oraRegroupExistingOrdersSpeedV3Base_ = oraRegroupExistingOrders_;
   oraRegroupExistingOrders_ = function(sh) {
     if (oraIsWebsiteOrderSheet_(sh)) return oraRegroupExistingOrdersSpeedV3Base_(sh);
-    if (!sh || sh.getLastRow() < 2) return;
-    try { sh.getRange(2, 1, sh.getLastRow() - 1, ORA_ORDER_HEADERS.length).shiftRowGroupDepth(-8); } catch (e) {}
+    oraFlattenLeadSheet_(sh);
   };
 }
 `;
