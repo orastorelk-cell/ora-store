@@ -9,10 +9,11 @@ import { adminDashboardLeadServerPreviewPatch } from './src/lib/adminDashboardLe
 import { adminDashboardProductAutoPopularPatch } from './src/lib/adminDashboardProductAutoPopularPatch';
 import { customerCartWordingPatch } from './src/lib/customerCartWordingPatch';
 import { welcomeSplashAppPatch } from './src/lib/welcomeSplashAppPatch';
+import { deliveryCityAcceptancePatch } from './src/lib/deliveryCityAcceptancePatch';
 
 export default defineConfig(() => {
   return {
-    plugins: [welcomeSplashAppPatch(), customerCartWordingPatch(), adminDashboardUnifiedUploadPatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
+    plugins: [deliveryCityAcceptancePatch(), welcomeSplashAppPatch(), customerCartWordingPatch(), adminDashboardUnifiedUploadPatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
