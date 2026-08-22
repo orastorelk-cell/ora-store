@@ -11,10 +11,11 @@ import { customerCartWordingPatch } from './src/lib/customerCartWordingPatch';
 import { welcomeSplashAppPatch } from './src/lib/welcomeSplashAppPatch';
 import { deliveryCityAcceptancePatch } from './src/lib/deliveryCityAcceptancePatch';
 import { waybillDuplicateSafetyPatch } from './src/lib/waybillDuplicateSafetyPatch';
+import { waybillExistingGarbageCleanupPatch } from './src/lib/waybillExistingGarbageCleanupPatch';
 
 export default defineConfig(() => {
   return {
-    plugins: [waybillDuplicateSafetyPatch(), deliveryCityAcceptancePatch(), welcomeSplashAppPatch(), customerCartWordingPatch(), adminDashboardUnifiedUploadPatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
+    plugins: [waybillExistingGarbageCleanupPatch(), waybillDuplicateSafetyPatch(), deliveryCityAcceptancePatch(), welcomeSplashAppPatch(), customerCartWordingPatch(), adminDashboardUnifiedUploadPatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
