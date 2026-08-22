@@ -1,10 +1,11 @@
 export const GOOGLE_APPS_SCRIPT_BULK_SPEED_V2 = String.raw`
 // ============================================================
-// O-RA STORE - BULK LEAD SPEED V3.1
+// O-RA STORE - BULK LEAD SPEED V3.2
 // FB/TikTok: narrow duplicate scan + one block write + immediate flush.
-// No row grouping/borders for lead tabs. Website/CALL CENTER keeps grouping.
+// No row grouping/borders for lead tabs, including fallback repair writes.
+// Website/CALL CENTER keeps the existing grouping/border behaviour.
 // ============================================================
-ORA_VERSION = 'O-RA Store Google Sheets Clean V1 + Bulk Lead Speed V3.1';
+ORA_VERSION = 'O-RA Store Google Sheets Clean V1 + Bulk Lead Speed V3.2';
 
 function oraIsWebsiteOrderSheet_(sh) {
   return !!sh && sh.getName() === 'CALL CENTER ORDERS';
@@ -183,6 +184,21 @@ if (typeof oraStyleOrderBlock_ === 'function') {
   oraStyleOrderBlock_ = function(sh, startRow, count) {
     if (!oraIsWebsiteOrderSheet_(sh)) return;
     return oraStyleOrderBlockSpeedV3Base_(sh, startRow, count);
+  };
+}
+
+// The safety/repair path can re-sync one lead at a time through the stable writer.
+// That older writer creates a row group before it returns. Flatten the lead tab
+// immediately afterwards; Website orders continue through the untouched writer.
+if (typeof oraWriteOrder_ === 'function') {
+  var oraWriteOrderSpeedV32Base_ = oraWriteOrder_;
+  oraWriteOrder_ = function(ss, o) {
+    var written = oraWriteOrderSpeedV32Base_(ss, o);
+    if (written > 0) {
+      var sh = oraEnsureOrderSheet_(ss, oraSheetName_(o.source));
+      if (!oraIsWebsiteOrderSheet_(sh)) oraFlattenLeadSheet_(sh);
+    }
+    return written;
   };
 }
 
