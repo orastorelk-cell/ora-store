@@ -22,6 +22,15 @@ function oraApplyMoneyFormat_(sh, startRow, count) {
     if (!col) continue;
     try { sh.getRange(startRow, col, count, 1).setNumberFormat('Rs. #,##0.00'); } catch (e) {}
   }
+  // Keep the Website/Call Center final amount easy to spot without changing
+  // any values, formulas or the styling of Facebook/TikTok order tabs.
+  if (hm['Final Total (Rs)'] && sh.getName() === ORA_ORDER_SHEETS[0]) {
+    try {
+      sh.getRange(startRow, hm['Final Total (Rs)'], count, 1)
+        .setFontSize(13)
+        .setFontWeight('bold');
+    } catch (e) {}
+  }
   if (hm['Qty']) {
     try { sh.getRange(startRow, hm['Qty'], count, 1).setNumberFormat('0'); } catch (e) {}
   }
