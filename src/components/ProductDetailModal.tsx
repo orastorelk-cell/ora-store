@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, CheckCircle2, Image as ImageIcon, MessageSquare, ShoppingBag, X, Zap } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, Image as ImageIcon, MessageSquare, ShoppingBag, X, Zap } from 'lucide-react';
 import { useStore } from '../context/StoreContext';
 import { ProductReviews } from './ProductReviews';
 import { ProductCard } from './ProductCard';
@@ -50,6 +50,7 @@ export const ProductDetailModal: React.FC = () => {
   const [failedImages, setFailedImages] = useState<Set<string>>(() => new Set());
   const [addedToCart, setAddedToCart] = useState(false);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const galleryTouchStartRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     if (!selectedProduct) {
@@ -120,6 +121,27 @@ export const ProductDetailModal: React.FC = () => {
   ]);
   const visibleGalleryImages = galleryImages.filter((image) => !failedImages.has(image));
   const shownImage = visibleGalleryImages[activeImageIndex] || visibleGalleryImages[0] || '';
+  const moveGalleryImage = (direction: -1 | 1) => {
+    if (visibleGalleryImages.length < 2) return;
+    setActiveImageIndex((current) => {
+      const safeCurrent = current >= 0 && current < visibleGalleryImages.length ? current : 0;
+      return (safeCurrent + direction + visibleGalleryImages.length) % visibleGalleryImages.length;
+    });
+  };
+  const handleGalleryTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    const touch = event.touches[0];
+    galleryTouchStartRef.current = touch ? { x: touch.clientX, y: touch.clientY } : null;
+  };
+  const handleGalleryTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+    const start = galleryTouchStartRef.current;
+    galleryTouchStartRef.current = null;
+    const touch = event.changedTouches[0];
+    if (!start || !touch) return;
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    if (Math.abs(deltaX) < 45 || Math.abs(deltaX) <= Math.abs(deltaY)) return;
+    moveGalleryImage(deltaX < 0 ? 1 : -1);
+  };
   const exactSku = selectedVariant?.sku || selectedProduct.sku;
   const canOrder = type !== 'variant' || Boolean(selectedVariant);
   const specifications = (selectedProduct.specifications || []).filter((spec) => spec.label && spec.value);
@@ -227,11 +249,25 @@ export const ProductDetailModal: React.FC = () => {
       <main className="mx-auto max-w-[1400px] px-4 py-5 sm:px-6 lg:px-8 lg:py-8">
         <div className="grid grid-cols-1 gap-7 lg:grid-cols-[minmax(0,1.08fr)_minmax(380px,.92fr)]">
           <section className="space-y-3">
-            <div className="relative aspect-square max-h-[680px] overflow-hidden rounded-3xl border border-gray-100 bg-gray-50">
+            <div
+              className="relative aspect-square max-h-[680px] touch-pan-y overflow-hidden rounded-3xl border border-gray-100 bg-gray-50"
+              onTouchStart={handleGalleryTouchStart}
+              onTouchEnd={handleGalleryTouchEnd}
+            >
               {shownImage ? (
                 <img src={shownImage} alt={selectedProduct.name_en} className="h-full w-full object-contain sm:object-cover" referrerPolicy="no-referrer" onError={() => { setFailedImages((prev) => new Set(prev).add(shownImage)); setActiveImageIndex(0); }} />
               ) : (
                 <div className="flex h-full w-full flex-col items-center justify-center text-gray-300"><ImageIcon className="h-14 w-14" /><p className="mt-2 text-xs font-bold">Image coming soon</p></div>
+              )}
+              {visibleGalleryImages.length > 1 && (
+                <>
+                  <button type="button" aria-label="Previous product image" onClick={() => moveGalleryImage(-1)} className="absolute left-3 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/55 p-2.5 text-white shadow-lg backdrop-blur-sm transition hover:bg-black/70">
+                    <ChevronLeft className="h-5 w-5" />
+                  </button>
+                  <button type="button" aria-label="Next product image" onClick={() => moveGalleryImage(1)} className="absolute right-3 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/55 p-2.5 text-white shadow-lg backdrop-blur-sm transition hover:bg-black/70">
+                    <ChevronRight className="h-5 w-5" />
+                  </button>
+                </>
               )}
               {hasDiscount && <span className="absolute left-4 top-4 rounded-xl bg-orange-600 px-3 py-2 text-sm font-black text-white shadow-lg">{discountPercent}% OFF</span>}
               {visibleGalleryImages.length > 1 && <span className="absolute right-4 top-4 rounded-full bg-black/70 px-3 py-1.5 text-xs font-black text-white">{Math.min(activeImageIndex + 1, visibleGalleryImages.length)}/{visibleGalleryImages.length}</span>}
