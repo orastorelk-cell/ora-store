@@ -9,6 +9,8 @@ interface CategoryOptionRow {
   fullText: string;
 }
 
+const manualCategoryBySection = new WeakMap<HTMLElement, string>();
+
 const savedCategoryOptions = (select: HTMLSelectElement): CategoryOptionRow[] =>
   Array.from(select.options)
     .map((option) => {
@@ -27,6 +29,23 @@ const setReactSelectValue = (select: HTMLSelectElement, value: string) => {
   select.dispatchEvent(new Event('change', { bubbles: true }));
 };
 
+const enforceManualCategory = (section: HTMLElement, select: HTMLSelectElement) => {
+  const manualValue = manualCategoryBySection.get(section);
+  if (!manualValue || !section.isConnected || !select.isConnected) return;
+  if (select.value !== manualValue) setReactSelectValue(select, manualValue);
+};
+
+const queueManualCategoryEnforce = (section: HTMLElement, select: HTMLSelectElement) => {
+  if (!manualCategoryBySection.has(section)) return;
+  const run = () => enforceManualCategory(section, select);
+  window.setTimeout(run, 0);
+  window.requestAnimationFrame(() => {
+    run();
+    window.requestAnimationFrame(run);
+  });
+  window.setTimeout(run, 80);
+};
+
 const updateCategoryList = (select: HTMLSelectElement, datalist: HTMLDataListElement) => {
   const rows = savedCategoryOptions(select);
   const signature = rows.map((row) => `${row.value}:${row.fullText}`).join('|');
@@ -41,6 +60,7 @@ const updateCategoryList = (select: HTMLSelectElement, datalist: HTMLDataListEle
 };
 
 const selectTypedCategory = (
+  section: HTMLElement,
   select: HTMLSelectElement,
   input: HTMLInputElement,
   status: HTMLParagraphElement,
@@ -48,6 +68,7 @@ const selectTypedCategory = (
 ) => {
   const query = normalizeCategoryText(input.value);
   if (!query) {
+    manualCategoryBySection.delete(section);
     status.textContent = 'Leave blank to keep Auto Category.';
     status.className = 'mt-1 text-[10px] text-neutral-500';
     return;
@@ -74,9 +95,11 @@ const selectTypedCategory = (
     return;
   }
 
+  manualCategoryBySection.set(section, match.value);
   setReactSelectValue(select, match.value);
+  queueManualCategoryEnforce(section, select);
   if (input.value !== match.name) input.value = match.name;
-  status.textContent = `Manual category selected: ${match.name}`;
+  status.textContent = `Manual category locked: ${match.name}`;
   status.className = 'mt-1 text-[10px] font-bold text-emerald-400';
 };
 
@@ -110,14 +133,23 @@ const installManualCategoryInput = (section: HTMLElement, select: HTMLSelectElem
   status.className = 'mt-1 text-[10px] text-neutral-500';
   status.textContent = 'Leave blank to keep Auto Category. Type a saved category name to override it.';
 
-  input.addEventListener('input', () => selectTypedCategory(select, input, status, false));
-  input.addEventListener('change', () => selectTypedCategory(select, input, status, true));
-  input.addEventListener('blur', () => selectTypedCategory(select, input, status, true));
+  input.addEventListener('input', () => selectTypedCategory(section, select, input, status, false));
+  input.addEventListener('change', () => selectTypedCategory(section, select, input, status, true));
+  input.addEventListener('blur', () => selectTypedCategory(section, select, input, status, true));
   input.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter') return;
     event.preventDefault();
-    selectTypedCategory(select, input, status, true);
+    selectTypedCategory(section, select, input, status, true);
   });
+
+  // Product-name auto-fill runs from React input/blur effects. Once a manual category
+  // is chosen, re-apply only that category after those effects so Auto can never
+  // replace the user's explicit choice. Clearing this manual field unlocks Auto again.
+  const form = section.closest('form');
+  const keepManualChoice = () => queueManualCategoryEnforce(section, select);
+  form?.addEventListener('input', keepManualChoice);
+  form?.addEventListener('change', keepManualChoice);
+  form?.addEventListener('focusout', keepManualChoice);
 
   box.append(label, input, datalist, status);
   select.insertAdjacentElement('afterend', box);
