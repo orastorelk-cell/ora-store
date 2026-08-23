@@ -10,7 +10,7 @@ interface CategoryOptionRow {
 }
 
 const manualCategoryBySection = new WeakMap<HTMLElement, string>();
-const autoCategoryBySection = new WeakMap<HTMLElement, boolean>();
+const resubmittingForms = new WeakSet<HTMLFormElement>();
 
 const savedCategoryOptions = (select: HTMLSelectElement): CategoryOptionRow[] =>
   Array.from(select.options)
@@ -21,55 +21,16 @@ const savedCategoryOptions = (select: HTMLSelectElement): CategoryOptionRow[] =>
     })
     .filter((row) => row.value && !/^Auto:\s*/i.test(row.fullText));
 
-const notifyReactSelectChange = (select: HTMLSelectElement) => {
-  // React keeps the current JSX handlers on the DOM node. Calling the select's
-  // own onChange handler makes the controlled productForm state update reliably,
-  // including when editing products that were saved before this manual-category UI.
-  const reactPropsKey = Object.keys(select).find((key) => key.startsWith('__reactProps$'));
-  const reactProps = reactPropsKey ? (select as any)[reactPropsKey] : undefined;
-  if (typeof reactProps?.onChange === 'function') {
-    reactProps.onChange({
-      target: select,
-      currentTarget: select,
-      type: 'change',
-      bubbles: true,
-      preventDefault() {},
-      stopPropagation() {},
-    });
-    return;
+const setReactSelectValue = (select: HTMLSelectElement, value: string, forceEvent = false) => {
+  const changed = select.value !== value;
+  if (changed) {
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+    if (setter) setter.call(select, value);
+    else select.value = value;
   }
+  if (!changed && !forceEvent) return;
+  select.dispatchEvent(new Event('input', { bubbles: true }));
   select.dispatchEvent(new Event('change', { bubbles: true }));
-};
-
-const setReactSelectValue = (select: HTMLSelectElement, value: string) => {
-  if (select.value === value) {
-    // Even when the visible select already has the requested value, make sure
-    // React's controlled state receives the manual selection before Save.
-    notifyReactSelectChange(select);
-    return;
-  }
-  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
-  if (setter) setter.call(select, value);
-  else select.value = value;
-  notifyReactSelectChange(select);
-};
-
-const enforceManualCategory = (section: HTMLElement, select: HTMLSelectElement) => {
-  if (autoCategoryBySection.get(section) !== false) return;
-  const manualValue = manualCategoryBySection.get(section);
-  if (!manualValue || !section.isConnected || !select.isConnected) return;
-  if (select.value !== manualValue) setReactSelectValue(select, manualValue);
-};
-
-const queueManualCategoryEnforce = (section: HTMLElement, select: HTMLSelectElement) => {
-  if (autoCategoryBySection.get(section) !== false || !manualCategoryBySection.has(section)) return;
-  const run = () => enforceManualCategory(section, select);
-  window.setTimeout(run, 0);
-  window.requestAnimationFrame(() => {
-    run();
-    window.requestAnimationFrame(run);
-  });
-  window.setTimeout(run, 80);
 };
 
 const updateCategoryList = (select: HTMLSelectElement, datalist: HTMLDataListElement) => {
@@ -88,52 +49,50 @@ const updateCategoryList = (select: HTMLSelectElement, datalist: HTMLDataListEle
 const findCurrentSavedCategory = (select: HTMLSelectElement) =>
   savedCategoryOptions(select).find((row) => row.value === select.value);
 
-const runExistingAutoFill = (section: HTMLElement) => {
-  const button = Array.from(section.querySelectorAll<HTMLButtonElement>('button'))
-    .find((candidate) => String(candidate.textContent || '').trim() === 'Auto Fill Again');
-  button?.click();
+const findProductKey = (section: HTMLElement) => {
+  const form = section.closest('form');
+  if (!form) return '';
+  const skuLabel = Array.from(form.querySelectorAll<HTMLLabelElement>('label'))
+    .find((label) => String(label.textContent || '').includes('Item Code / SKU'));
+  const skuInput = skuLabel?.parentElement?.parentElement?.querySelector<HTMLInputElement>('input[type="text"]');
+  return String(skuInput?.value || '').trim().toUpperCase();
 };
 
-const setCategoryMode = (
+const syncManualFromSelect = (
   section: HTMLElement,
   select: HTMLSelectElement,
   input: HTMLInputElement,
   status: HTMLParagraphElement,
-  toggle: HTMLInputElement,
-  autoOn: boolean,
-  recalculate = false,
 ) => {
-  autoCategoryBySection.set(section, autoOn);
-  toggle.checked = autoOn;
-
-  if (autoOn) {
+  const current = findCurrentSavedCategory(select);
+  if (!current) {
     manualCategoryBySection.delete(section);
     input.value = '';
-    input.disabled = true;
-    select.disabled = true;
-    status.textContent = 'AUTO CATEGORY ON — manual category is locked.';
-    status.className = 'mt-1 text-[10px] font-bold text-emerald-400';
-    if (recalculate) window.setTimeout(() => runExistingAutoFill(section), 0);
+    status.textContent = 'Select or type the correct saved category.';
+    status.className = 'mt-1 text-[10px] font-bold text-amber-300';
     return;
   }
+  manualCategoryBySection.set(section, current.value);
+  input.value = current.name;
+  status.textContent = `Manual category: ${current.name}`;
+  status.className = 'mt-1 text-[10px] font-bold text-emerald-400';
+};
 
-  input.disabled = false;
-  select.disabled = false;
-  const current = findCurrentSavedCategory(select);
-  if (current) {
-    manualCategoryBySection.set(section, current.value);
-    input.value = current.name;
-    // Push the existing category into React too. This is important in Edit mode
-    // because older products may have been loaded before the helper was installed.
-    setReactSelectValue(select, current.value);
-    status.textContent = `MANUAL CATEGORY ON — locked: ${current.name}`;
-    status.className = 'mt-1 text-[10px] font-bold text-amber-300';
-  } else {
-    manualCategoryBySection.delete(section);
-    input.value = '';
-    status.textContent = 'MANUAL CATEGORY ON — type or choose the correct saved category.';
-    status.className = 'mt-1 text-[10px] font-bold text-amber-300';
-  }
+const enforceManualCategory = (section: HTMLElement, select: HTMLSelectElement) => {
+  const manualValue = manualCategoryBySection.get(section);
+  if (!manualValue || !section.isConnected || !select.isConnected) return;
+  if (select.value !== manualValue) setReactSelectValue(select, manualValue);
+};
+
+const queueManualCategoryEnforce = (section: HTMLElement, select: HTMLSelectElement) => {
+  if (!manualCategoryBySection.has(section)) return;
+  const run = () => enforceManualCategory(section, select);
+  window.setTimeout(run, 0);
+  window.requestAnimationFrame(() => {
+    run();
+    window.requestAnimationFrame(run);
+  });
+  window.setTimeout(run, 80);
 };
 
 const selectTypedCategory = (
@@ -143,12 +102,9 @@ const selectTypedCategory = (
   status: HTMLParagraphElement,
   allowPartial = false,
 ) => {
-  if (autoCategoryBySection.get(section) !== false) return;
-
   const query = normalizeCategoryText(input.value);
   if (!query) {
-    manualCategoryBySection.delete(section);
-    status.textContent = 'MANUAL CATEGORY ON — type or choose the correct saved category.';
+    status.textContent = 'Select or type the correct saved category.';
     status.className = 'mt-1 text-[10px] font-bold text-amber-300';
     return;
   }
@@ -175,38 +131,49 @@ const selectTypedCategory = (
   }
 
   manualCategoryBySection.set(section, match.value);
-  setReactSelectValue(select, match.value);
+  setReactSelectValue(select, match.value, true);
   queueManualCategoryEnforce(section, select);
   if (input.value !== match.name) input.value = match.name;
-  status.textContent = `MANUAL CATEGORY ON — locked: ${match.name}`;
-  status.className = 'mt-1 text-[10px] font-bold text-amber-300';
+  status.textContent = `Manual category: ${match.name}`;
+  status.className = 'mt-1 text-[10px] font-bold text-emerald-400';
 };
 
-const installManualCategoryInput = (section: HTMLElement, select: HTMLSelectElement) => {
+const installManualCategoryInput = (section: HTMLElement, select: HTMLSelectElement, autoLabel: HTMLLabelElement) => {
   let box = section.querySelector<HTMLElement>(`.${MANUAL_CATEGORY_BOX_CLASS}`);
   if (box) {
     const datalist = box.querySelector<HTMLDataListElement>('datalist');
+    const input = box.querySelector<HTMLInputElement>('input[type="text"]');
+    const status = box.querySelector<HTMLParagraphElement>('p');
     if (datalist) updateCategoryList(select, datalist);
-    if (autoCategoryBySection.get(section) !== false) select.disabled = true;
+
+    const productKey = findProductKey(section);
+    if (input && status && productKey && box.dataset.productKey !== productKey) {
+      box.dataset.productKey = productKey;
+      window.setTimeout(() => syncManualFromSelect(section, select, input, status), 0);
+    } else {
+      queueManualCategoryEnforce(section, select);
+    }
     return;
   }
 
+  // Auto category is intentionally disabled. The existing React category dropdown
+  // remains the source of truth so Add and Edit use the same proven save path.
+  autoLabel.textContent = 'Product Category (Manual)';
+  const header = autoLabel.parentElement;
+  const autoFillButton = header?.querySelector<HTMLButtonElement>('button');
+  if (autoFillButton && String(autoFillButton.textContent || '').includes('Auto Fill Again')) {
+    autoFillButton.disabled = true;
+    autoFillButton.style.display = 'none';
+  }
+
+  Array.from(select.options).forEach((option) => {
+    if (/^Auto:\s*/i.test(String(option.textContent || '').trim())) option.hidden = true;
+  });
+  select.disabled = false;
+
   box = document.createElement('div');
   box.className = `${MANUAL_CATEGORY_BOX_CLASS} mt-2 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3`;
-
-  const modeRow = document.createElement('label');
-  modeRow.className = 'mb-2 flex items-center justify-between gap-3 text-[10px] font-black text-emerald-300';
-
-  const modeText = document.createElement('span');
-  modeText.textContent = 'AUTO CATEGORY';
-
-  const toggle = document.createElement('input');
-  toggle.type = 'checkbox';
-  toggle.checked = true;
-  toggle.className = 'h-4 w-4 accent-emerald-500';
-  toggle.title = 'Turn OFF to choose the category manually';
-
-  modeRow.append(modeText, toggle);
+  box.dataset.productKey = findProductKey(section);
 
   const label = document.createElement('label');
   label.className = 'block text-[10px] font-bold text-amber-300 mb-1';
@@ -215,21 +182,17 @@ const installManualCategoryInput = (section: HTMLElement, select: HTMLSelectElem
   const input = document.createElement('input');
   input.type = 'text';
   input.setAttribute('list', MANUAL_CATEGORY_LIST_ID);
-  input.placeholder = 'Turn Auto OFF, then type category';
+  input.placeholder = 'Type the correct saved category';
   input.autocomplete = 'off';
-  input.className = 'w-full bg-neutral-950 border border-amber-500/30 focus:border-amber-400 rounded-xl px-3 py-2 text-white disabled:cursor-not-allowed disabled:opacity-40';
+  input.className = 'w-full bg-neutral-950 border border-amber-500/30 focus:border-amber-400 rounded-xl px-3 py-2 text-white';
 
   const datalist = document.createElement('datalist');
   datalist.id = MANUAL_CATEGORY_LIST_ID;
   updateCategoryList(select, datalist);
 
   const status = document.createElement('p');
-  status.className = 'mt-1 text-[10px] font-bold text-emerald-400';
-  status.textContent = 'AUTO CATEGORY ON — manual category is locked.';
-
-  toggle.addEventListener('change', () => {
-    setCategoryMode(section, select, input, status, toggle, toggle.checked, toggle.checked);
-  });
+  status.className = 'mt-1 text-[10px] font-bold text-amber-300';
+  status.textContent = 'Select or type the correct saved category.';
 
   input.addEventListener('input', () => selectTypedCategory(section, select, input, status, false));
   input.addEventListener('change', () => selectTypedCategory(section, select, input, status, true));
@@ -240,44 +203,61 @@ const installManualCategoryInput = (section: HTMLElement, select: HTMLSelectElem
     selectTypedCategory(section, select, input, status, true);
   });
 
-  // The existing React category dropdown remains the source of truth. In Manual
-  // mode a direct dropdown selection is locked too, so this also works when an
-  // older saved product is opened with Edit.
+  // Native dropdown selection is preferred because React receives the user's
+  // trusted change directly. This works for both new products and old saved edits.
   select.addEventListener('change', (event) => {
-    if (autoCategoryBySection.get(section) !== false || !event.isTrusted) return;
+    if (!event.isTrusted) return;
     const current = findCurrentSavedCategory(select);
     if (!current) return;
     manualCategoryBySection.set(section, current.value);
     input.value = current.name;
-    notifyReactSelectChange(select);
-    status.textContent = `MANUAL CATEGORY ON — locked: ${current.name}`;
-    status.className = 'mt-1 text-[10px] font-bold text-amber-300';
+    status.textContent = `Manual category: ${current.name}`;
+    status.className = 'mt-1 text-[10px] font-bold text-emerald-400';
   });
 
-  // Product-name auto-fill can still run inside React. When Auto is OFF, re-apply
-  // only the explicit manual category after React finishes its normal name/tag work.
-  // This leaves every unrelated product field and all existing save logic untouched.
+  // Product-name auto logic may still run elsewhere in the old form. Keep only the
+  // explicit manual category after those events, without touching tags or any other field.
   const form = section.closest('form');
   const keepManualChoice = () => queueManualCategoryEnforce(section, select);
   form?.addEventListener('input', keepManualChoice);
   form?.addEventListener('change', keepManualChoice);
   form?.addEventListener('focusout', keepManualChoice);
 
-  box.append(modeRow, label, input, datalist, status);
+  // Before Save, push the locked manual value through the native React select once
+  // and submit on the next tick. This prevents stale category state on older products.
+  form?.addEventListener('submit', (event) => {
+    if (!form || resubmittingForms.has(form)) {
+      if (form) resubmittingForms.delete(form);
+      return;
+    }
+    const manualValue = manualCategoryBySection.get(section);
+    if (!manualValue) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setReactSelectValue(select, manualValue, true);
+    window.setTimeout(() => {
+      if (!form.isConnected) return;
+      resubmittingForms.add(form);
+      form.requestSubmit();
+    }, 0);
+  }, true);
+
+  box.append(label, input, datalist, status);
   select.insertAdjacentElement('afterend', box);
-  setCategoryMode(section, select, input, status, toggle, true, false);
+  syncManualFromSelect(section, select, input, status);
 };
 
-const scanForAutoCategory = () => {
+const scanForCategory = () => {
   const labels = Array.from(document.querySelectorAll<HTMLLabelElement>('label'));
   labels.forEach((label) => {
-    if (label.textContent?.trim() !== 'Auto Category') return;
+    const text = label.textContent?.trim();
+    if (text !== 'Auto Category' && text !== 'Product Category (Manual)') return;
     const header = label.parentElement;
     const section = header?.parentElement;
     if (!(section instanceof HTMLElement)) return;
     const select = section.querySelector<HTMLSelectElement>('select');
     if (!select) return;
-    installManualCategoryInput(section, select);
+    installManualCategoryInput(section, select, label);
   });
 };
 
@@ -287,7 +267,7 @@ const queueScan = () => {
   scanQueued = true;
   window.requestAnimationFrame(() => {
     scanQueued = false;
-    scanForAutoCategory();
+    scanForCategory();
   });
 };
 
