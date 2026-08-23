@@ -1,4 +1,4 @@
-const MANUAL_CATEGORY_BOX_CLASS = 'ora-manual-product-category-box';
+const MANUAL_CATEGORY_FIELD_CLASS = 'ora-manual-product-category-field';
 const MANUAL_CATEGORY_LIST_ID = 'ora-manual-product-category-list';
 
 const normalizeCategoryText = (value: string) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -33,6 +33,19 @@ const setReactSelectValue = (select: HTMLSelectElement, value: string, forceEven
   select.dispatchEvent(new Event('change', { bubbles: true }));
 };
 
+const findCurrentSavedCategory = (select: HTMLSelectElement) =>
+  savedCategoryOptions(select).find((row) => row.value === select.value);
+
+const findProductKey = (section: HTMLElement) => {
+  const form = section.closest('form');
+  if (!form) return '';
+  const skuLabel = Array.from(form.querySelectorAll<HTMLLabelElement>('label'))
+    .find((label) => String(label.textContent || '').includes('Item Code / SKU'));
+  const skuArea = skuLabel?.parentElement?.parentElement;
+  const skuInput = skuArea?.querySelector<HTMLInputElement>('input[type="text"]');
+  return String(skuInput?.value || '').trim().toUpperCase();
+};
+
 const updateCategoryList = (select: HTMLSelectElement, datalist: HTMLDataListElement) => {
   const rows = savedCategoryOptions(select);
   const signature = rows.map((row) => `${row.value}:${row.fullText}`).join('|');
@@ -46,16 +59,19 @@ const updateCategoryList = (select: HTMLSelectElement, datalist: HTMLDataListEle
   }));
 };
 
-const findCurrentSavedCategory = (select: HTMLSelectElement) =>
-  savedCategoryOptions(select).find((row) => row.value === select.value);
-
-const findProductKey = (section: HTMLElement) => {
-  const form = section.closest('form');
-  if (!form) return '';
-  const skuLabel = Array.from(form.querySelectorAll<HTMLLabelElement>('label'))
-    .find((label) => String(label.textContent || '').includes('Item Code / SKU'));
-  const skuInput = skuLabel?.parentElement?.parentElement?.querySelector<HTMLInputElement>('input[type="text"]');
-  return String(skuInput?.value || '').trim().toUpperCase();
+const setFieldState = (
+  input: HTMLInputElement,
+  status: HTMLParagraphElement,
+  row?: CategoryOptionRow,
+) => {
+  if (row) {
+    input.value = row.name;
+    status.textContent = `Selected: ${row.name}`;
+    status.className = 'mt-1 text-[10px] font-bold text-emerald-400';
+  } else {
+    status.textContent = 'Type or choose a saved category.';
+    status.className = 'mt-1 text-[10px] text-neutral-500';
+  }
 };
 
 const syncManualFromSelect = (
@@ -68,14 +84,11 @@ const syncManualFromSelect = (
   if (!current) {
     manualCategoryBySection.delete(section);
     input.value = '';
-    status.textContent = 'Select or type the correct saved category.';
-    status.className = 'mt-1 text-[10px] font-bold text-amber-300';
+    setFieldState(input, status);
     return;
   }
   manualCategoryBySection.set(section, current.value);
-  input.value = current.name;
-  status.textContent = `Manual category: ${current.name}`;
-  status.className = 'mt-1 text-[10px] font-bold text-emerald-400';
+  setFieldState(input, status, current);
 };
 
 const enforceManualCategory = (section: HTMLElement, select: HTMLSelectElement) => {
@@ -95,60 +108,91 @@ const queueManualCategoryEnforce = (section: HTMLElement, select: HTMLSelectElem
   window.setTimeout(run, 80);
 };
 
-const selectTypedCategory = (
+const resolveTypedCategory = (select: HTMLSelectElement, typed: string, allowPartial = false) => {
+  const query = normalizeCategoryText(typed);
+  if (!query) return undefined;
+  const rows = savedCategoryOptions(select);
+  const exact = rows.find((row) =>
+    normalizeCategoryText(row.name) === query ||
+    normalizeCategoryText(row.fullText) === query ||
+    normalizeCategoryText(row.value) === query
+  );
+  if (exact || !allowPartial) return exact;
+  const matches = rows.filter((row) =>
+    normalizeCategoryText(row.name).includes(query) ||
+    normalizeCategoryText(row.value).includes(query)
+  );
+  return matches.length === 1 ? matches[0] : undefined;
+};
+
+const applyTypedCategory = (
   section: HTMLElement,
   select: HTMLSelectElement,
   input: HTMLInputElement,
   status: HTMLParagraphElement,
   allowPartial = false,
 ) => {
-  const query = normalizeCategoryText(input.value);
-  if (!query) {
-    status.textContent = 'Select or type the correct saved category.';
-    status.className = 'mt-1 text-[10px] font-bold text-amber-300';
-    return;
-  }
-
-  const rows = savedCategoryOptions(select);
-  let match = rows.find((row) =>
-    normalizeCategoryText(row.name) === query ||
-    normalizeCategoryText(row.fullText) === query ||
-    normalizeCategoryText(row.value) === query
-  );
-
-  if (!match && allowPartial) {
-    const matches = rows.filter((row) =>
-      normalizeCategoryText(row.name).includes(query) ||
-      normalizeCategoryText(row.value).includes(query)
-    );
-    if (matches.length === 1) match = matches[0];
-  }
-
+  const match = resolveTypedCategory(select, input.value, allowPartial);
   if (!match) {
-    status.textContent = 'Type a saved category name from the suggestions.';
-    status.className = 'mt-1 text-[10px] text-amber-300';
-    return;
+    status.textContent = input.value.trim()
+      ? 'Choose a saved category from the suggestions.'
+      : 'Type or choose a saved category.';
+    status.className = input.value.trim()
+      ? 'mt-1 text-[10px] font-bold text-amber-300'
+      : 'mt-1 text-[10px] text-neutral-500';
+    return false;
   }
 
   manualCategoryBySection.set(section, match.value);
   setReactSelectValue(select, match.value, true);
+  setFieldState(input, status, match);
   queueManualCategoryEnforce(section, select);
-  if (input.value !== match.name) input.value = match.name;
-  status.textContent = `Manual category: ${match.name}`;
-  status.className = 'mt-1 text-[10px] font-bold text-emerald-400';
+  return true;
 };
 
-const installManualCategoryInput = (section: HTMLElement, select: HTMLSelectElement, autoLabel: HTMLLabelElement) => {
-  let box = section.querySelector<HTMLElement>(`.${MANUAL_CATEGORY_BOX_CLASS}`);
-  if (box) {
-    const datalist = box.querySelector<HTMLDataListElement>('datalist');
-    const input = box.querySelector<HTMLInputElement>('input[type="text"]');
-    const status = box.querySelector<HTMLParagraphElement>('p');
+const removeAutoCategoryHints = () => {
+  const labels = Array.from(document.querySelectorAll<HTMLLabelElement>('label'));
+  labels.forEach((label) => {
+    if (!String(label.textContent || '').includes('Name (English)')) return;
+    const autoText = label.querySelector<HTMLSpanElement>('span');
+    if (autoText && String(autoText.textContent || '').includes('Auto Category')) {
+      autoText.textContent = '→ Auto Tags';
+    }
+    const parent = label.parentElement;
+    const hint = parent?.querySelector<HTMLParagraphElement>('p');
+    if (hint && (/Auto Category/i.test(hint.textContent || '') || /Category and tags/i.test(hint.textContent || '') || /Tags auto-filled/i.test(hint.textContent || ''))) {
+      hint.style.display = 'none';
+    }
+  });
+};
+
+const installManualCategoryField = (section: HTMLElement, select: HTMLSelectElement, categoryLabel: HTMLLabelElement) => {
+  categoryLabel.textContent = 'Product Category';
+  const header = categoryLabel.parentElement;
+  const autoFillButton = header?.querySelector<HTMLButtonElement>('button');
+  if (autoFillButton && String(autoFillButton.textContent || '').includes('Auto Fill Again')) {
+    autoFillButton.disabled = true;
+    autoFillButton.style.display = 'none';
+  }
+
+  // Keep React's original select as the save source of truth, but make it invisible.
+  // The one visible field below is typeable and uses all previously saved categories.
+  Array.from(select.options).forEach((option) => {
+    if (/^Auto:\s*/i.test(String(option.textContent || '').trim())) option.hidden = true;
+  });
+  select.style.display = 'none';
+  select.tabIndex = -1;
+
+  let field = section.querySelector<HTMLElement>(`.${MANUAL_CATEGORY_FIELD_CLASS}`);
+  if (field) {
+    const input = field.querySelector<HTMLInputElement>('input[type="text"]');
+    const datalist = field.querySelector<HTMLDataListElement>('datalist');
+    const status = field.querySelector<HTMLParagraphElement>('p');
     if (datalist) updateCategoryList(select, datalist);
 
     const productKey = findProductKey(section);
-    if (input && status && productKey && box.dataset.productKey !== productKey) {
-      box.dataset.productKey = productKey;
+    if (input && status && productKey && field.dataset.productKey !== productKey) {
+      field.dataset.productKey = productKey;
       window.setTimeout(() => syncManualFromSelect(section, select, input, status), 0);
     } else {
       queueManualCategoryEnforce(section, select);
@@ -156,85 +200,66 @@ const installManualCategoryInput = (section: HTMLElement, select: HTMLSelectElem
     return;
   }
 
-  // Auto category is intentionally disabled. The existing React category dropdown
-  // remains the source of truth so Add and Edit use the same proven save path.
-  autoLabel.textContent = 'Product Category (Manual)';
-  const header = autoLabel.parentElement;
-  const autoFillButton = header?.querySelector<HTMLButtonElement>('button');
-  if (autoFillButton && String(autoFillButton.textContent || '').includes('Auto Fill Again')) {
-    autoFillButton.disabled = true;
-    autoFillButton.style.display = 'none';
-  }
-
-  Array.from(select.options).forEach((option) => {
-    if (/^Auto:\s*/i.test(String(option.textContent || '').trim())) option.hidden = true;
-  });
-  select.disabled = false;
-
-  box = document.createElement('div');
-  box.className = `${MANUAL_CATEGORY_BOX_CLASS} mt-2 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3`;
-  box.dataset.productKey = findProductKey(section);
-
-  const label = document.createElement('label');
-  label.className = 'block text-[10px] font-bold text-amber-300 mb-1';
-  label.textContent = 'Manual Category';
+  field = document.createElement('div');
+  field.className = MANUAL_CATEGORY_FIELD_CLASS;
+  field.dataset.productKey = findProductKey(section);
 
   const input = document.createElement('input');
   input.type = 'text';
   input.setAttribute('list', MANUAL_CATEGORY_LIST_ID);
-  input.placeholder = 'Type the correct saved category';
+  input.placeholder = 'Type or choose category';
   input.autocomplete = 'off';
-  input.className = 'w-full bg-neutral-950 border border-amber-500/30 focus:border-amber-400 rounded-xl px-3 py-2 text-white';
+  input.className = 'w-full bg-neutral-950 border border-neutral-700 focus:border-emerald-400 rounded-xl px-3 py-2 text-white';
 
   const datalist = document.createElement('datalist');
   datalist.id = MANUAL_CATEGORY_LIST_ID;
   updateCategoryList(select, datalist);
 
   const status = document.createElement('p');
-  status.className = 'mt-1 text-[10px] font-bold text-amber-300';
-  status.textContent = 'Select or type the correct saved category.';
+  status.className = 'mt-1 text-[10px] text-neutral-500';
+  status.textContent = 'Type or choose a saved category.';
 
-  input.addEventListener('input', () => selectTypedCategory(section, select, input, status, false));
-  input.addEventListener('change', () => selectTypedCategory(section, select, input, status, true));
-  input.addEventListener('blur', () => selectTypedCategory(section, select, input, status, true));
+  input.addEventListener('input', () => applyTypedCategory(section, select, input, status, false));
+  input.addEventListener('change', () => applyTypedCategory(section, select, input, status, true));
+  input.addEventListener('blur', () => applyTypedCategory(section, select, input, status, true));
   input.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter') return;
     event.preventDefault();
-    selectTypedCategory(section, select, input, status, true);
+    applyTypedCategory(section, select, input, status, true);
   });
 
-  // Native dropdown selection is preferred because React receives the user's
-  // trusted change directly. This works for both new products and old saved edits.
-  select.addEventListener('change', (event) => {
-    if (!event.isTrusted) return;
-    const current = findCurrentSavedCategory(select);
-    if (!current) return;
-    manualCategoryBySection.set(section, current.value);
-    input.value = current.name;
-    status.textContent = `Manual category: ${current.name}`;
-    status.className = 'mt-1 text-[10px] font-bold text-emerald-400';
-  });
-
-  // Product-name auto logic may still run elsewhere in the old form. Keep only the
-  // explicit manual category after those events, without touching tags or any other field.
+  // Old product-name auto code may still calculate tags. Keep the manual category
+  // locked after those React events so product names can never replace it.
   const form = section.closest('form');
   const keepManualChoice = () => queueManualCategoryEnforce(section, select);
   form?.addEventListener('input', keepManualChoice);
   form?.addEventListener('change', keepManualChoice);
   form?.addEventListener('focusout', keepManualChoice);
 
-  // Before Save, push the locked manual value through the native React select once
-  // and submit on the next tick. This prevents stale category state on older products.
+  // Before Save, resolve the one visible field and push that category through the
+  // existing React select. This makes Add and old saved-product Edit use the same
+  // proven category_slug/category_id save path without touching other product logic.
   form?.addEventListener('submit', (event) => {
     if (!form || resubmittingForms.has(form)) {
       if (form) resubmittingForms.delete(form);
       return;
     }
-    const manualValue = manualCategoryBySection.get(section);
-    if (!manualValue) return;
+
+    const match = resolveTypedCategory(select, input.value, true);
+    if (!match) {
+      event.preventDefault();
+      event.stopPropagation();
+      status.textContent = 'Choose a saved category before saving.';
+      status.className = 'mt-1 text-[10px] font-bold text-amber-300';
+      input.focus();
+      return;
+    }
+
     event.preventDefault();
     event.stopPropagation();
-    setReactSelectValue(select, manualValue, true);
+    manualCategoryBySection.set(section, match.value);
+    setReactSelectValue(select, match.value, true);
+    setFieldState(input, status, match);
     window.setTimeout(() => {
       if (!form.isConnected) return;
       resubmittingForms.add(form);
@@ -242,22 +267,23 @@ const installManualCategoryInput = (section: HTMLElement, select: HTMLSelectElem
     }, 0);
   }, true);
 
-  box.append(label, input, datalist, status);
-  select.insertAdjacentElement('afterend', box);
+  field.append(input, datalist, status);
+  select.insertAdjacentElement('afterend', field);
   syncManualFromSelect(section, select, input, status);
 };
 
 const scanForCategory = () => {
+  removeAutoCategoryHints();
   const labels = Array.from(document.querySelectorAll<HTMLLabelElement>('label'));
   labels.forEach((label) => {
     const text = label.textContent?.trim();
-    if (text !== 'Auto Category' && text !== 'Product Category (Manual)') return;
+    if (text !== 'Auto Category' && text !== 'Product Category' && text !== 'Product Category (Manual)') return;
     const header = label.parentElement;
     const section = header?.parentElement;
     if (!(section instanceof HTMLElement)) return;
     const select = section.querySelector<HTMLSelectElement>('select');
     if (!select) return;
-    installManualCategoryInput(section, select, label);
+    installManualCategoryField(section, select, label);
   });
 };
 
