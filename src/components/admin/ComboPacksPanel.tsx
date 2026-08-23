@@ -44,6 +44,8 @@ const compactComboPartName = (raw: string) => {
   return candidate.length > 34 ? `${candidate.slice(0, 31).trim()}…` : candidate;
 };
 
+const hasSinhalaText = (value: string) => /[\u0D80-\u0DFF]/.test(String(value || ''));
+
 interface ComboPacksPanelProps {
   initialEditId?: string;
   onInitialEditHandled?: () => void;
@@ -75,6 +77,8 @@ export const ComboPacksPanel: React.FC<ComboPacksPanelProps> = ({ initialEditId,
   const [comboContentBusy, setComboContentBusy] = useState(false);
   const [manualEnglishContent, setManualEnglishContent] = useState(false);
   const [manualSinhalaContent, setManualSinhalaContent] = useState(false);
+  const manualEnglishContentRef = useRef(false);
+  const manualSinhalaContentRef = useRef(false);
   const lastAutoContentSignature = useRef('');
   const COMBO_PAGE_SIZE = 25;
   const canNotify = adminUser?.role === 'admin' || Boolean(adminUser?.permissions?.includes('notifications'));
@@ -90,6 +94,16 @@ export const ComboPacksPanel: React.FC<ComboPacksPanelProps> = ({ initialEditId,
     auto_price: true,
     manual_display_price: 0,
   });
+
+  const markManualEnglishContent = () => {
+    manualEnglishContentRef.current = true;
+    setManualEnglishContent(true);
+  };
+
+  const markManualSinhalaContent = () => {
+    manualSinhalaContentRef.current = true;
+    setManualSinhalaContent(true);
+  };
 
   const selectableItems = useMemo(() => {
     const rows: Array<{ product_id: string; variant_id?: string; code: string; name: string; detail?: string }> = [];
@@ -184,6 +198,8 @@ export const ComboPacksPanel: React.FC<ComboPacksPanelProps> = ({ initialEditId,
       manual_display_price: 0,
     });
     setNotifyCustomers(false);
+    manualEnglishContentRef.current = false;
+    manualSinhalaContentRef.current = false;
     setManualEnglishContent(false);
     setManualSinhalaContent(false);
     lastAutoContentSignature.current = '';
@@ -206,6 +222,8 @@ export const ComboPacksPanel: React.FC<ComboPacksPanelProps> = ({ initialEditId,
       manual_display_price: displayUnitPrice(combo, settings),
     });
     setNotifyCustomers(false);
+    manualEnglishContentRef.current = true;
+    manualSinhalaContentRef.current = true;
     setManualEnglishContent(true);
     setManualSinhalaContent(true);
     lastAutoContentSignature.current = '';
@@ -267,7 +285,7 @@ export const ComboPacksPanel: React.FC<ComboPacksPanelProps> = ({ initialEditId,
     const cleanComponents = components.filter((component) => component.product_id);
     if (cleanComponents.length < 2) return;
     const signature = componentContentSignature(cleanComponents);
-    if (!force && manualEnglishContent) return;
+    if (!force && manualEnglishContentRef.current) return;
     if (!force && lastAutoContentSignature.current === signature) return;
 
     const sourceRows = cleanComponents.map((component) => {
@@ -330,46 +348,46 @@ export const ComboPacksPanel: React.FC<ComboPacksPanelProps> = ({ initialEditId,
       let descriptionSi = String(data?.description_si || form.description_si || '').trim();
       let translatedDetails = generatedDetails;
 
-      if (!manualSinhalaContent || force) {
+      if (!manualSinhalaContentRef.current) {
         // Exact English -> Sinhala is preferred, but Combo generation must never fail
         // just because the external translation service is unavailable.
         try {
           const translationInputs = [englishName, descriptionEn, ...generatedDetails.flatMap((detail) => [detail.label_en, detail.value_en])];
           const translations = await translateSinhalaBatch(translationInputs);
-          nameSi = translations[0] || nameSi;
-          descriptionSi = translations[1] || descriptionSi;
+          if (hasSinhalaText(translations[0] || '')) nameSi = translations[0];
+          if (hasSinhalaText(translations[1] || '')) descriptionSi = translations[1];
           translatedDetails = generatedDetails.map((detail, index) => ({
             ...detail,
-            label_si: translations[2 + (index * 2)] || detail.label_si || '',
-            value_si: translations[3 + (index * 2)] || detail.value_si || '',
+            label_si: hasSinhalaText(translations[2 + (index * 2)] || '') ? translations[2 + (index * 2)] : (detail.label_si || ''),
+            value_si: hasSinhalaText(translations[3 + (index * 2)] || '') ? translations[3 + (index * 2)] : (detail.value_si || ''),
           }));
         } catch (translationError: any) {
           console.warn('O-RA Combo Sinhala translation fallback:', translationError?.message || translationError);
           // Keep the server-provided Sinhala built from the selected source products.
         }
+        if (nameSi && !hasSinhalaText(nameSi)) nameSi = '';
+        if (descriptionSi && !hasSinhalaText(descriptionSi)) descriptionSi = '';
       }
 
       setForm((previous) => {
         if (componentContentSignature(previous.components) !== signature) return previous;
+        const keepManualEnglish = manualEnglishContentRef.current;
+        const keepManualSinhala = manualSinhalaContentRef.current;
         return {
           ...previous,
-          description_en: descriptionEn,
-          description_si: (!manualSinhalaContent || force) ? descriptionSi : previous.description_si,
-          name_si: (!manualSinhalaContent || force) ? nameSi : previous.name_si,
-          item_details: (!manualSinhalaContent || force)
-            ? translatedDetails
-            : generatedDetails.map((detail, index) => ({
+          description_en: keepManualEnglish ? previous.description_en : descriptionEn,
+          description_si: keepManualSinhala ? previous.description_si : descriptionSi,
+          name_si: keepManualSinhala ? previous.name_si : nameSi,
+          item_details: keepManualSinhala
+            ? generatedDetails.map((detail, index) => ({
                 ...detail,
                 label_si: previous.item_details[index]?.label_si || '',
                 value_si: previous.item_details[index]?.value_si || '',
-              })),
+              }))
+            : translatedDetails,
         };
       });
       lastAutoContentSignature.current = signature;
-      if (force) {
-        setManualEnglishContent(false);
-        setManualSinhalaContent(false);
-      }
     } catch (error: any) {
       if (force) alert(error?.message || 'Combo content generation failed. You can enter the fields manually.');
       else console.warn('O-RA automatic Combo content generation:', error?.message || error);
@@ -537,11 +555,11 @@ export const ComboPacksPanel: React.FC<ComboPacksPanelProps> = ({ initialEditId,
               <div className="mt-1 flex gap-2"><input required value={form.name_en} onChange={(event) => { setNameTouched(true); setForm((previous) => ({ ...previous, name_en: event.target.value })); }} placeholder="Kids Scooter + Kids Helmet Combo Pack" className="w-full rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-white" /><button type="button" onClick={regenerateName} className="shrink-0 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 text-cyan-300" title="Regenerate from selected products"><Sparkles className="h-4 w-4" /></button></div>
               <span className="mt-1 block text-[9px] font-normal text-neutral-500">Long source product names are shortened automatically. “Combo Pack” is always included in the generated name; you can still edit it.</span>
             </label>
-            <label className="text-xs font-bold text-neutral-300">Combo Name (Sinhala)<input value={form.name_si} onChange={(event) => { setManualSinhalaContent(true); setForm((previous) => ({ ...previous, name_si: event.target.value })); }} className="mt-1 w-full rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-white" /></label>
+            <label className="text-xs font-bold text-neutral-300">Combo Name (Sinhala)<input value={form.name_si} onChange={(event) => { markManualSinhalaContent(); setForm((previous) => ({ ...previous, name_si: event.target.value })); }} className="mt-1 w-full rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-white" /></label>
             <div className="flex items-end justify-end"><button type="button" disabled={comboContentBusy || form.components.filter((component) => component.product_id).length < 2} onClick={() => void generateComboContent(form.components, true)} className="inline-flex items-center gap-1.5 rounded-xl border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-[10px] font-black text-violet-300 disabled:opacity-30"><Sparkles className="h-3.5 w-3.5" />{comboContentBusy ? 'Generating…' : 'Regenerate Description + Specs'}</button></div>
 
-            <label className="text-xs font-bold text-neutral-300">Description (English)<textarea rows={5} value={form.description_en} onChange={(event) => { setManualEnglishContent(true); setForm((previous) => ({ ...previous, description_en: event.target.value })); }} placeholder="Auto-created from the selected single items. You can edit it manually." className="mt-1 w-full resize-y rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-white" /></label>
-            <label className="text-xs font-bold text-neutral-300">Description (Sinhala)<textarea rows={5} value={form.description_si} onChange={(event) => { setManualSinhalaContent(true); setForm((previous) => ({ ...previous, description_si: event.target.value })); }} placeholder="English description එකට ගැලපෙන Sinhala auto fill වෙයි." className="mt-1 w-full resize-y rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-white" /></label>
+            <label className="text-xs font-bold text-neutral-300">Description (English)<textarea rows={5} value={form.description_en} onChange={(event) => { markManualEnglishContent(); setForm((previous) => ({ ...previous, description_en: event.target.value })); }} placeholder="Auto-created from the selected single items. You can edit it manually." className="mt-1 w-full resize-y rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-white" /></label>
+            <label className="text-xs font-bold text-neutral-300">Description (Sinhala)<textarea rows={5} value={form.description_si} onChange={(event) => { markManualSinhalaContent(); setForm((previous) => ({ ...previous, description_si: event.target.value })); }} placeholder="English description එකට ගැලපෙන Sinhala auto fill වෙයි." className="mt-1 w-full resize-y rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-white" /></label>
             <div className="sm:col-span-2 rounded-xl border border-violet-500/20 bg-violet-500/5 px-3 py-2 text-[10px] leading-4 text-violet-200">
               Selected single items 2ක් හෝ වැඩි ගණනක් දාපු ගමන්, ඒ items වල English description / item details / measurements බලලා Combo එකට ගැලපෙන English description + useful specifications auto හදනවා. Sinhala එක ඒ generated English එකෙන්ම හදනවා. Manual edit කළාම auto overwrite වෙන්නේ නැහැ; නැවත හදන්න ඕන නම් Regenerate button එක use කරන්න.
             </div>
@@ -550,14 +568,14 @@ export const ComboPacksPanel: React.FC<ComboPacksPanelProps> = ({ initialEditId,
           <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div><p className="text-xs font-black text-violet-300">Combo Item Details / Specifications <span className="text-[9px] text-neutral-500">(Optional)</span></p><p className="mt-1 text-[10px] text-neutral-500">Useful details are auto-created only from the selected products. Empty details are never shown to customers.</p></div>
-              <button type="button" onClick={() => { setManualEnglishContent(true); setForm((previous) => ({ ...previous, item_details: [...previous.item_details, { id: `combo-custom-${Date.now()}-${Math.random().toString(36).slice(2,5)}`, label_en: '', value_en: '', label_si: '', value_si: '' }] })); }} className="rounded-lg border border-violet-500/30 bg-neutral-950 px-3 py-2 text-[10px] font-black text-violet-300"><Plus className="mr-1 inline h-3 w-3" />Custom Detail</button>
+              <button type="button" onClick={() => { markManualEnglishContent(); setForm((previous) => ({ ...previous, item_details: [...previous.item_details, { id: `combo-custom-${Date.now()}-${Math.random().toString(36).slice(2,5)}`, label_en: '', value_en: '', label_si: '', value_si: '' }] })); }} className="rounded-lg border border-violet-500/30 bg-neutral-950 px-3 py-2 text-[10px] font-black text-violet-300"><Plus className="mr-1 inline h-3 w-3" />Custom Detail</button>
             </div>
             {form.item_details.map((detail, index) => <div key={detail.id} className="grid grid-cols-1 gap-2 rounded-xl border border-neutral-800 bg-neutral-950/70 p-2.5 lg:grid-cols-[1fr_1.3fr_1fr_1.3fr_36px] lg:items-end">
-              <label className="text-[10px] text-neutral-400">Detail (English)<input value={detail.label_en} onChange={(event) => { setManualEnglishContent(true); const value=event.target.value; setForm((previous) => ({ ...previous, item_details: previous.item_details.map((row,rowIndex) => rowIndex===index ? { ...row, label_en:value } : row) })); }} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-white" /></label>
-              <label className="text-[10px] text-neutral-400">Value (English)<input value={detail.value_en} onChange={(event) => { setManualEnglishContent(true); const value=event.target.value; setForm((previous) => ({ ...previous, item_details: previous.item_details.map((row,rowIndex) => rowIndex===index ? { ...row, value_en:value } : row) })); }} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-white" /></label>
-              <label className="text-[10px] text-neutral-400">Detail (Sinhala)<input value={detail.label_si || ''} onChange={(event) => { setManualSinhalaContent(true); const value=event.target.value; setForm((previous) => ({ ...previous, item_details: previous.item_details.map((row,rowIndex) => rowIndex===index ? { ...row, label_si:value } : row) })); }} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-white" /></label>
-              <label className="text-[10px] text-neutral-400">Value (Sinhala)<input value={detail.value_si || ''} onChange={(event) => { setManualSinhalaContent(true); const value=event.target.value; setForm((previous) => ({ ...previous, item_details: previous.item_details.map((row,rowIndex) => rowIndex===index ? { ...row, value_si:value } : row) })); }} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-white" /></label>
-              <button type="button" onClick={() => { setManualEnglishContent(true); setForm((previous) => ({ ...previous, item_details: previous.item_details.filter((_, rowIndex) => rowIndex !== index) })); }} className="h-9 rounded-lg bg-red-950 text-red-300"><Trash2 className="mx-auto h-3.5 w-3.5" /></button>
+              <label className="text-[10px] text-neutral-400">Detail (English)<input value={detail.label_en} onChange={(event) => { markManualEnglishContent(); const value=event.target.value; setForm((previous) => ({ ...previous, item_details: previous.item_details.map((row,rowIndex) => rowIndex===index ? { ...row, label_en:value } : row) })); }} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-white" /></label>
+              <label className="text-[10px] text-neutral-400">Value (English)<input value={detail.value_en} onChange={(event) => { markManualEnglishContent(); const value=event.target.value; setForm((previous) => ({ ...previous, item_details: previous.item_details.map((row,rowIndex) => rowIndex===index ? { ...row, value_en:value } : row) })); }} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-white" /></label>
+              <label className="text-[10px] text-neutral-400">Detail (Sinhala)<input value={detail.label_si || ''} onChange={(event) => { markManualSinhalaContent(); const value=event.target.value; setForm((previous) => ({ ...previous, item_details: previous.item_details.map((row,rowIndex) => rowIndex===index ? { ...row, label_si:value } : row) })); }} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-white" /></label>
+              <label className="text-[10px] text-neutral-400">Value (Sinhala)<input value={detail.value_si || ''} onChange={(event) => { markManualSinhalaContent(); const value=event.target.value; setForm((previous) => ({ ...previous, item_details: previous.item_details.map((row,rowIndex) => rowIndex===index ? { ...row, value_si:value } : row) })); }} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-white" /></label>
+              <button type="button" onClick={() => { markManualEnglishContent(); setForm((previous) => ({ ...previous, item_details: previous.item_details.filter((_, rowIndex) => rowIndex !== index) })); }} className="h-9 rounded-lg bg-red-950 text-red-300"><Trash2 className="mx-auto h-3.5 w-3.5" /></button>
             </div>)}
             {!form.item_details.length && <p className="text-[10px] text-neutral-600">No Combo specifications yet. With 2+ selected items, they will auto-generate when source details are available.</p>}
           </div>
