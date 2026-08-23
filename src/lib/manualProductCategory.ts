@@ -21,13 +21,37 @@ const savedCategoryOptions = (select: HTMLSelectElement): CategoryOptionRow[] =>
     })
     .filter((row) => row.value && !/^Auto:\s*/i.test(row.fullText));
 
+const notifyReactSelectChange = (select: HTMLSelectElement) => {
+  // React keeps the current JSX handlers on the DOM node. Calling the select's
+  // own onChange handler makes the controlled productForm state update reliably,
+  // including when editing products that were saved before this manual-category UI.
+  const reactPropsKey = Object.keys(select).find((key) => key.startsWith('__reactProps$'));
+  const reactProps = reactPropsKey ? (select as any)[reactPropsKey] : undefined;
+  if (typeof reactProps?.onChange === 'function') {
+    reactProps.onChange({
+      target: select,
+      currentTarget: select,
+      type: 'change',
+      bubbles: true,
+      preventDefault() {},
+      stopPropagation() {},
+    });
+    return;
+  }
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+};
+
 const setReactSelectValue = (select: HTMLSelectElement, value: string) => {
-  if (select.value === value) return;
+  if (select.value === value) {
+    // Even when the visible select already has the requested value, make sure
+    // React's controlled state receives the manual selection before Save.
+    notifyReactSelectChange(select);
+    return;
+  }
   const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
   if (setter) setter.call(select, value);
   else select.value = value;
-  select.dispatchEvent(new Event('input', { bubbles: true }));
-  select.dispatchEvent(new Event('change', { bubbles: true }));
+  notifyReactSelectChange(select);
 };
 
 const enforceManualCategory = (section: HTMLElement, select: HTMLSelectElement) => {
@@ -99,6 +123,9 @@ const setCategoryMode = (
   if (current) {
     manualCategoryBySection.set(section, current.value);
     input.value = current.name;
+    // Push the existing category into React too. This is important in Edit mode
+    // because older products may have been loaded before the helper was installed.
+    setReactSelectValue(select, current.value);
     status.textContent = `MANUAL CATEGORY ON — locked: ${current.name}`;
     status.className = 'mt-1 text-[10px] font-bold text-amber-300';
   } else {
@@ -222,6 +249,7 @@ const installManualCategoryInput = (section: HTMLElement, select: HTMLSelectElem
     if (!current) return;
     manualCategoryBySection.set(section, current.value);
     input.value = current.name;
+    notifyReactSelectChange(select);
     status.textContent = `MANUAL CATEGORY ON — locked: ${current.name}`;
     status.className = 'mt-1 text-[10px] font-bold text-amber-300';
   });
