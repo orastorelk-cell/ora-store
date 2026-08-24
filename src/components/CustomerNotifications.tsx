@@ -84,7 +84,7 @@ export const CustomerNotifications: React.FC = () => {
   };
 
   return <>
-    <button type="button" onClick={openPanel} className="relative rounded-full border border-gray-200 bg-white p-2 text-gray-700 shadow-sm hover:border-orange-300 hover:text-orange-600" title="O-RA Notifications">
+    <button type="button" onClick={openPanel} className="relative rounded-full border border-gray-200 bg-white p-1.5 sm:p-2 text-gray-700 shadow-sm hover:border-orange-300 hover:text-orange-600" title="O-RA Notifications">
       {permission === 'granted' ? <BellRing className="h-4 w-4"/> : <Bell className="h-4 w-4"/>}
       {unread > 0 && <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-orange-600 px-1 text-center text-[9px] font-black leading-4 text-white">{Math.min(99, unread)}</span>}
     </button>

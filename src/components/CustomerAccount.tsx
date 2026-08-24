@@ -139,7 +139,7 @@ export const CustomerAccountButton: React.FC = () => {
       <button
         type="button"
         onClick={() => (session ? setOpen(true) : signIn())}
-        className="sm:hidden p-2 rounded-full bg-gray-100 text-gray-700"
+        className="sm:hidden p-1.5 rounded-full bg-gray-100 text-gray-700"
         aria-label={session ? 'My Profile' : 'Google Sign In'}
       >
         {session ? <UserCircle2 className="w-4 h-4" /> : <LogIn className="w-4 h-4" />}

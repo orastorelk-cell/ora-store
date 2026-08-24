@@ -148,27 +148,27 @@ export const Header: React.FC = () => {
       )}
 
       {/* Main Header Container */}
-      <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 py-3">
-        <div className="flex items-center justify-between gap-2 sm:gap-4">
+      <div className="w-full max-w-[1600px] mx-auto px-2.5 sm:px-6 lg:px-8 2xl:px-10 py-3">
+        <div className="ora-mobile-header-row flex min-w-0 items-center justify-between gap-1 sm:gap-4">
           {/* Brand Logo & Name */}
-          <div className="flex items-center space-x-3 shrink-0">
+          <div className="flex min-w-0 items-center space-x-3 shrink-0">
             <button
               onClick={() => {
                 setIsAdminView(false);
                 goTo('/');
               }}
-              className="flex items-center space-x-3 group text-left shrink-0"
+              className="flex min-w-0 items-center space-x-3 group text-left shrink-0"
             >
               {(settings.mobile_logo || settings.website_logo) ? (
                 <>
                   <img
                     src={settings.mobile_logo || settings.website_logo}
                     alt={settings.brand_store_name || 'O-RA'}
-                    className="sm:hidden object-contain object-left shrink-0"
+                    className="ora-mobile-header-logo sm:hidden object-contain object-left shrink-0"
                     style={{
                       width: `${Math.max(80, Math.min(180, Number(settings.mobile_logo_width || 130)))}px`,
-                      maxWidth: '46vw',
-                      minWidth: `${Math.min(120, Math.max(80, Number(settings.mobile_logo_width || 130)))}px`,
+                      maxWidth: '32vw',
+                      minWidth: 0,
                       flexShrink: 0,
                       maxHeight: `${Math.max(32, Math.min(64, Number(settings.mobile_logo_max_height || 52)))}px`,
                       height: 'auto',
@@ -245,7 +245,7 @@ export const Header: React.FC = () => {
           </div>
 
           {/* Right Controls */}
-          <div className="flex items-center space-x-1 sm:space-x-3 shrink-0">
+          <div className="ora-mobile-header-controls flex min-w-0 items-center space-x-0.5 sm:space-x-3 shrink-0">
             <div className="hidden lg:block"><InstallAppButton /></div>
             <div className="lg:hidden"><InstallAppButton compact /></div>
             <CustomerAccountButton />
@@ -253,10 +253,10 @@ export const Header: React.FC = () => {
             {/* Language Switcher */}
             <button
               onClick={() => setLanguage(language === 'en' ? 'si' : 'en')}
-              className="flex items-center space-x-1 px-3 py-1.5 rounded-full bg-gray-100 text-xs font-bold text-gray-600 hover:text-black transition-colors"
+              className="flex items-center px-2 py-1.5 sm:space-x-1 sm:px-3 rounded-full bg-gray-100 text-xs font-bold text-gray-600 hover:text-black transition-colors"
               title="Switch Language"
             >
-              <Globe className="w-3.5 h-3.5 text-gray-400" />
+              <Globe className="hidden sm:block w-3.5 h-3.5 text-gray-400" />
               <span><span className={language === 'en' ? 'text-black' : ''}>EN</span> / <span className={language === 'si' ? 'text-black' : ''}>සිං</span></span>
             </button>
 
@@ -326,7 +326,7 @@ export const Header: React.FC = () => {
             {/* Mobile basket stays icon-only */}
             <button
               onClick={() => setIsCartOpen(true)}
-              className={`relative sm:hidden p-2.5 rounded-full border transition-all duration-200 ${
+              className={`relative sm:hidden p-2 rounded-full border transition-all duration-200 ${
                 cartItemCount > 0
                   ? 'bg-orange-600 border-orange-600 text-white shadow-lg shadow-orange-200 ring-2 ring-orange-100'
                   : 'bg-orange-50 border-orange-200 text-orange-600 shadow-sm'

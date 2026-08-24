@@ -1,5 +1,32 @@
 @import "tailwindcss";
 
+/* Keep the customer storefront locked to the visible viewport. Narrow phone
+   headers must never widen the document and leave a blank strip at the side. */
+.ora-storefront {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+/* Extremely narrow viewports get a second controls row instead of forcing the
+   page wider. This keeps every action available without device-name rules. */
+@media (max-width: 359px) {
+  .ora-mobile-header-row {
+    flex-wrap: wrap;
+  }
+
+  .ora-mobile-header-controls {
+    width: 100%;
+    flex-basis: 100%;
+    justify-content: space-between;
+    margin-top: 0.5rem;
+  }
+
+  .ora-mobile-header-logo {
+    max-width: 42vw !important;
+  }
+}
+
 /* O-RA storefront readability tune: desktop text was visually too small at 100% browser zoom.
    Keep Admin/System untouched and preserve mobile density. */
 @media (min-width: 768px) {
