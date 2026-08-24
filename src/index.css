@@ -8,6 +8,117 @@
   overflow-x: clip;
 }
 
+/* Compact mobile storefront density. This is based only on the available CSS
+   viewport, so it stays consistent across Android/iPhone display-density
+   settings without scaling the page or interfering with pinch zoom. */
+@media (max-width: 639px) {
+  .ora-storefront {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .ora-storefront svg {
+    shape-rendering: geometricPrecision;
+  }
+
+  .ora-store-main {
+    padding-top: clamp(1rem, 4vw, 1.5rem);
+    padding-right: clamp(0.5rem, 2.5vw, 0.75rem);
+    padding-left: clamp(0.5rem, 2.5vw, 0.75rem);
+  }
+
+  .ora-store-main > :not([hidden]) ~ :not([hidden]) {
+    margin-top: clamp(1.5rem, 6vw, 2.5rem);
+  }
+
+  .ora-product-grid {
+    gap: clamp(0.45rem, 2vw, 0.75rem);
+  }
+
+  .ora-product-card {
+    min-width: 0;
+    padding: clamp(0.5rem, 2.2vw, 0.75rem);
+    border-radius: clamp(0.75rem, 3.5vw, 1rem);
+  }
+
+  .ora-product-card-image {
+    margin-bottom: clamp(0.4rem, 1.8vw, 0.625rem);
+    border-radius: clamp(0.625rem, 3vw, 0.75rem);
+  }
+
+  .ora-product-card-content > :not([hidden]) ~ :not([hidden]) {
+    margin-top: clamp(0.2rem, 1vw, 0.375rem);
+  }
+
+  .ora-product-card-category {
+    font-size: clamp(0.5rem, 2.25vw, 0.5625rem);
+    letter-spacing: 0.04em;
+    line-height: 1.2;
+  }
+
+  .ora-product-card-title {
+    font-size: clamp(0.66rem, 3vw, 0.75rem);
+    line-height: 1.35;
+  }
+
+  .ora-product-card-regular-price {
+    font-size: clamp(0.625rem, 2.7vw, 0.75rem);
+    line-height: 1.2;
+  }
+
+  .ora-product-card-price {
+    display: block;
+    font-size: clamp(0.9rem, 4.15vw, 1.125rem);
+    line-height: 1.25;
+  }
+
+  .ora-product-card-discount {
+    top: clamp(0.35rem, 1.8vw, 0.5rem);
+    left: clamp(0.35rem, 1.8vw, 0.5rem);
+    padding: clamp(0.25rem, 1.2vw, 0.375rem) clamp(0.4rem, 1.8vw, 0.625rem);
+    border-radius: 0.625rem;
+    font-size: clamp(0.55rem, 2.35vw, 0.75rem);
+    line-height: 1;
+  }
+
+  .ora-product-card-sku {
+    top: clamp(0.35rem, 1.8vw, 0.5rem);
+    right: clamp(0.35rem, 1.8vw, 0.5rem);
+    max-width: 56%;
+    overflow: hidden;
+    padding-right: clamp(0.3rem, 1.4vw, 0.5rem);
+    padding-left: clamp(0.3rem, 1.4vw, 0.5rem);
+    font-size: clamp(0.48rem, 2.1vw, 0.5625rem);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ora-product-card-actions {
+    grid-template-columns: minmax(0, 1.14fr) minmax(0, 0.86fr);
+    gap: clamp(0.2rem, 1vw, 0.5rem);
+    margin-top: clamp(0.45rem, 2vw, 0.75rem);
+  }
+
+  .ora-product-card-action {
+    min-height: clamp(2rem, 9vw, 2.25rem);
+    gap: clamp(0.1rem, 0.6vw, 0.25rem);
+    padding: 0.35rem clamp(0.1rem, 0.7vw, 0.25rem);
+    border-radius: clamp(0.55rem, 2.5vw, 0.75rem);
+    font-size: clamp(0.5rem, 2.45vw, 0.6875rem);
+    line-height: 1;
+    letter-spacing: -0.015em;
+  }
+
+  .ora-product-card-action-icon {
+    width: clamp(0.68rem, 3vw, 0.875rem);
+    height: clamp(0.68rem, 3vw, 0.875rem);
+  }
+
+  .ora-product-card-action-label {
+    min-width: 0;
+  }
+}
+
 /* Extremely narrow viewports get a second controls row instead of forcing the
    page wider. This keeps every action available without device-name rules. */
 @media (max-width: 359px) {

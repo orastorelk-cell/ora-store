@@ -53,9 +53,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
   return (
     <div
       onClick={() => setSelectedProduct(product)}
-      className="group self-start bg-white border border-gray-100 hover:border-gray-200 rounded-2xl p-3 cursor-pointer hover:shadow-md transition-all duration-300"
+      className="ora-product-card group self-start bg-white border border-gray-100 hover:border-gray-200 rounded-2xl p-3 cursor-pointer hover:shadow-md transition-all duration-300"
     >
-      <div className="relative aspect-square overflow-hidden bg-gray-50 rounded-xl mb-2.5">
+      <div className="ora-product-card-image relative aspect-square overflow-hidden bg-gray-50 rounded-xl mb-2.5">
         {primaryImage ? (
           <img
             src={primaryImage}
@@ -71,12 +71,12 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
         )}
 
         {hasDiscount && (
-          <div className="absolute top-2 left-2 bg-orange-600 text-white text-xs sm:text-sm font-black px-2.5 py-1.5 rounded-xl shadow-lg">
+          <div className="ora-product-card-discount absolute top-2 left-2 bg-orange-600 text-white text-xs sm:text-sm font-black px-2.5 py-1.5 rounded-xl shadow-lg">
             {type === 'variant' ? `UP TO ${discountPercent}% OFF` : `${discountPercent}% OFF`}
           </div>
         )}
 
-        <div className="absolute top-2 right-2 bg-white/90 backdrop-blur-md text-gray-500 text-[9px] font-mono px-2 py-0.5 rounded-md border border-gray-200">
+        <div className="ora-product-card-sku absolute top-2 right-2 bg-white/90 backdrop-blur-md text-gray-500 text-[9px] font-mono px-2 py-0.5 rounded-md border border-gray-200">
           {product.sku}
         </div>
 
@@ -88,40 +88,40 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
         </div>
       </div>
 
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-end text-[10px]">
-          <span className="text-gray-400 uppercase text-[9px] font-bold tracking-wider">{type === 'bundle' ? 'Combo Pack' : product.category_slug}</span>
+      <div className="ora-product-card-content space-y-1.5">
+        <div className="flex min-w-0 items-center justify-end text-[10px]">
+          <span className="ora-product-card-category max-w-full truncate text-gray-400 uppercase text-[9px] font-bold tracking-wider">{type === 'bundle' ? 'Combo Pack' : product.category_slug}</span>
         </div>
 
-        <h3 className="text-xs sm:text-sm font-bold leading-5 text-gray-900 line-clamp-2 group-hover:text-orange-600 transition-colors">
+        <h3 className="ora-product-card-title text-xs sm:text-sm font-bold leading-5 text-gray-900 line-clamp-2 group-hover:text-orange-600 transition-colors">
           {language === 'si' && product.name_si ? product.name_si : product.name_en}
         </h3>
 
         <div>
           {hasDiscount && type !== 'variant' && (
-            <div className="text-xs sm:text-sm text-gray-400 line-through font-bold">Rs. {formatLkr(regularPrice)}</div>
+            <div className="ora-product-card-regular-price text-xs sm:text-sm text-gray-400 line-through font-bold">Rs. {formatLkr(regularPrice)}</div>
           )}
-          <span className="text-base sm:text-lg font-black text-orange-600">
+          <span className="ora-product-card-price text-base sm:text-lg font-black text-orange-600">
             {range.min === range.max ? `Rs. ${formatLkr(range.min)}` : `Rs. ${formatLkr(range.min)} - ${formatLkr(range.max)}`}
           </span>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 mt-3">
+      <div className="ora-product-card-actions grid grid-cols-2 gap-2 mt-3">
         <button
           onClick={handleAddToCart}
-          className="py-2 px-1.5 rounded-xl bg-orange-50 hover:bg-orange-100 text-orange-700 text-[11px] sm:text-xs font-black flex items-center justify-center space-x-1 border border-orange-200 transition-colors"
+          className="ora-product-card-action min-w-0 py-2 px-1.5 rounded-xl bg-orange-50 hover:bg-orange-100 text-orange-700 text-[11px] sm:text-xs font-black flex items-center justify-center gap-1 border border-orange-200 transition-colors"
         >
-          <ShoppingBag className="w-3.5 h-3.5 text-orange-600 shrink-0" />
-          <span>{needsSelection ? 'Choose Option' : 'Add to Cart'}</span>
+          <ShoppingBag className="ora-product-card-action-icon w-3.5 h-3.5 text-orange-600 shrink-0" />
+          <span className="ora-product-card-action-label whitespace-nowrap">{needsSelection ? 'Choose Option' : 'Add to Cart'}</span>
         </button>
 
         <button
           onClick={handleBuyNow}
-          className="py-2 px-2 rounded-xl bg-black hover:bg-orange-600 text-white text-xs font-bold flex items-center justify-center space-x-1 shadow-xs transition-colors"
+          className="ora-product-card-action min-w-0 py-2 px-2 rounded-xl bg-black hover:bg-orange-600 text-white text-xs font-bold flex items-center justify-center gap-1 shadow-xs transition-colors"
         >
-          <Zap className="w-3.5 h-3.5 fill-current text-orange-400" />
-          <span>{needsSelection ? 'Choose' : 'Buy Now'}</span>
+          <Zap className="ora-product-card-action-icon w-3.5 h-3.5 shrink-0 fill-current text-orange-400" />
+          <span className="ora-product-card-action-label whitespace-nowrap">{needsSelection ? 'Choose' : 'Buy Now'}</span>
         </button>
       </div>
     </div>
