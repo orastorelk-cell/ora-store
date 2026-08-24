@@ -1,4 +1,4 @@
-const CACHE = 'ora-store-shell-v4';
+const CACHE = 'ora-store-shell-v5';
 const SHELL = ['/', '/manifest.webmanifest', '/icons/ora-192.png', '/icons/ora-512.png'];
 
 self.addEventListener('install', (event) => {
@@ -85,11 +85,15 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const target = event.notification?.data?.url || '/';
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (clients) => {
       for (const client of clients) {
         if ('focus' in client) {
-          try { client.navigate(target); } catch {}
-          return client.focus();
+          try {
+            const navigated = 'navigate' in client ? await client.navigate(target) : client;
+            return (navigated || client).focus();
+          } catch {
+            return self.clients.openWindow ? self.clients.openWindow(target) : client.focus();
+          }
         }
       }
       return self.clients.openWindow ? self.clients.openWindow(target) : undefined;

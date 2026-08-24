@@ -35,6 +35,7 @@ const CustomerStorefront: React.FC = () => {
     loginAdmin,
     staffUsers,
     settings,
+    setSelectedProduct,
   } = useStore();
   const [storePath, setStorePath] = React.useState(() => window.location.pathname.replace(/\/+$/,'') || '/');
 
@@ -43,6 +44,23 @@ const CustomerStorefront: React.FC = () => {
     window.addEventListener('popstate', onPath);
     return () => window.removeEventListener('popstate', onPath);
   }, []);
+
+  // Customer-notification deep link. Wait until the shared catalog contains the
+  // exact product, then clear the one-shot query before opening the existing
+  // Product Details modal so closing it returns to the normal storefront.
+  React.useEffect(() => {
+    if (isAdminView || storePath !== '/') return;
+    const params = new URLSearchParams(window.location.search);
+    const productId = String(params.get('product') || '').trim();
+    if (!productId) return;
+    const product = products.find((row) => row.id === productId && row.status !== 'Draft');
+    if (!product) return;
+    params.delete('product');
+    const query = params.toString();
+    const cleanUrl = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`;
+    window.history.replaceState(window.history.state, '', cleanUrl);
+    setSelectedProduct(product);
+  }, [isAdminView, products, setSelectedProduct, storePath]);
 
   React.useEffect(() => {
     document.title = isAdminView && adminUser ? 'O-RA Store System Manager' : 'O-RA Online Store';

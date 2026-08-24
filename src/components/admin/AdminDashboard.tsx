@@ -1631,25 +1631,29 @@ export const AdminDashboard: React.FC = () => {
     };
 
     const wasEditing = Boolean(editingProduct);
+    let savedProductId = '';
     if (editingProduct) {
-      updateProduct({
+      const updatedProduct = {
         ...editingProduct,
         ...finalProductForm,
         category_id: matchedCat.id,
-      });
+      };
+      updateProduct(updatedProduct);
+      savedProductId = updatedProduct.id;
       setEditingProduct(null);
     } else {
-      addProduct({
+      const addedProduct = addProduct({
         ...finalProductForm,
         category_id: matchedCat.id,
       });
+      savedProductId = addedProduct.id;
     }
 
     if (notifyCustomersOnProductSave && (adminUser?.role === 'admin' || adminUser?.permissions?.includes('notifications'))) {
       try {
         const token = localStorage.getItem('ora_staff_session_token') || '';
         const displayPrice = Number(finalProductForm.discount_enabled && Number(finalProductForm.discount_price || 0) > 0 && Number(finalProductForm.discount_price || 0) < Number(finalProductForm.selling_price || 0) ? finalProductForm.discount_price : finalProductForm.selling_price) + (settings.free_delivery_enabled ? Math.max(0, Number(settings.delivery_fee || 0)) : 0);
-        const response = await fetch('/api/admin/customer-notifications', { method:'POST', headers:{'Content-Type':'application/json', ...(token ? {Authorization:`Bearer ${token}`} : {})}, body:JSON.stringify({ title:`${wasEditing ? 'Product Update' : 'New Product'}: ${finalProductForm.name_en}`, body:`Now available at O-RA for Rs. ${displayPrice.toLocaleString()}.`, url:'/', image:finalProductForm.images?.[0] || '' }) });
+        const response = await fetch('/api/admin/customer-notifications', { method:'POST', headers:{'Content-Type':'application/json', ...(token ? {Authorization:`Bearer ${token}`} : {})}, body:JSON.stringify({ title:`${wasEditing ? 'Product Update' : 'New Product'}: ${finalProductForm.name_en}`, body:`Now available at O-RA for Rs. ${displayPrice.toLocaleString()}.`, url:savedProductId ? `/?product=${encodeURIComponent(savedProductId)}` : '/', image:finalProductForm.images?.[0] || '' }) });
         if (!response.ok) { const data=await response.json().catch(()=>({})); throw new Error(data?.error || 'Notification failed.'); }
       } catch (notifyError:any) {
         alert(`Product saved, but notification failed: ${notifyError?.message || 'Unknown error'}`);
