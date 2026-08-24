@@ -7,7 +7,8 @@
   "vars": {
     "CLOUDFLARE_WORKERS": "1",
     "VITE_SUPABASE_URL": "https://xoipahpyxatdafhqkzcr.supabase.co",
-    "VITE_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_ytRHrbqljOuGSAvWWlWIeg_5ZRXJWBL"
+    "VITE_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_ytRHrbqljOuGSAvWWlWIeg_5ZRXJWBL",
+    "WEB_PUSH_VAPID_SUBJECT": "https://orastore.com.lk"
   },
   "ai": {
     "binding": "AI"

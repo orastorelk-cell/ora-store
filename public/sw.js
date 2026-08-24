@@ -1,4 +1,4 @@
-const CACHE = 'ora-store-shell-v2';
+const CACHE = 'ora-store-shell-v3';
 const SHELL = ['/', '/manifest.webmanifest', '/icons/ora-192.png', '/icons/ora-512.png'];
 
 self.addEventListener('install', (event) => {
@@ -43,6 +43,32 @@ self.addEventListener('fetch', (event) => {
       return cached || network;
     })
   );
+});
+
+self.addEventListener('push', (event) => {
+  event.waitUntil((async () => {
+    let payload = {};
+    try {
+      payload = event.data ? event.data.json() : {};
+    } catch {
+      payload = { body: event.data ? event.data.text() : 'A new O-RA Store update is available.' };
+    }
+    const title = String(payload.title || 'O-RA Store');
+    const body = String(payload.body || 'A new store update is available.');
+    const rawTarget = String(payload.url || '/');
+    let target = '/';
+    try {
+      const url = new URL(rawTarget, self.location.origin);
+      if (url.protocol === 'https:' || url.origin === self.location.origin) target = url.href;
+    } catch {}
+    await self.registration.showNotification(title, {
+      body,
+      icon: payload.icon || '/icons/ora-192.png',
+      badge: payload.badge || '/icons/ora-192.png',
+      tag: payload.tag || 'ora-store-update',
+      data: { url: target },
+    });
+  })());
 });
 
 

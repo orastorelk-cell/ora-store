@@ -1192,10 +1192,10 @@ app.get('/api/admin/analytics', requireStaffPermission('overview'), async (_req,
 
 
 // -----------------------------------------------------------------------------
-// Customer notification feed. Free/no third-party push service required.
-// Customers can opt into browser notifications; the storefront polls this small
-// shared feed while the website/PWA is active and mirrors new rows as browser
-// notifications. Notification history is also visible inside the storefront.
+// Customer notification feed + standards-based Web Push.
+// The shared feed/history and active-tab polling remain the guaranteed fallback.
+// Web Push is an optional delivery layer so a bad/expired device subscription can
+// never prevent an admin notification from being saved or shown in the website.
 // -----------------------------------------------------------------------------
 const compactCustomerNotifications = (rows: any[]) => (Array.isArray(rows) ? rows : [])
   .map((row:any)=>({
@@ -1209,6 +1209,169 @@ const compactCustomerNotifications = (rows: any[]) => (Array.isArray(rows) ? row
   .filter((row:any)=>row.id && row.title && row.body)
   .sort((a:any,b:any)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime())
   .slice(0,200);
+
+type StoredCustomerPushSubscription = {
+  endpoint: string;
+  expirationTime: number | null;
+  keys: { auth: string; p256dh: string };
+  created_at: string;
+  updated_at: string;
+};
+
+const customerPushSubscriptionsKey = 'customer-push-subscriptions';
+const pushKeyPattern = /^[A-Za-z0-9_-]+={0,2}$/;
+
+const allowedPushEndpoint = (value: unknown) => {
+  const endpoint = String(value || '').trim();
+  if (!endpoint || endpoint.length > 2048) return '';
+  try {
+    const url = new URL(endpoint);
+    if (url.protocol !== 'https:' || url.username || url.password || url.port) return '';
+    const host = url.hostname.toLowerCase();
+    const trusted = host === 'fcm.googleapis.com'
+      || host === 'android.googleapis.com'
+      || host === 'push.services.mozilla.com'
+      || host.endsWith('.push.services.mozilla.com')
+      || host === 'web.push.apple.com'
+      || host.endsWith('.push.apple.com')
+      || host.endsWith('.notify.windows.com');
+    return trusted ? url.href : '';
+  } catch { return ''; }
+};
+
+const compactCustomerPushSubscriptions = (rows: any[]): StoredCustomerPushSubscription[] => {
+  const now = Date.now();
+  const seen = new Set<string>();
+  const compacted: StoredCustomerPushSubscription[] = [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const endpoint = allowedPushEndpoint(row?.endpoint);
+    const auth = String(row?.keys?.auth || '').trim();
+    const p256dh = String(row?.keys?.p256dh || '').trim();
+    const expirationValue = row?.expirationTime;
+    const expirationTime = expirationValue == null ? null : (Number.isFinite(Number(expirationValue)) ? Number(expirationValue) : null);
+    if (!endpoint || seen.has(endpoint) || auth.length < 8 || auth.length > 160 || p256dh.length < 40 || p256dh.length > 220) continue;
+    if (!pushKeyPattern.test(auth) || !pushKeyPattern.test(p256dh) || (expirationTime !== null && expirationTime <= now)) continue;
+    seen.add(endpoint);
+    compacted.push({
+      endpoint,
+      expirationTime,
+      keys: { auth, p256dh },
+      created_at: String(row?.created_at || new Date().toISOString()),
+      updated_at: String(row?.updated_at || row?.created_at || new Date().toISOString()),
+    });
+    if (compacted.length >= 500) break;
+  }
+  return compacted;
+};
+
+const base64UrlBuffer = (value: Buffer) => value.toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+
+const webPushConfig = () => {
+  const explicitPublic = String(process.env.WEB_PUSH_VAPID_PUBLIC_KEY || '').trim();
+  const explicitPrivate = String(process.env.WEB_PUSH_VAPID_PRIVATE_KEY || '').trim();
+  const subject = String(process.env.WEB_PUSH_VAPID_SUBJECT || 'https://orastore.com.lk').trim();
+  if (explicitPublic && explicitPrivate) return { publicKey:explicitPublic, privateKey:explicitPrivate, subject };
+
+  // The live Worker already has a strong server-only secret for staff sessions or
+  // Supabase. HMAC domain separation deterministically derives an independent
+  // VAPID key without putting another private key in source/config/database.
+  const serverSeed = String(process.env.STAFF_SESSION_SECRET || process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  if (serverSeed.length < 32) return { publicKey:'', privateKey:'', subject };
+  const digest = crypto.createHmac('sha256', serverSeed).update('ora-store:web-push:v1').digest();
+  const p256Order = BigInt('0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551');
+  const scalarNumber = (BigInt(`0x${digest.toString('hex')}`) % (p256Order - 1n)) + 1n;
+  const privateBytes = Buffer.from(scalarNumber.toString(16).padStart(64,'0'),'hex');
+  const ecdh = crypto.createECDH('prime256v1');
+  ecdh.setPrivateKey(privateBytes);
+  return {
+    publicKey:base64UrlBuffer(ecdh.getPublicKey(undefined,'uncompressed')),
+    privateKey:base64UrlBuffer(privateBytes),
+    subject,
+  };
+};
+
+const webPushConfigured = () => {
+  const config = webPushConfig();
+  return config.publicKey.length >= 80 && config.privateKey.length >= 40 && /^(mailto:|https:\/\/)/i.test(config.subject);
+};
+
+const dispatchCustomerWebPush = async (notification: { id:string; title:string; body:string; url:string }) => {
+  if (!webPushConfigured()) return { configured:false, sent:0, removed:0 };
+  const subscriptions = compactCustomerPushSubscriptions(await getSharedAdminPayload(customerPushSubscriptionsKey));
+  if (!subscriptions.length) return { configured:true, sent:0, removed:0 };
+
+  const vapid = webPushConfig();
+  const webPushModule:any = await import('web-push');
+  const webPush:any = webPushModule.default || webPushModule;
+  webPush.setVapidDetails(vapid.subject, vapid.publicKey, vapid.privateKey);
+  const dead = new Set<string>();
+  let sent = 0;
+
+  // Small batches keep Worker CPU/network pressure bounded when many devices are subscribed.
+  for (let offset = 0; offset < subscriptions.length; offset += 10) {
+    const batch = subscriptions.slice(offset, offset + 10);
+    await Promise.all(batch.map(async (subscription) => {
+      try {
+        await webPush.sendNotification(subscription, JSON.stringify({
+            title: notification.title,
+            body: notification.body,
+            url: notification.url || '/',
+            tag: notification.id,
+            icon: '/icons/ora-192.png',
+            badge: '/icons/ora-192.png',
+        }), { TTL:86400, urgency:'normal' });
+        sent += 1;
+      } catch (error:any) {
+        if (error?.statusCode === 404 || error?.statusCode === 410) dead.add(subscription.endpoint);
+        else console.warn('Customer Web Push delivery failed:', error?.message || error);
+      }
+    }));
+  }
+
+  if (dead.size) {
+    await saveSharedAdminPayload(customerPushSubscriptionsKey, subscriptions.filter((row)=>!dead.has(row.endpoint)));
+  }
+  return { configured:true, sent, removed:dead.size };
+};
+
+app.get('/api/push/config', (_req,res) => {
+  const config = webPushConfig();
+  return res.set('cache-control','no-store').json({ supported:webPushConfigured(), publicKey:webPushConfigured() ? config.publicKey : '' });
+});
+
+app.post('/api/push/subscribe', async (req,res) => {
+  if (!allowPublicSubmission(req, 'push-subscribe', 30, 60 * 60 * 1000)) return res.status(429).json({ error:'Too many notification requests. Please try again later.' });
+  if (!webPushConfigured()) return res.status(503).json({ error:'Background notifications are not configured yet.' });
+  const endpoint = allowedPushEndpoint(req.body?.endpoint);
+  const auth = String(req.body?.keys?.auth || '').trim();
+  const p256dh = String(req.body?.keys?.p256dh || '').trim();
+  if (!endpoint || auth.length < 8 || auth.length > 160 || p256dh.length < 40 || p256dh.length > 220 || !pushKeyPattern.test(auth) || !pushKeyPattern.test(p256dh)) {
+    return res.status(400).json({ error:'Invalid browser push subscription.' });
+  }
+  const rows = compactCustomerPushSubscriptions(await getSharedAdminPayload(customerPushSubscriptionsKey));
+  const current = rows.find((row)=>row.endpoint===endpoint);
+  const now = new Date().toISOString();
+  const expirationValue = req.body?.expirationTime;
+  const expirationTime = expirationValue == null ? null : (Number.isFinite(Number(expirationValue)) ? Number(expirationValue) : null);
+  const next: StoredCustomerPushSubscription = {
+    endpoint,
+    expirationTime,
+    keys:{ auth, p256dh },
+    created_at:current?.created_at || now,
+    updated_at:now,
+  };
+  await saveSharedAdminPayload(customerPushSubscriptionsKey, [next,...rows.filter((row)=>row.endpoint!==endpoint)]);
+  return res.json({ ok:true, background:true });
+});
+
+app.delete('/api/push/subscribe', async (req,res) => {
+  if (!allowPublicSubmission(req, 'push-unsubscribe', 30, 60 * 60 * 1000)) return res.status(429).json({ error:'Too many notification requests. Please try again later.' });
+  const endpoint = String(req.body?.endpoint || '').trim().slice(0,2048);
+  if (!endpoint) return res.status(400).json({ error:'Notification subscription is missing.' });
+  const rows = compactCustomerPushSubscriptions(await getSharedAdminPayload(customerPushSubscriptionsKey));
+  await saveSharedAdminPayload(customerPushSubscriptionsKey, rows.filter((row)=>row.endpoint!==endpoint));
+  return res.json({ ok:true });
+});
 
 app.get('/api/customer-notifications', async (_req,res) => {
   const rows = compactCustomerNotifications(await getSharedAdminPayload('customer-notifications'));
@@ -1230,7 +1393,11 @@ app.post('/api/admin/customer-notifications', requireStaffPermission('notificati
     const user=(req as any).staffSessionUser as ServerStaffAccount | undefined;
     const notification={ id:`ntf-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`, title, body, url, created_at:new Date().toISOString(), created_by:user?.username||'admin' };
     await saveSharedAdminPayload('customer-notifications',[notification,...rows].slice(0,200));
-    return res.json({ok:true,notification});
+    const pushTask = dispatchCustomerWebPush(notification).catch((error:any)=>console.warn('Customer Web Push dispatch failed:',error?.message||error));
+    const waitUntil=(globalThis as any).__ORA_WAIT_UNTIL__;
+    if(typeof waitUntil==='function') waitUntil(pushTask);
+    else void pushTask;
+    return res.json({ok:true,notification,push:{queued:webPushConfigured()}});
   } catch(e:any){ return res.status(500).json({error:e?.message||'Notification could not be published.'}); }
 });
 
