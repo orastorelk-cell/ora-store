@@ -3,6 +3,7 @@ import { StoreProvider, useStore } from './context/StoreContext';
 import { Header } from './components/Header';
 import { HeroBanner } from './components/HeroBanner';
 import { ProductCard } from './components/ProductCard';
+import { CatalogPriceRange, CatalogSortMode, ProductFilterBar } from './components/ProductFilterBar';
 import { CartDrawer } from './components/CartDrawer';
 import { CheckoutModal } from './components/CheckoutModal';
 import { ProductDetailModal } from './components/ProductDetailModal';
@@ -105,8 +106,19 @@ const CustomerStorefront: React.FC = () => {
 
   const PAGE_SIZE = 24;
   const [visibleCount, setVisibleCount] = React.useState(PAGE_SIZE);
-  const [sortMode, setSortMode] = React.useState<'relevance' | 'newest' | 'price-low' | 'price-high'>('relevance');
-  const [priceRange, setPriceRange] = React.useState<'all' | '100-500' | '500-1000' | '1000-2000' | '2000-3500' | '3500-5000' | '5000-plus'>('all');
+  const [sortMode, setSortMode] = React.useState<CatalogSortMode>('relevance');
+  const [priceRange, setPriceRange] = React.useState<CatalogPriceRange>('all');
+
+  const resetCatalogFilters = React.useCallback((scrollToProducts = false) => {
+    setSelectedCategorySlug(null);
+    setSearchQuery('');
+    setPriceRange('all');
+    setSortMode('relevance');
+    setVisibleCount(PAGE_SIZE);
+    if (scrollToProducts) {
+      window.setTimeout(() => document.getElementById('products-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+    }
+  }, [setSearchQuery, setSelectedCategorySlug]);
 
   // Static footer SHOP links stay useful even while admin-created product categories grow.
   React.useEffect(() => {
@@ -194,6 +206,27 @@ const CustomerStorefront: React.FC = () => {
   const visibleProducts = filteredProducts.slice(0, visibleCount);
   const hasMoreProducts = visibleCount < filteredProducts.length;
 
+  const categoryFilterOptions = React.useMemo(() => {
+    const rows = categories
+      .filter((category) => category.slug !== 'combo-pack')
+      .map((category) => ({
+        slug: category.slug,
+        label: language === 'si' ? category.name_si : category.name_en,
+        icon: category.icon,
+        count: products.filter((product) => normalizedProductType(product) !== 'bundle' && product.category_slug === category.slug).length,
+      }))
+      .filter((category) => category.count > 0);
+    const comboCount = products.filter((product) => normalizedProductType(product) === 'bundle').length;
+    return [
+      { slug: null, label: getTranslation(language, 'allCategories'), icon: '✦', count: products.length },
+      ...rows,
+      ...(comboCount > 0 ? [{ slug: 'combo-pack', label: 'Combo Pack', icon: '🎁', count: comboCount }] : []),
+    ];
+  }, [categories, language, products]);
+
+  const selectedCategoryLabel = categoryFilterOptions.find((option) => option.slug === selectedCategorySlug)?.label;
+  const hasActiveCatalogFilters = Boolean(selectedCategorySlug || searchQuery.trim() || priceRange !== 'all' || sortMode !== 'relevance');
+
   const discountProducts = products.filter((p) => {
     const discounted = normalizedProductType(p) === 'variant'
       ? activeVariants(p).some((v) => v.discount_enabled !== false && Number(v.discount_price || 0) > 0 && Number(v.discount_price || 0) < Number(v.selling_price || 0))
@@ -257,8 +290,8 @@ const CustomerStorefront: React.FC = () => {
 
       {/* Main Container */}
       <main className="ora-store-main max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 pt-6 space-y-10">
-        {/* Hero Section & Popular Categories Bento Showcase */}
-        <HeroBanner />
+        {/* Hero Section */}
+        <HeroBanner onBrowseAll={() => resetCatalogFilters(true)} />
 
         {/* Flash Deals / Discount Products Section (If no active category filter) */}
         {!selectedCategorySlug && !searchQuery && discountProducts.length > 0 && (
@@ -280,46 +313,31 @@ const CustomerStorefront: React.FC = () => {
 
         {/* Primary Product Grid Section */}
         <section id="products-section" className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-gray-200 pb-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <h2 className="text-lg font-bold text-gray-900 flex items-center space-x-2">
               <Sparkles className="w-4 h-4 text-orange-600" />
               <span>
                 {selectedCategorySlug
-                  ? `${selectedCategorySlug.toUpperCase()} Collection`
+                  ? `${selectedCategoryLabel || selectedCategorySlug} Collection`
                   : getTranslation(language, 'featuredProducts')}
               </span>
             </h2>
-            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-              <span className="text-xs text-gray-500 font-medium">
-                Showing {Math.min(visibleCount, filteredProducts.length)} of {filteredProducts.length} items
-              </span>
-              <select
-                value={priceRange}
-                onChange={(e) => setPriceRange(e.target.value as typeof priceRange)}
-                className="text-xs bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-700 outline-none focus:border-orange-400"
-                aria-label="Filter products by price range"
-              >
-                <option value="all">{language === 'si' ? 'සියලු මිල' : 'All Prices'}</option>
-                <option value="100-500">Rs. 100 – 500</option>
-                <option value="500-1000">Rs. 500 – 1,000</option>
-                <option value="1000-2000">Rs. 1,000 – 2,000</option>
-                <option value="2000-3500">Rs. 2,000 – 3,500</option>
-                <option value="3500-5000">Rs. 3,500 – 5,000</option>
-                <option value="5000-plus">Rs. 5,000+</option>
-              </select>
-              <select
-                value={sortMode}
-                onChange={(e) => setSortMode(e.target.value as typeof sortMode)}
-                className="text-xs bg-white border border-gray-200 rounded-xl px-3 py-2 text-gray-700 outline-none focus:border-orange-400"
-                aria-label="Sort products"
-              >
-                <option value="relevance">Most Relevant</option>
-                <option value="newest">Newest</option>
-                <option value="price-low">Price: Low to High</option>
-                <option value="price-high">Price: High to Low</option>
-              </select>
-            </div>
           </div>
+
+          <ProductFilterBar
+            language={language}
+            categories={categoryFilterOptions}
+            selectedCategorySlug={selectedCategorySlug}
+            priceRange={priceRange}
+            sortMode={sortMode}
+            visibleCount={Math.min(visibleCount, filteredProducts.length)}
+            totalCount={filteredProducts.length}
+            hasActiveFilters={hasActiveCatalogFilters}
+            onCategoryChange={setSelectedCategorySlug}
+            onPriceChange={setPriceRange}
+            onSortChange={setSortMode}
+            onClearAll={() => resetCatalogFilters(false)}
+          />
 
           {filteredProducts.length === 0 ? (
             <div className="py-16 text-center bg-white rounded-3xl border border-gray-100 space-y-2">

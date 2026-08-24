@@ -10,13 +10,16 @@ import {
   Pin,
 } from 'lucide-react';
 import { useStore } from '../context/StoreContext';
-import { getTranslation } from '../lib/i18n';
-import { displayUnitPrice, normalizedProductType } from '../lib/productVariants';
+import { displayUnitPrice } from '../lib/productVariants';
 import { formatLkr } from '../lib/currency';
 import { HeroBannerSlide } from '../types';
 
-export const HeroBanner: React.FC = () => {
-  const { language, categories, selectedCategorySlug, setSelectedCategorySlug, products, settings, setSelectedProduct } = useStore();
+interface HeroBannerProps {
+  onBrowseAll: () => void;
+}
+
+export const HeroBanner: React.FC<HeroBannerProps> = ({ onBrowseAll }) => {
+  const { language, setSelectedCategorySlug, products, settings, setSelectedProduct } = useStore();
   const [slideIndex, setSlideIndex] = useState(0);
   const [paused, setPaused] = useState(false);
 
@@ -68,11 +71,8 @@ export const HeroBanner: React.FC = () => {
     if (type === 'product') { const target=products.find((product)=>product.id===value); if(target){setSelectedProduct(target);return;} }
     if (type === 'category') { setSelectedCategorySlug(value || null); window.setTimeout(()=>document.getElementById('products-section')?.scrollIntoView({behavior:'smooth'}),50); return; }
     if (type === 'url' && value) { if(/^https:\/\//i.test(value)||value.startsWith('/')) window.location.assign(value); return; }
-    document.getElementById('products-section')?.scrollIntoView({ behavior:'smooth' });
+    onBrowseAll();
   };
-
-  const comboCount = products.filter((product)=>normalizedProductType(product)==='bundle').length;
-  const normalCategories = categories.filter((category)=>category.slug!=='combo-pack');
 
   return (
     <div className="space-y-6">
@@ -118,20 +118,6 @@ export const HeroBanner: React.FC = () => {
         <div className="bg-white border border-gray-100 rounded-2xl p-4 flex items-center space-x-3 shadow-xs hover:border-gray-200 transition-all"><div className="p-2.5 rounded-xl bg-orange-50 text-orange-600 shrink-0"><ShieldCheck className="w-5 h-5" /></div><div><p className="text-xs font-bold text-gray-900">100% Genuine</p><p className="text-[10px] text-gray-500">Quality Verified Products</p></div></div>
         <div className="bg-white border border-gray-100 rounded-2xl p-4 flex items-center space-x-3 shadow-xs hover:border-gray-200 transition-all"><div className="p-2.5 rounded-xl bg-orange-50 text-orange-600 shrink-0"><Zap className="w-5 h-5" /></div><div><p className="text-xs font-bold text-gray-900">COD &amp; Bank Transfer</p><p className="text-[10px] text-gray-500">Flexible Payment Options</p></div></div>
         <button type="button" onClick={() => window.dispatchEvent(new CustomEvent('ora:assistant-open'))} className="bg-white border border-gray-100 rounded-2xl p-4 flex items-center space-x-3 shadow-xs hover:border-orange-200 transition-all text-left"><div className="p-2.5 rounded-xl bg-orange-50 text-orange-600 shrink-0"><Bot className="w-5 h-5" /></div><div><p className="text-xs font-bold text-gray-900">24/7 O-RA Assistant</p><p className="text-[10px] text-gray-500">සිංහල • English • தமிழ்</p></div></button>
-      </div>
-
-      <div id="categories-section" className="space-y-3">
-        <div className="flex items-center justify-between"><h2 className="text-base font-bold text-gray-900 flex items-center space-x-2"><span className="text-orange-600">✧</span><span>{getTranslation(language, 'popularCategories')}</span></h2>{selectedCategorySlug && <button onClick={() => setSelectedCategorySlug(null)} className="text-xs text-orange-600 hover:underline font-bold">Clear Category Filter</button>}</div>
-        <div className="flex space-x-2 overflow-x-auto pb-2 scrollbar-none">
-          <button onClick={() => setSelectedCategorySlug(null)} className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-all border ${selectedCategorySlug === null ? 'bg-black text-white border-black shadow-sm' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300 hover:text-black'}`}>{getTranslation(language, 'allCategories')} ({products.length})</button>
-          {normalCategories.map((cat) => {
-            const count = products.filter((product) => normalizedProductType(product)!=='bundle' && product.category_slug === cat.slug).length;
-            if(count===0)return null;
-            const isSelected = selectedCategorySlug === cat.slug;
-            return <button key={cat.id} onClick={() => setSelectedCategorySlug(cat.slug)} className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-all border flex items-center space-x-2 ${isSelected ? 'bg-black text-white border-black shadow-sm' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300 hover:text-black'}`}><span>{language === 'si' ? cat.name_si : cat.name_en}</span><span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${isSelected ? 'bg-orange-600 text-white' : 'bg-gray-100 text-gray-600'}`}>{count}</span></button>;
-          })}
-          {comboCount>0&&<button onClick={()=>setSelectedCategorySlug('combo-pack')} className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-all border flex items-center space-x-2 ${selectedCategorySlug==='combo-pack'?'bg-black text-white border-black shadow-sm':'bg-white text-gray-600 border-gray-200 hover:border-gray-300 hover:text-black'}`}><span>Combo Pack</span><span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${selectedCategorySlug==='combo-pack'?'bg-orange-600 text-white':'bg-gray-100 text-gray-600'}`}>{comboCount}</span></button>}
-        </div>
       </div>
     </div>
   );
