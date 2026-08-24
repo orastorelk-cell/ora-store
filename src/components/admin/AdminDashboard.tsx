@@ -95,7 +95,8 @@ import { ComboPacksPanel } from './ComboPacksPanel';
 import { BannersPanel } from './BannersPanel';
 import { NotificationsPanel } from './NotificationsPanel';
 import { getCustomerMembership } from '../../lib/membership';
-import { suggestCategoryFields, suggestProductMetadata } from '../../lib/categoryAuto';
+import { slugifyCategory, suggestCategoryFields } from '../../lib/categoryAuto';
+import { suggestProductMetadata } from '../../lib/productAutoPopular';
 import { buildVariantSku, normalizedProductType, productDisplayStock, variantById, displayUnitPrice, oraProfitForBuyingPrice, repriceAfterBuyingCostChange, supplierPricePreview, variantOptions } from '../../lib/productVariants';
 import { compressImageFile, uploadPublicImage, uploadRawImageFile } from '../../lib/imageUpload';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
@@ -109,6 +110,9 @@ const ITEM_DETAIL_PRESETS: Array<{ label_en: string; label_si: string }> = [
   { label_en: 'Country of Origin', label_si: 'නිෂ්පාදිත රට' },
   { label_en: 'Suitable For', label_si: 'සුදුසු භාවිතය' },
 ];
+
+const normalizeProductCategoryName = (value: string) =>
+  String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
 interface ParsedCsvRow {
   order_id?: string;
@@ -443,7 +447,8 @@ export const AdminDashboard: React.FC = () => {
     search_keywords: '',
     source_shop_name: '',
     source_shop_price: 0,
-    category_slug: categories[0]?.slug || '',
+    category_name: '',
+    category_slug: '',
     product_type: 'normal' as ProductType,
     variants: [] as ProductVariant[],
     bundle_components: [] as BundleComponent[],
@@ -497,7 +502,6 @@ export const AdminDashboard: React.FC = () => {
   };
 
   const resetProductFormForNew = () => {
-    const initialCategory = categories[0]?.slug || '';
     const buying = 500;
     const profit = profitForBuyingPrice(buying);
     setEditingProduct(null);
@@ -506,7 +510,7 @@ export const AdminDashboard: React.FC = () => {
     setProductForm({
       sku: nextAutoSku(),
       name_en: '', name_si: '', description_en: '', description_si: '', brand: '', search_keywords: '',
-      source_shop_name: '', source_shop_price: 0, category_slug: initialCategory,
+      source_shop_name: '', source_shop_price: 0, category_name: '', category_slug: '',
       product_type: 'normal' as ProductType, variants: [] as ProductVariant[], bundle_components: [] as BundleComponent[], specifications: [] as ProductSpecification[], item_details: [] as ProductItemDetail[], is_test_product: false,
       buying_price: buying, selling_price: buying + profit, discount_price: buying + profit, discount_enabled: false,
       auto_price_enabled: true, auto_discount_on_cost_drop: true, offer_buying_price: undefined as number | undefined, supplier_offer_enabled: false, supplier_offer_saved_at: undefined as string | undefined,
@@ -1467,11 +1471,9 @@ export const AdminDashboard: React.FC = () => {
   const applyProductNameAuto = (name: string) => {
     const auto = suggestProductMetadata(name, categories);
     setProductForm((prev) => {
-      const nextCategory = name.trim() ? (auto.category_slug || prev.category_slug) : prev.category_slug;
       return {
         ...prev,
         name_en: name,
-        category_slug: nextCategory,
         sku: productAutoCode && !editingProduct && products.length > 0 ? nextAutoSku() : prev.sku,
         search_keywords: name.trim() ? auto.search_keywords : '',
       };
@@ -1567,13 +1569,31 @@ export const AdminDashboard: React.FC = () => {
     }
 
     const autoMeta = suggestProductMetadata(productForm.name_en, categories);
-    let matchedCat = categories.find((c) => c.slug === productForm.category_slug);
-    if (!matchedCat && autoMeta.suggested_category && autoMeta.suggested_category.slug === productForm.category_slug) {
-      matchedCat = addCategory(autoMeta.suggested_category);
-    }
-    if (!matchedCat) {
-      alert('Please select a valid product category.');
+    const manualCategoryName = productForm.category_name.trim();
+    if (!manualCategoryName) {
+      alert('Product Category is required.');
       return;
+    }
+
+    const normalizedCategoryName = normalizeProductCategoryName(manualCategoryName);
+    let matchedCat = categories.find((category) =>
+      normalizeProductCategoryName(category.name_en) === normalizedCategoryName ||
+      normalizeProductCategoryName(category.name_si) === normalizedCategoryName
+    );
+
+    if (!matchedCat) {
+      const baseSlug = slugifyCategory(manualCategoryName) || `category-${Date.now()}`;
+      let slug = baseSlug;
+      let suffix = 2;
+      while (categories.some((category) => category.slug === slug)) {
+        slug = `${baseSlug}-${suffix++}`;
+      }
+      matchedCat = addCategory({
+        name_en: manualCategoryName,
+        name_si: manualCategoryName,
+        slug,
+        icon: '📦',
+      });
     }
 
     let variants=(productForm.variants || []).map((v,index)=>{
@@ -1598,8 +1618,9 @@ export const AdminDashboard: React.FC = () => {
     if(productForm.product_type==='variant' && variants.some(v=>!(v.options||[]).length || (v.options||[]).some(option=>!option.name || !option.value))){ alert('Every variant option needs both Type and Value. Example: Color = Blue + Size = XL.'); return; }
     if(productForm.product_type==='normal') variants=[];
 
+    const { category_name: _manualCategoryName, ...savedProductFields } = productForm;
     const finalProductForm = {
-      ...productForm,
+      ...savedProductFields,
       search_keywords: productForm.search_keywords.trim() || autoMeta.search_keywords,
       category_slug: matchedCat.slug,
       variants,
@@ -1650,7 +1671,8 @@ export const AdminDashboard: React.FC = () => {
       search_keywords: '',
       source_shop_name: '',
       source_shop_price: 0,
-      category_slug: categories[0]?.slug || '',
+      category_name: '',
+      category_slug: '',
       product_type: 'normal' as ProductType,
       variants: [] as ProductVariant[],
       bundle_components: [] as BundleComponent[],
@@ -1889,10 +1911,10 @@ export const AdminDashboard: React.FC = () => {
     setSupplierMessage('Special Offer turned OFF. New customers now see the saved normal price again. Old orders are unchanged.');
   };
 
+  // Kept as the existing build marker for the automatic Sinhala-fill effects.
   const liveProductAuto = suggestProductMetadata(productForm.name_en, categories);
 
-  // Robust Add Product auto-fill: recalculate after every item-name change instead
-  // of relying only on the input event handler. This also works after hot reloads.
+  // Keep automatic search tags in place, but category choice is always manual.
   useEffect(() => {
     if (!isAddProductOpen || editingProduct) return;
     const name = productForm.name_en.trim();
@@ -1900,10 +1922,9 @@ export const AdminDashboard: React.FC = () => {
     const auto = suggestProductMetadata(name, categories);
     setProductForm((prev) => {
       if (prev.name_en.trim() !== name) return prev;
-      const nextCategory = auto.category_slug || prev.category_slug;
       const nextTags = auto.search_keywords || prev.search_keywords;
-      if (nextCategory === prev.category_slug && nextTags === prev.search_keywords) return prev;
-      return { ...prev, category_slug: nextCategory, search_keywords: nextTags };
+      if (nextTags === prev.search_keywords) return prev;
+      return { ...prev, search_keywords: nextTags };
     });
   }, [productForm.name_en, isAddProductOpen, editingProduct, categories.length]);
   const newestOrder = [...orders].sort((a,b)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime())[0];
@@ -2497,7 +2518,7 @@ export const AdminDashboard: React.FC = () => {
                           {p.sku}
                         </span>
                       </td>
-                    <td className="p-3 capitalize">{normalizedProductType(p)==='bundle' ? 'Combo Pack' : p.category_slug}</td>
+                    <td className="p-3">{normalizedProductType(p)==='bundle' ? 'Combo Pack' : (categories.find((category) => category.slug === p.category_slug)?.name_en || p.category_slug)}</td>
                     <td className="p-3 text-neutral-400">Rs. {p.buying_price.toLocaleString()}</td>
                     <td className="p-3 font-bold text-white">
                       Rs. {((p.discount_enabled !== false && p.discount_price && p.discount_price < p.selling_price ? p.discount_price : p.selling_price)).toLocaleString()}
@@ -2529,6 +2550,7 @@ export const AdminDashboard: React.FC = () => {
                             search_keywords: p.search_keywords || '',
                             source_shop_name: p.source_shop_name || '',
                             source_shop_price: Number(p.source_shop_price || 0),
+                            category_name: categories.find((category) => category.slug === p.category_slug)?.name_en || p.category_slug,
                             category_slug: p.category_slug,
                             product_type: normalizedProductType(p),
                             variants: (p.variants || []).map(v=>({...v})),
@@ -4930,7 +4952,7 @@ export const AdminDashboard: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-neutral-300 mb-1">Name (English) * <span className="text-emerald-400">→ Auto Category + Tags</span></label>
+                  <label className="block text-neutral-300 mb-1">Name (English) * <span className="text-emerald-400">→ Auto Tags</span></label>
                   <input
                     type="text"
                     required
@@ -4940,38 +4962,24 @@ export const AdminDashboard: React.FC = () => {
                     placeholder="Example: Bluetooth Speaker"
                     className="w-full bg-neutral-950 border border-emerald-500/30 focus:border-emerald-400 rounded-xl px-3 py-2 text-white"
                   />
-                  <p className="mt-1 text-[10px] text-emerald-400">{productForm.name_en.trim() ? `✓ ${liveProductAuto.suggested_category?.name_en || categories.find((c) => c.slug === productForm.category_slug)?.name_en || 'Auto Category'} • Tags auto-filled below` : 'Type the product name first. Category and tags update immediately.'}</p>
+                  <p className="mt-1 text-[10px] text-emerald-400">{productForm.name_en.trim() ? '✓ Search tags auto-filled below' : 'Type the product name first. Search tags update immediately.'}</p>
                 </div>
 
-                <div className="sm:col-span-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3">
-                  <div className="mb-1 flex items-center justify-between gap-2">
-                    <label className="block font-bold text-neutral-200">Auto Category</label>
-                    <button
-                      type="button"
-                      onClick={() => applyProductNameAuto(productForm.name_en)}
-                      disabled={!productForm.name_en.trim()}
-                      className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[9px] font-black text-emerald-300 disabled:opacity-30"
-                    >
-                      Auto Fill Again
-                    </button>
-                  </div>
-                  <select
-                    value={productForm.category_slug}
-                    onChange={(e) => { const slug=e.target.value; setProductForm(prev=>({ ...prev, category_slug: slug })); }}
-                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white"
-                  >
-                    {liveProductAuto.suggested_category && !categories.some((c) => c.slug === liveProductAuto.suggested_category?.slug) && (
-                      <option value={liveProductAuto.suggested_category.slug}>
-                        Auto: {liveProductAuto.suggested_category.name_en} ({liveProductAuto.suggested_category.name_si})
-                      </option>
-                    )}
-                    {categories.map((c) => (
-                      <option key={c.id} value={c.slug}>
-                        {c.name_en} ({c.name_si})
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-[10px] text-neutral-500 mt-1">Auto-selected from the English item name. You can still change it manually.</p>
+                <div className="sm:col-span-2 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3">
+                  <label className="mb-1 block font-bold text-neutral-200">Product Category *</label>
+                  <input
+                    type="text"
+                    required
+                    list="ora-saved-product-categories"
+                    value={productForm.category_name}
+                    onChange={(e) => setProductForm((prev) => ({ ...prev, category_name: e.target.value }))}
+                    placeholder="Type the exact category name"
+                    className="w-full rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-white focus:border-amber-400"
+                  />
+                  <datalist id="ora-saved-product-categories">
+                    {categories.map((category) => <option key={category.id} value={category.name_en} />)}
+                  </datalist>
+                  <p className="mt-1 text-[10px] text-neutral-500">Type any category. A new category is created automatically when you save.</p>
                 </div>
 
                 <div>
@@ -5278,7 +5286,7 @@ export const AdminDashboard: React.FC = () => {
                 <div className="overflow-hidden rounded-2xl border border-neutral-800 bg-white text-gray-900">
                   <div className="relative aspect-square bg-gray-100"><img src={productForm.images[0] || 'https://placehold.co/600x600?text=O-RA'} alt="Product preview" className="h-full w-full object-cover" />{productForm.discount_enabled && productForm.discount_price > 0 && productForm.discount_price < productForm.selling_price && <div className="absolute left-3 top-3 rounded-xl bg-orange-600 px-3 py-1.5 text-sm font-black text-white shadow-lg">{Math.max(1,Math.round(((productForm.selling_price-productForm.discount_price)/Math.max(1,productForm.selling_price))*100))}% OFF</div>}</div>
                   <div className="p-4 space-y-2">
-                    <div className="flex items-start justify-between gap-2"><div><p className="text-[10px] font-black uppercase tracking-wide text-orange-600">{categories.find(c=>c.slug===productForm.category_slug)?.name_en || liveProductAuto.suggested_category?.name_en || 'Auto Category'}</p><h4 className="mt-1 text-sm font-black leading-5">{productForm.name_en || 'Product Name Preview'}</h4></div><span className="rounded-lg bg-gray-100 px-2 py-1 font-mono text-[10px] font-bold">{productForm.sku || 'AUTO'}</span></div>
+                    <div className="flex items-start justify-between gap-2"><div><p className="text-[10px] font-black uppercase tracking-wide text-orange-600">{productForm.category_name.trim() || 'Product Category'}</p><h4 className="mt-1 text-sm font-black leading-5">{productForm.name_en || 'Product Name Preview'}</h4></div><span className="rounded-lg bg-gray-100 px-2 py-1 font-mono text-[10px] font-bold">{productForm.sku || 'AUTO'}</span></div>
                     {productForm.product_type === 'variant' && productForm.variants.length > 0 && <div className="flex flex-wrap gap-1.5">{productForm.variants.slice(0,5).map(v=><span key={v.id} className="rounded-full border border-gray-200 px-2 py-1 text-[10px] font-bold">{v.option_value || 'Color'}</span>)}</div>}
                     <div className="pt-1">{productForm.discount_enabled && productForm.discount_price > 0 && productForm.discount_price < productForm.selling_price && <p className="text-sm font-bold text-gray-400 line-through">Rs. {(productForm.selling_price + (settings.free_delivery_enabled ? Math.max(0, Number(settings.delivery_fee || 0)) : 0)).toLocaleString()}</p>}<p className="text-xl font-black text-orange-600">Rs. {((productForm.discount_enabled && productForm.discount_price > 0 && productForm.discount_price < productForm.selling_price ? productForm.discount_price : productForm.selling_price) + (settings.free_delivery_enabled ? Math.max(0, Number(settings.delivery_fee || 0)) : 0)).toLocaleString()}</p>{settings.free_delivery_enabled ? <p className="text-[10px] font-bold text-emerald-600">🚚 FREE Islandwide Delivery</p> : <p className="text-[10px] text-gray-500">Delivery added at checkout</p>}</div>
                     <button type="button" className="w-full rounded-xl bg-black py-2.5 text-xs font-black text-white">Add to Cart – Preview Only</button>
