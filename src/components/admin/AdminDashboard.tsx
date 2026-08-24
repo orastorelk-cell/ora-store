@@ -78,6 +78,7 @@ import {
   ProductType,
   ProductSpecification,
   ProductItemDetail,
+  StoreSettings,
 } from '../../types';
 import { generateOrderInvoicePDF, generateBatchInvoicesPDF, generateA4FourUpInvoicesPDF, getInvoicePageCount, validateInvoiceOrder } from '../../lib/pdfGenerator';
 import { GOOGLE_APPS_SCRIPT_CODE, syncProductCatalogToGoogleSheets } from '../../lib/googleSheets';
@@ -97,7 +98,7 @@ import { NotificationsPanel } from './NotificationsPanel';
 import { getCustomerMembership } from '../../lib/membership';
 import { slugifyCategory, suggestCategoryFields } from '../../lib/categoryAuto';
 import { suggestProductMetadata } from '../../lib/productAutoPopular';
-import { buildVariantSku, normalizedProductType, productDisplayStock, variantById, displayUnitPrice, oraProfitForBuyingPrice, repriceAfterBuyingCostChange, supplierPricePreview, variantOptions } from '../../lib/productVariants';
+import { buildVariantSku, normalizedProductType, productDisplayStock, productPriceRange, variantById, displayUnitPrice, oraProfitForBuyingPrice, repriceAfterBuyingCostChange, supplierPricePreview, variantOptions } from '../../lib/productVariants';
 import { compressImageFile, uploadPublicImage, uploadRawImageFile } from '../../lib/imageUpload';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 
@@ -113,6 +114,13 @@ const ITEM_DETAIL_PRESETS: Array<{ label_en: string; label_si: string }> = [
 
 const normalizeProductCategoryName = (value: string) =>
   String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+const adminWithDeliveryPrice = (product: Product, settings: StoreSettings) => {
+  const range = productPriceRange(product, { ...settings, free_delivery_enabled:true });
+  return range.min === range.max
+    ? `Rs. ${range.min.toLocaleString()}`
+    : `Rs. ${range.min.toLocaleString()} – ${range.max.toLocaleString()}`;
+};
 
 interface ParsedCsvRow {
   order_id?: string;
@@ -2482,6 +2490,7 @@ export const AdminDashboard: React.FC = () => {
                   <th className="p-3">Category</th>
                   <th className="p-3">Buying Price</th>
                   <th className="p-3">Selling Price</th>
+                  <th className="p-3 whitespace-nowrap"><span className="block">Customer Price</span><span className="text-[8px] normal-case text-emerald-400">With Delivery</span></th>
                   <th className="p-3">Stock</th>
                   <th className="p-3">Status</th>
                   <th className="p-3 text-right">Actions</th>
@@ -2526,6 +2535,10 @@ export const AdminDashboard: React.FC = () => {
                     <td className="p-3 text-neutral-400">Rs. {p.buying_price.toLocaleString()}</td>
                     <td className="p-3 font-bold text-white">
                       Rs. {((p.discount_enabled !== false && p.discount_price && p.discount_price < p.selling_price ? p.discount_price : p.selling_price)).toLocaleString()}
+                    </td>
+                    <td className="p-3 whitespace-nowrap">
+                      <p className="font-black text-emerald-300">{adminWithDeliveryPrice(p, settings)}</p>
+                      <p className="mt-0.5 text-[9px] text-neutral-500">Includes Rs. {Math.max(0, Number(settings.delivery_fee || 0)).toLocaleString()} delivery</p>
                     </td>
                     <td className="p-3">
                       {normalizedProductType(p)==='bundle' ? <span className="font-bold text-cyan-300">Component-linked</span> : <span className={`font-bold ${p.stock_quantity <= 5 ? 'text-red-400' : 'text-emerald-400'}`}>{p.stock_quantity}</span>}
