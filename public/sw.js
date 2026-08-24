@@ -1,4 +1,4 @@
-const CACHE = 'ora-store-shell-v3';
+const CACHE = 'ora-store-shell-v4';
 const SHELL = ['/', '/manifest.webmanifest', '/icons/ora-192.png', '/icons/ora-512.png'];
 
 self.addEventListener('install', (event) => {
@@ -61,10 +61,19 @@ self.addEventListener('push', (event) => {
       const url = new URL(rawTarget, self.location.origin);
       if (url.protocol === 'https:' || url.origin === self.location.origin) target = url.href;
     } catch {}
+    const rawImage = String(payload.image || '');
+    let image = '';
+    if (rawImage) {
+      try {
+        const imageUrl = new URL(rawImage, self.location.origin);
+        if (imageUrl.protocol === 'https:') image = imageUrl.href;
+      } catch {}
+    }
     await self.registration.showNotification(title, {
       body,
       icon: payload.icon || '/icons/ora-192.png',
       badge: payload.badge || '/icons/ora-192.png',
+      ...(image ? { image } : {}),
       tag: payload.tag || 'ora-store-update',
       data: { url: target },
     });

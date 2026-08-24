@@ -6,6 +6,7 @@ interface CustomerNotificationRow {
   title: string;
   body: string;
   url?: string;
+  image?: string;
   created_at: string;
 }
 
@@ -108,11 +109,13 @@ export const CustomerNotifications: React.FC = () => {
       const fresh = next.filter((row) => new Date(row.created_at).getTime() > lastSeen).sort((a,b)=>new Date(a.created_at).getTime()-new Date(b.created_at).getTime());
       for (const row of fresh.slice(-3)) {
         try {
+          const options: NotificationOptions & { image?: string } = { body: row.body, icon: '/icons/ora-192.png', badge: '/icons/ora-192.png', data: { url: row.url || '/' }, tag: row.id };
+          if (row.image) options.image = row.image;
           if ('serviceWorker' in navigator) {
             const registration = await navigator.serviceWorker.ready;
-            await registration.showNotification(row.title, { body: row.body, icon: '/icons/ora-192.png', badge: '/icons/ora-192.png', data: { url: row.url || '/' }, tag: row.id });
+            await registration.showNotification(row.title, options);
           } else {
-            const n = new Notification(row.title, { body: row.body, icon: '/icons/ora-192.png', tag: row.id });
+            const n = new Notification(row.title, options);
             n.onclick = () => { window.focus(); window.location.href = row.url || '/'; };
           }
         } catch {}

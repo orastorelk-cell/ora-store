@@ -1197,15 +1197,29 @@ app.get('/api/admin/analytics', requireStaffPermission('overview'), async (_req,
 // Web Push is an optional delivery layer so a bad/expired device subscription can
 // never prevent an admin notification from being saved or shown in the website.
 // -----------------------------------------------------------------------------
+const safeCustomerNotificationImage = (value: unknown) => {
+  const image = String(value || '').trim().slice(0, 2048);
+  if (!image) return '';
+  if (image.startsWith('/') && !image.startsWith('//') && !image.includes('\\')) return image;
+  try {
+    const parsed = new URL(image);
+    return parsed.protocol === 'https:' && !parsed.username && !parsed.password ? parsed.href : '';
+  } catch { return ''; }
+};
+
 const compactCustomerNotifications = (rows: any[]) => (Array.isArray(rows) ? rows : [])
-  .map((row:any)=>({
-    id:String(row?.id||''),
-    title:String(row?.title||'').slice(0,90),
-    body:String(row?.body||'').slice(0,240),
-    url:String(row?.url||'/').slice(0,500) || '/',
-    created_at:String(row?.created_at||new Date().toISOString()),
-    created_by:String(row?.created_by||''),
-  }))
+  .map((row:any)=>{
+    const image = safeCustomerNotificationImage(row?.image);
+    return {
+      id:String(row?.id||''),
+      title:String(row?.title||'').slice(0,90),
+      body:String(row?.body||'').slice(0,240),
+      url:String(row?.url||'/').slice(0,500) || '/',
+      ...(image ? { image } : {}),
+      created_at:String(row?.created_at||new Date().toISOString()),
+      created_by:String(row?.created_by||''),
+    };
+  })
   .filter((row:any)=>row.id && row.title && row.body)
   .sort((a:any,b:any)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime())
   .slice(0,200);
@@ -1295,7 +1309,7 @@ const webPushConfigured = () => {
   return config.publicKey.length >= 80 && config.privateKey.length >= 40 && /^(mailto:|https:\/\/)/i.test(config.subject);
 };
 
-const dispatchCustomerWebPush = async (notification: { id:string; title:string; body:string; url:string }) => {
+const dispatchCustomerWebPush = async (notification: { id:string; title:string; body:string; url:string; image?:string }) => {
   if (!webPushConfigured()) return { configured:false, sent:0, removed:0 };
   const subscriptions = compactCustomerPushSubscriptions(await getSharedAdminPayload(customerPushSubscriptionsKey));
   if (!subscriptions.length) return { configured:true, sent:0, removed:0 };
@@ -1319,6 +1333,7 @@ const dispatchCustomerWebPush = async (notification: { id:string; title:string; 
             tag: notification.id,
             icon: '/icons/ora-192.png',
             badge: '/icons/ora-192.png',
+            ...(notification.image ? { image:notification.image } : {}),
         }), { TTL:86400, urgency:'normal' });
         sent += 1;
       } catch (error:any) {
@@ -1387,11 +1402,12 @@ app.post('/api/admin/customer-notifications', requireStaffPermission('notificati
     const title=String(req.body?.title||'').trim().slice(0,90);
     const body=String(req.body?.body||'').trim().slice(0,240);
     let url=String(req.body?.url||'/').trim().slice(0,500) || '/';
+    const image=safeCustomerNotificationImage(req.body?.image);
     if (!title || !body) return res.status(400).json({error:'Notification title and message are required.'});
     if (!/^\//.test(url) && !/^https:\/\//i.test(url)) url='/';
     const rows=compactCustomerNotifications(await getSharedAdminPayload('customer-notifications'));
     const user=(req as any).staffSessionUser as ServerStaffAccount | undefined;
-    const notification={ id:`ntf-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`, title, body, url, created_at:new Date().toISOString(), created_by:user?.username||'admin' };
+    const notification={ id:`ntf-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`, title, body, url, ...(image ? { image } : {}), created_at:new Date().toISOString(), created_by:user?.username||'admin' };
     await saveSharedAdminPayload('customer-notifications',[notification,...rows].slice(0,200));
     const pushTask = dispatchCustomerWebPush(notification).catch((error:any)=>console.warn('Customer Web Push dispatch failed:',error?.message||error));
     const waitUntil=(globalThis as any).__ORA_WAIT_UNTIL__;
