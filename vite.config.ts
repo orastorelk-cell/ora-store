@@ -20,6 +20,7 @@ import { specialOfferAdminPreviewPatch } from './src/lib/specialOfferAdminPrevie
 import { specialOfferLivePreviewDecimalPatch } from './src/lib/specialOfferLivePreviewDecimalPatch';
 import { roundSpecialOfferPercentBadgePatch } from './src/lib/roundSpecialOfferPercentBadgePatch';
 import { productCardOfferLayoutPatch } from './src/lib/productCardOfferLayoutPatch';
+import { bundleComponentOfferDisplayPatch } from './src/lib/bundleComponentOfferDisplayPatch';
 import { qtyOfferMergedDisplayPatch } from './src/lib/qtyOfferMergedDisplayPatch';
 import { checkoutCombinedOfferPatch } from './src/lib/checkoutCombinedOfferPatch';
 import { productCatalogOfferColumnsPatch } from './src/lib/productCatalogOfferColumnsPatch';
@@ -34,7 +35,7 @@ import { leadItemCodeBlankDefaultPatch } from './src/lib/leadItemCodeBlankDefaul
 
 export default defineConfig(() => {
   return {
-    plugins: [leadItemCodeBlankDefaultPatch(), waybillExistingGarbageCleanupPatch(), waybillDuplicateSafetyPatch(), deliveryCityAcceptancePatch(), maintenanceBilingualNoticePatch(), mainCategoryHierarchyPatch(), roundSpecialOfferPatch(), specialOfferPercentageRulePatch(), specialOfferAdminPreviewPatch(), specialOfferLivePreviewDecimalPatch(), roundSpecialOfferPercentBadgePatch(), productCardOfferLayoutPatch(), qtyOfferMergedDisplayPatch(), checkoutCombinedOfferPatch(), productCatalogOfferColumnsPatch(), productBackupDryRunPatch(), welcomeSplashAppPatch(), customerCartWordingPatch(), adminDashboardStoragePatch(), adminDashboardUnifiedUploadPatch(), confirmUploadPackingBatchPatch(), packingDownloadUxPatch(), pdfPerformancePatch(), adminDashboardFardarHistoryPatch(), adminDashboardFardarHistoryDurablePatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
+    plugins: [leadItemCodeBlankDefaultPatch(), waybillExistingGarbageCleanupPatch(), waybillDuplicateSafetyPatch(), deliveryCityAcceptancePatch(), maintenanceBilingualNoticePatch(), mainCategoryHierarchyPatch(), roundSpecialOfferPatch(), specialOfferPercentageRulePatch(), specialOfferAdminPreviewPatch(), specialOfferLivePreviewDecimalPatch(), roundSpecialOfferPercentBadgePatch(), productCardOfferLayoutPatch(), bundleComponentOfferDisplayPatch(), qtyOfferMergedDisplayPatch(), checkoutCombinedOfferPatch(), productCatalogOfferColumnsPatch(), productBackupDryRunPatch(), welcomeSplashAppPatch(), customerCartWordingPatch(), adminDashboardStoragePatch(), adminDashboardUnifiedUploadPatch(), confirmUploadPackingBatchPatch(), packingDownloadUxPatch(), pdfPerformancePatch(), adminDashboardFardarHistoryPatch(), adminDashboardFardarHistoryDurablePatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
