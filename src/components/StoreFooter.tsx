@@ -92,11 +92,23 @@ export const StoreFooter: React.FC = () => {
         </div>
       </div>
 
-      <div className="mt-10 border-t border-slate-200 pt-5 text-[10px] leading-5 text-slate-500 sm:flex sm:items-center sm:justify-between sm:gap-4">
-        <p>© 2026 {storeName}. All rights reserved. <span className="hidden sm:inline">|</span> <span className="block sm:inline">Owned and Managed by {ownerName}</span></p>
-        <div className="mt-2 sm:mt-0 sm:text-right">
+      <div className="mt-10 border-t border-slate-200 pt-5 text-[10px] leading-5 text-slate-500">
+        <div className="space-y-1.5 md:hidden">
           <p>{si?'Online Store • Customer Support • Islandwide Delivery':'Online Store • Customer Support • Islandwide Delivery'}</p>
-          <p className="mt-0.5 font-semibold text-slate-400">Designed &amp; Developed by UDN</p>
+          <div className="space-y-0.5 pt-2">
+            <p>© 2026 {storeName}. All rights reserved.</p>
+            <p>Owned and Managed by {ownerName}</p>
+            <p className="pt-1 font-semibold text-slate-400">Designed &amp; Developed by UDN</p>
+          </div>
+        </div>
+
+        <div className="hidden md:grid md:grid-cols-3 md:items-center md:gap-6">
+          <div className="text-left">
+            <p>© 2026 {storeName}. All rights reserved.</p>
+            <p className="mt-0.5">Owned and Managed by {ownerName}</p>
+          </div>
+          <p className="text-center font-semibold text-slate-400">Designed &amp; Developed by UDN</p>
+          <p className="text-right">{si?'Online Store • Customer Support • Islandwide Delivery':'Online Store • Customer Support • Islandwide Delivery'}</p>
         </div>
       </div>
     </div>
