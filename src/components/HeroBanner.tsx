@@ -101,7 +101,6 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ onBrowseAll }) => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div
           className="lg:col-span-2 relative bg-black rounded-3xl overflow-hidden flex flex-col justify-between p-6 sm:p-8 min-h-[280px] sm:min-h-[340px] text-white group shadow-sm touch-pan-y"
-          onMouseEnter={()=>setPaused(true)} onMouseLeave={()=>setPaused(false)}
           onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} onTouchCancel={handleTouchCancel}
         >
           {hasBannerOverlay && <div className="absolute top-0 right-0 p-8 opacity-10 text-8xl sm:text-9xl font-black select-none pointer-events-none">O-RA</div>}
