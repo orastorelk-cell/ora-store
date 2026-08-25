@@ -64,10 +64,44 @@ const repairMoney = (value:unknown) => {
   return Number.isFinite(n)?Math.max(0,n):0;
 };
 const repairQtyOffer = (offer:unknown) => {
-  const text=String(offer||'');
-  if(/no\s+qty\s+offer/i.test(text)) return 0;
-  const match=text.match(/qty\s+offer\s*(?:rs\.?\s*)?([0-9,.]+)/i);
+  const value=String(offer||'');
+  if(/no\s+qty\s+offer/i.test(value)) return 0;
+  const match=value.match(/qty\s+offer\s*(?:rs\.?\s*)?([0-9,.]+)/i);
   return match?repairMoney(match[1]):0;
+};
+const repairItemCancelled = (value:unknown) => ['cancel','cancelled','canceled','cancel item'].includes(String(value||'').trim().toLowerCase());
+
+const invoiceConfirmMismatchReasons = (order:Order):string[] => {
+  const snapshot=(order as any).invoice_confirm_snapshot as InvoiceRepairSnapshot|undefined;
+  if(!snapshot || !Array.isArray(snapshot.items) || !snapshot.items.length) return [];
+  const reasons:string[]=[];
+  const expected=snapshot.items.filter(row=>!repairItemCancelled(row.item_action));
+  const actual=Array.isArray(order.items)?order.items:[];
+  if(expected.length!==actual.length) reasons.push('item count');
+  const count=Math.min(expected.length,actual.length);
+  for(let i=0;i<count;i++){
+    const e=expected[i], a=actual[i];
+    const eCode=String(e.item_code||'').trim().toUpperCase();
+    const codes=[String(a.sku||''),String(a.main_sku||'')].map(v=>v.trim().toUpperCase());
+    if(eCode && !codes.includes(eCode)) reasons.push('item '+(i+1)+' code');
+    if(Math.max(1,Number(e.qty||1))!==Math.max(1,Number(a.quantity||1))) reasons.push('item '+(i+1)+' qty');
+    if(repairMoney(e.unit_price)>0 && Math.abs(repairMoney(e.unit_price)-repairMoney(a.unit_price))>0.01) reasons.push('item '+(i+1)+' price');
+    if(repairMoney(e.line_total)>0 && Math.abs(repairMoney(e.line_total)-repairMoney(a.subtotal))>0.01) reasons.push('item '+(i+1)+' total');
+  }
+  const wrapText=String(snapshot.gift_wrap||'').trim().toLowerCase();
+  if(wrapText){
+    const expectedWrap=['yes','true','1','on','add wrap','gift wrap'].includes(wrapText);
+    if(expectedWrap!==Boolean(order.gift_wrap_selected)) reasons.push('gift wrap');
+    if(expectedWrap && repairMoney(snapshot.wrapping_cost)>0 && Math.abs(repairMoney(snapshot.wrapping_cost)-repairMoney(order.gift_wrap_fee))>0.01) reasons.push('wrapping cost');
+  }
+  if(repairMoney(snapshot.final_total)>0 && Math.abs(repairMoney(snapshot.final_total)-repairMoney(order.total_amount))>0.01) reasons.push('final total');
+  return Array.from(new Set(reasons));
+};
+const assertInvoiceConfirmSnapshot = (orders:Order[]) => {
+  const bad=(orders||[]).map(order=>({order,reasons:invoiceConfirmMismatchReasons(order)})).filter(row=>row.reasons.length);
+  if(!bad.length) return;
+  const sample=bad.slice(0,5).map(row=>String(row.order.order_number)+': '+row.reasons.join(', ')).join(' | ');
+  throw new Error('Invoice safety check stopped '+bad.length+' mismatched invoice(s). '+sample+'. Use Repair Invoice / Repair from CSV instead of printing a wrong bill.');
 };
 
 const readInvoiceRepairSnapshot = async (order:Order, settings:StoreSettings):Promise<InvoiceRepairSnapshot> => {
@@ -91,7 +125,7 @@ const readInvoiceRepairSnapshot = async (order:Order, settings:StoreSettings):Pr
 const buildRepairedInvoiceOrder = async (order:Order, settings:StoreSettings):Promise<Order> => {
   const snapshot=await readInvoiceRepairSnapshot(order,settings);
   const sourceItems=Array.isArray(order.items)?order.items:[];
-  const kept=(snapshot.items||[]).filter(row=>!['cancel','cancelled','canceled','cancel item'].includes(String(row.item_action||'').trim().toLowerCase()));
+  const kept=(snapshot.items||[]).filter(row=>!repairItemCancelled(row.item_action));
   if(!kept.length) throw new Error('Repair data has no invoice items.');
 
   const repairedItems=kept.map((row,index)=>{
@@ -139,6 +173,7 @@ const buildRepairedInvoiceOrder = async (order:Order, settings:StoreSettings):Pr
     gift_wrap_selected:giftWrap,
     gift_wrap_fee:wrapFee,
     total_amount:finalTotal,
+    invoice_confirm_snapshot:snapshot,
   } as Order;
 };
 
@@ -226,8 +261,40 @@ export async function generateRepairedOrderInvoicePDFFromCsv(order:Order, settin
   await generateRepairedOrderInvoicePDF(withSnapshot,settings);
 }
 
+export async function generateRepairedBatchInvoicesPDFFromCsv(orders:Order[], settings:StoreSettings = {} as StoreSettings, csvText='', fileName?:string) {
+  if(!orders.length) throw new Error('No invoices are available in this packing batch.');
+  if(orders.length>120) throw new Error('Repair batch is over 120 orders. Repair it in separate packing parts.');
+  const repaired:Order[]=[];
+  for(const order of orders){
+    const snapshot=repairSnapshotFromCsv(order,csvText);
+    repaired.push(await buildRepairedInvoiceOrder({...(order as any),invoice_confirm_snapshot:snapshot} as Order,settings));
+  }
+  await generateBatchInvoicesPDF(repaired,settings,fileName || ('O-RA_REPAIRED_BATCH_'+Date.now()+'.pdf'));
+}
+
 `;
       text = text.replace(repairInsertMarker, repairCode + repairInsertMarker);
+    }
+
+    const orderSafetyOld = "  const reasons=validateInvoiceOrder(order);\n  if(!order.invoice_locked && reasons.length) throw new Error(`Invoice cannot be generated: ${reasons.join(', ')}`);";
+    const orderSafetyNew = orderSafetyOld + "\n  assertInvoiceConfirmSnapshot([order]);";
+    if (!text.includes(orderSafetyNew)) {
+      if (!text.includes(orderSafetyOld)) throw new Error('[O-RA PDF performance] single invoice safety marker not found');
+      text = text.replace(orderSafetyOld, orderSafetyNew);
+    }
+
+    const a4SafetyOld = "  const invalid=singles.filter(o=>validateInvoiceOrder(o).length>0);\n  if(invalid.length) throw new Error(`${invalid.length} invoice(s) failed validation.`);";
+    const a4SafetyNew = a4SafetyOld + "\n  assertInvoiceConfirmSnapshot(singles);";
+    if (!text.includes(a4SafetyNew)) {
+      if (!text.includes(a4SafetyOld)) throw new Error('[O-RA PDF performance] A4 invoice safety marker not found');
+      text = text.replace(a4SafetyOld, a4SafetyNew);
+    }
+
+    const a6SafetyOld = "  const invalid=batch.filter(o=>validateInvoiceOrder(o).length>0);\n  if(invalid.length) throw new Error(`${invalid.length} invoice(s) failed validation.`);";
+    const a6SafetyNew = a6SafetyOld + "\n  assertInvoiceConfirmSnapshot(batch);";
+    if (!text.includes(a6SafetyNew)) {
+      if (!text.includes(a6SafetyOld)) throw new Error('[O-RA PDF performance] A6 invoice safety marker not found');
+      text = text.replace(a6SafetyOld, a6SafetyNew);
     }
 
     return text === code ? null : { code: text, map: null };
