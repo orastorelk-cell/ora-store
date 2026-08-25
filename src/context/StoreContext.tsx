@@ -2363,15 +2363,26 @@ useEffect(() => {
 
   const deleteTestOrdersForSource = async (source: 'Website' | 'Facebook Ads' | 'TikTok Ads'): Promise<number> => {
     const testOrders = orders.filter(o => isTestOrderForSource(o, source));
-    const count = testOrders.length;
-    if (!count) return 0;
+    let count = testOrders.length;
+    if (source === 'Website' && !count) return 0;
 
-    // Delete durable test snapshots first. The server also removes their Google Sheet rows
-    // using the private shared webhook, so no Admin-browser queue is required.
+    // Website keeps its established individual-delete path. FB/TikTok use one
+    // isolated server cleanup that physically verifies Sheet removal before the
+    // durable test snapshots are deleted.
+    let deletedIds = new Set(testOrders.map(o=>o.id));
     try{
-      await Promise.all(testOrders.map(order=>sharedStaffRequest(`/api/orders/${encodeURIComponent(order.id)}`,{
-        method:'DELETE',body:JSON.stringify({reason:'Delete test order'}),
-      })));
+      if(source==='Website'){
+        await Promise.all(testOrders.map(order=>sharedStaffRequest(`/api/orders/${encodeURIComponent(order.id)}`,{
+          method:'DELETE',body:JSON.stringify({reason:'Delete test order'}),
+        })));
+      }else{
+        const sourceKey=source==='Facebook Ads'?'facebook':'tiktok';
+        const result=await sharedStaffRequest(`/api/test-orders/${sourceKey}`,{method:'DELETE'});
+        if(!result?.ok || result?.sheet_sync?.ok===false) throw new Error('Google Sheet test cleanup was not verified.');
+        const serverIds=Array.isArray(result?.deleted_ids)?result.deleted_ids.map(String):[];
+        deletedIds=new Set(serverIds);
+        count=Math.max(testOrders.length,Math.max(0,Number(result?.deleted_count||0)));
+      }
     }catch(e:any){
       throw new Error(e?.message || 'Test order cleanup failed on the server.');
     }
@@ -2396,8 +2407,10 @@ useEffect(() => {
     }
 
     setStockHistory(prev => prev.filter(h => !testOrders.some(o => h.reason.includes(o.order_number))));
-    const ids = new Set(testOrders.map(o=>o.id));
-    setOrders(prev => prev.filter(o => !ids.has(o.id)));
+    setOrders(prev => prev.filter(o => source==='Website'
+      ? !deletedIds.has(o.id)
+      : !isTestOrderForSource(o,source)
+    ));
     const sourceLabel = source === 'Website' ? 'Website' : source === 'Facebook Ads' ? 'Facebook' : 'TikTok';
     logActivity({ action:`${sourceLabel} Test Orders Deleted & Rolled Back`, module:'Google Sheets', details:`Deleted ${count} ${sourceLabel} test order(s); server + Sheet cleanup completed; any test stock/waybills restored.` });
     return count;

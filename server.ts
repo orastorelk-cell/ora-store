@@ -1841,6 +1841,110 @@ app.get('/api/orders', requireAdminSession, async (_req,res)=>{
   return res.json({orders:await getOrderSnapshots()});
 });
 
+// FB/TikTok test leads use the bulk-import path, so their cleanup must be one
+// verified server operation. Real orders and every order-creation/sync path are
+// deliberately outside this endpoint.
+app.delete('/api/test-orders/:source', requireSuperAdmin, async (req,res)=>{
+  const sourceKey=String(req.params.source||'').trim().toLowerCase();
+  const source=sourceKey==='facebook'?'Facebook Ads':sourceKey==='tiktok'?'TikTok Ads':'';
+  if(!source) return res.status(400).json({error:'Test source must be Facebook or TikTok.'});
+
+  const isSourceTest=(order:any)=>{
+    if(String(order?.order_source||'')!==source) return false;
+    const lead=String(order?.platform_lead_id||'').trim().toUpperCase();
+    const notes=String(order?.notes||'');
+    const expectedPrefix=source==='Facebook Ads'?'TEST-FB-':'TEST-TK-';
+    return Boolean(order?.is_test_order || lead.startsWith(expectedPrefix) || /SYSTEM TEST LEAD/i.test(notes));
+  };
+
+  try{
+    // Never fall back to an ephemeral local file for a live destructive action.
+    // If Supabase cannot be read, stop without touching the Sheet.
+    const sb=getSupabaseAdmin();
+    let current:any[]=[];
+    if(sb){
+      const {data,error}=await sb.from('order_snapshots').select('payload');
+      if(error) throw new Error(`Could not verify durable test orders: ${error.message}`);
+      current=(data||[]).map((row:any)=>row.payload).filter(Boolean);
+    }else current=readOrderSnapshotsLocal();
+
+    const testOrders=current.filter(isSourceTest);
+    const ids=testOrders.map((order:any)=>String(order.id));
+    const orderNumbers=testOrders.map((order:any)=>String(order.order_number));
+
+    const state=await readSharedStorefrontState();
+    const webhook=String(state?.settings?.google_sheet_webhook_url||'').trim();
+    let sheetSync:any={ok:true,skipped:true,removed:0,verified:0};
+
+    if(webhook){
+      // Delete each known test Order ID first. This remains compatible with the
+      // stable Sheet script, while the source cleanup also removes orphaned test
+      // rows left by an earlier interrupted operation.
+      let removed=0;
+      for(const order of testOrders){
+        const result=await postAppsScriptFastServer(webhook,{
+          payload_type:'order_delete',
+          order_number:order.order_number,
+          order_source:source,
+          reason:'Delete test order',
+        });
+        if(String(result?.status||'')!=='order_deleted'){
+          throw new Error(`Google Sheet did not confirm deletion of ${order.order_number}.`);
+        }
+        removed+=Math.max(0,Number(result?.removed??result?.deleted??0));
+      }
+
+      const cleanup=await postAppsScriptFastServer(webhook,{
+        payload_type:'clear_test_orders',
+        source,
+      });
+      if(String(cleanup?.status||'')!=='test_orders_cleared'){
+        throw new Error(`Google Sheet did not confirm ${source} test cleanup.`);
+      }
+      removed+=Math.max(0,Number(cleanup?.removed||0));
+
+      // A successful status alone is not enough: physically read every known ID
+      // back before removing its durable snapshot.
+      for(const orderNumber of orderNumbers){
+        const check=await postAppsScriptFastServer(webhook,{action:'read_order',orderId:orderNumber});
+        if(check?.found===true || Number(check?.rows||0)>0){
+          throw new Error(`Google Sheet still contains ${orderNumber}; system cleanup was stopped.`);
+        }
+      }
+      sheetSync={ok:true,skipped:false,removed,verified:orderNumbers.length};
+    }
+
+    if(ids.length){
+      try{
+        if(sb){
+          const {error}=await sb.from('order_snapshots').delete().in('order_id',ids);
+          if(error) throw error;
+          const {data:remaining,error:verifyError}=await sb.from('order_snapshots').select('order_id').in('order_id',ids);
+          if(verifyError) throw verifyError;
+          if((remaining||[]).length) throw new Error(`${remaining.length} durable test order(s) still remain.`);
+        }
+        writeOrderSnapshotsLocal(readOrderSnapshotsLocal().filter((order:any)=>!ids.includes(String(order.id))));
+      }catch(deleteError:any){
+        // Restore only these test rows if durable deletion fails after the Sheet
+        // was cleared. Real orders are never included in this rollback.
+        if(webhook && testOrders.length) await syncOrdersToGoogleSheetsServer(testOrders).catch(()=>undefined);
+        throw new Error(`Durable test-order deletion failed: ${deleteError?.message||deleteError}`);
+      }
+    }
+
+    return res.json({
+      ok:true,
+      source,
+      deleted_count:testOrders.length,
+      deleted_ids:ids,
+      deleted_order_numbers:orderNumbers,
+      sheet_sync:sheetSync,
+    });
+  }catch(e:any){
+    return res.status(500).json({error:e?.message||`${source} test-order cleanup failed.`});
+  }
+});
+
 app.post('/api/orders/invoice-download-status', requireAdminSession, async (req,res)=>{
   try{
     const orderIds=Array.from(new Set(

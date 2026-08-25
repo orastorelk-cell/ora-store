@@ -1147,6 +1147,16 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
+  const handleDeleteSourceTests = async (source:'Facebook Ads'|'TikTok Ads') => {
+    const label=source==='Facebook Ads'?'Facebook':'TikTok';
+    try{
+      const count=await deleteSourceTestOrders(source);
+      alert(`Deleted ${count} ${label} test order(s). Google Sheet removal verified.`);
+    }catch(error:any){
+      alert(`${label} test cleanup was stopped. No local success was recorded.\n\n${error?.message||'Google Sheet deletion could not be verified.'}`);
+    }
+  };
+
   const handleCsvFileUpload = (file: File) => {
     setBulkCsvFileName(file.name);
     const reader = new FileReader();
@@ -3936,14 +3946,14 @@ export const AdminDashboard: React.FC = () => {
                 <p className="text-xs font-black text-sky-300">Facebook Test</p>
                 <p className="mt-1 text-[10px] text-neutral-400">Creates one FB test lead through the same bulk-import + Sheet path.</p>
                 <button type="button" onClick={()=>handleSourceTestLead('Facebook Ads')} className="mt-3 w-full rounded-lg bg-sky-500 px-3 py-2 text-[11px] font-black text-white">Create Facebook Test Order</button>
-                <button type="button" onClick={async()=>{const count=await deleteSourceTestOrders('Facebook Ads');alert(`Deleted ${count} Facebook test order(s).`);}} className="mt-2 w-full rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-[11px] font-black text-red-300">Delete Facebook Tests</button>
+                <button type="button" onClick={()=>handleDeleteSourceTests('Facebook Ads')} className="mt-2 w-full rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-[11px] font-black text-red-300">Delete Facebook Tests</button>
               </div>
 
               <div className="rounded-xl border border-fuchsia-500/30 bg-fuchsia-500/5 p-4">
                 <p className="text-xs font-black text-fuchsia-300">TikTok Test</p>
                 <p className="mt-1 text-[10px] text-neutral-400">Creates one TikTok test lead through the same bulk-import + Sheet path.</p>
                 <button type="button" onClick={()=>handleSourceTestLead('TikTok Ads')} className="mt-3 w-full rounded-lg bg-fuchsia-500 px-3 py-2 text-[11px] font-black text-white">Create TikTok Test Order</button>
-                <button type="button" onClick={async()=>{const count=await deleteSourceTestOrders('TikTok Ads');alert(`Deleted ${count} TikTok test order(s).`);}} className="mt-2 w-full rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-[11px] font-black text-red-300">Delete TikTok Tests</button>
+                <button type="button" onClick={()=>handleDeleteSourceTests('TikTok Ads')} className="mt-2 w-full rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-[11px] font-black text-red-300">Delete TikTok Tests</button>
               </div>
             </div>
 
