@@ -7,6 +7,7 @@ export interface BundleComponentOfferDisplay {
   referencePrice: number;
   customerPrice: number;
   saving: number;
+  percent: number;
 }
 
 const money = (value: unknown) => Math.max(0, Math.round(Number(value || 0) * 100) / 100);
@@ -19,6 +20,9 @@ const money = (value: unknown) => Math.max(0, Math.round(Number(value || 0) * 10
  * item/variant in the bundle. Existing saved supplier offers have priority; when a
  * child has no saved offer, its automatic percentage Special Offer reference price
  * is used. Children with no offer simply contribute their current selling price.
+ *
+ * The returned combo percent is derived only for display/catalog metadata:
+ * saving / referencePrice * 100. It never changes the payable combo price.
  */
 export const bundleComponentOfferDisplay = (
   bundle: Product,
@@ -26,24 +30,26 @@ export const bundleComponentOfferDisplay = (
   settings?: StoreSettings,
 ): BundleComponentOfferDisplay => {
   const customerPrice = money(displayUnitPrice(bundle, settings));
-  if (normalizedProductType(bundle) !== 'bundle') {
-    return { active: false, referencePrice: 0, customerPrice, saving: 0 };
-  }
+  const inactive = (): BundleComponentOfferDisplay => ({
+    active: false,
+    referencePrice: 0,
+    customerPrice,
+    saving: 0,
+    percent: 0,
+  });
+
+  if (normalizedProductType(bundle) !== 'bundle') return inactive();
 
   const components = bundle.bundle_components || [];
-  if (!components.length) return { active: false, referencePrice: 0, customerPrice, saving: 0 };
+  if (!components.length) return inactive();
 
   let referencePrice = 0;
   for (const component of components) {
     const child = allProducts.find((product) => product.id === component.product_id);
-    if (!child || normalizedProductType(child) === 'bundle') {
-      return { active: false, referencePrice: 0, customerPrice, saving: 0 };
-    }
+    if (!child || normalizedProductType(child) === 'bundle') return inactive();
 
     const variant = component.variant_id ? variantById(child, component.variant_id) : undefined;
-    if (normalizedProductType(child) === 'variant' && !variant) {
-      return { active: false, referencePrice: 0, customerPrice, saving: 0 };
-    }
+    if (normalizedProductType(child) === 'variant' && !variant) return inactive();
 
     const quantity = Math.max(1, Number(component.quantity || 1));
     const current = money(displayUnitPrice(child, settings, variant));
@@ -66,10 +72,15 @@ export const bundleComponentOfferDisplay = (
 
   referencePrice = money(referencePrice);
   const saving = money(Math.max(0, referencePrice - customerPrice));
+  const percent = referencePrice > 0 && saving > 0
+    ? Math.round((saving / referencePrice) * 1000) / 10
+    : 0;
+
   return {
     active: referencePrice > customerPrice + 0.001 && saving > 0,
     referencePrice,
     customerPrice,
     saving,
+    percent,
   };
 };
