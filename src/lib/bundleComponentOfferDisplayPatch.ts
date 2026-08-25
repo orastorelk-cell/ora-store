@@ -71,12 +71,12 @@ export const bundleComponentOfferDisplayPatch = () => ({
       const calcReplacement = `  const bundleOffer = type === 'bundle'\n    ? bundleComponentOfferDisplay(selectedProduct, products, settings)\n    : { active: false, referencePrice: 0, customerPrice: unitPrice, saving: 0 };\n  const hasBundleOffer = type === 'bundle' && bundleOffer.active;\n  const hasDisplayedSpecialOffer = hasBundleOffer || hasDiscount || autoRoundSpecialOffer.active;\n  const displayedRegularPrice = hasBundleOffer ? bundleOffer.referencePrice : (hasDiscount ? regularUnitPrice : autoRoundSpecialOffer.regularPrice);\n  const deliveryLabel = settings.free_delivery_enabled`;
       text = replaceRequired(text, calcMarker, calcReplacement, 'ProductDetail combo calculation');
 
-      const imageBadge = `{hasDisplayedSpecialOffer && <span className="absolute left-4 top-4 rounded-xl bg-orange-600 px-3 py-2 text-sm font-black text-white shadow-lg">{hasDiscount ? \`${discountPercent}% OFF\` : \`${autoRoundSpecialOffer.percent}% OFF\`}</span>}`;
-      const imageBadgeReplacement = `{hasDisplayedSpecialOffer && <span className="absolute left-4 top-4 rounded-xl bg-orange-600 px-3 py-2 text-sm font-black text-white shadow-lg">{hasBundleOffer ? \`SAVE Rs. ${formatLkr(bundleOffer.saving)}\` : (hasDiscount ? \`${discountPercent}% OFF\` : \`${autoRoundSpecialOffer.percent}% OFF\`)}</span>}`;
+      const imageBadge = "{hasDisplayedSpecialOffer && <span className=\"absolute left-4 top-4 rounded-xl bg-orange-600 px-3 py-2 text-sm font-black text-white shadow-lg\">{hasDiscount ? `${discountPercent}% OFF` : `${autoRoundSpecialOffer.percent}% OFF`}</span>}";
+      const imageBadgeReplacement = "{hasDisplayedSpecialOffer && <span className=\"absolute left-4 top-4 rounded-xl bg-orange-600 px-3 py-2 text-sm font-black text-white shadow-lg\">{hasBundleOffer ? `SAVE Rs. ${formatLkr(bundleOffer.saving)}` : (hasDiscount ? `${discountPercent}% OFF` : `${autoRoundSpecialOffer.percent}% OFF`)}</span>}";
       text = replaceRequired(text, imageBadge, imageBadgeReplacement, 'ProductDetail image saving badge');
 
-      const priceBadge = `{hasDisplayedSpecialOffer && <span className="rounded-full bg-orange-100 px-2 py-1 text-[10px] font-black text-orange-700">SPECIAL OFFER</span>}`;
-      const priceBadgeReplacement = `{hasDisplayedSpecialOffer && <span className="rounded-full bg-orange-100 px-2 py-1 text-[10px] font-black text-orange-700">{hasBundleOffer ? \`SAVE Rs. ${formatLkr(bundleOffer.saving)}\` : 'SPECIAL OFFER'}</span>}`;
+      const priceBadge = "{hasDisplayedSpecialOffer && <span className=\"rounded-full bg-orange-100 px-2 py-1 text-[10px] font-black text-orange-700\">SPECIAL OFFER</span>}";
+      const priceBadgeReplacement = "{hasDisplayedSpecialOffer && <span className=\"rounded-full bg-orange-100 px-2 py-1 text-[10px] font-black text-orange-700\">{hasBundleOffer ? `SAVE Rs. ${formatLkr(bundleOffer.saving)}` : 'SPECIAL OFFER'}</span>}";
       text = replaceRequired(text, priceBadge, priceBadgeReplacement, 'ProductDetail price saving badge');
 
       return { code: text, map: null };
