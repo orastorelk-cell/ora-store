@@ -6,11 +6,13 @@ const replaceRequired = (text: string, from: string, to: string, label: string) 
 
 /**
  * Invoice presentation rule:
- * - item Unit Price / line Total show the normal crossed/reference price
- * - Sub Total is the sum of those crossed/reference line totals
+ * - item Unit Price / line Total ALWAYS show the actual customer selling price
+ * - Normal Total shows the higher crossed/reference-price total
  * - Offer Discount subtracts every saved/Special Offer + Qty Offer amount
  * - final payable amount remains the locked order total
  *
+ * Example: actual Unit Price 850, crossed price 950 => row shows 850,
+ * Normal Total shows 950, Offer Discount shows -100, final remains 850.
  * No cart, payment, stock, Sheet selling price, or customer charged price is changed.
  */
 export const invoiceCrossedPriceMathPatch = () => ({
@@ -28,17 +30,18 @@ export const invoiceCrossedPriceMathPatch = () => ({
         text = text.replace(priceMathMarker, helper);
       }
 
-      text = replaceRequired(
-        text,
-        `<text class=\"t table\" x=\"1090\" y=\"\${ty}\">\${item?money(item.unit_price):''}</text>\n <text class=\"t table\" x=\"1280\" y=\"\${ty}\">\${item?money(item.subtotal):''}</text>`,
-        `<text class=\"t table\" x=\"1090\" y=\"\${ty}\">\${item?money(invoiceReferenceUnitPrice(item)):''}</text>\n <text class=\"t table\" x=\"1280\" y=\"\${ty}\">\${item?money(invoiceReferenceLineTotal(item)):''}</text>`,
-        'invoice item crossed price cells',
-      );
-
-      // Sub Total is derived from the exact crossed/reference rows printed above.
+      // IMPORTANT: item rows intentionally remain item.unit_price / item.subtotal.
+      // Only the summary's Normal Total uses crossed/reference prices.
       const oldNormalSubtotal = `  const normalSubtotal = Math.max(0, Number(order.subtotal || 0) + supplierOfferDiscount);`;
       const newNormalSubtotal = `  const normalSubtotal = Math.max(0, (order.items || []).reduce((sum,item) => sum + invoiceReferenceLineTotal(item), 0));`;
       text = replaceRequired(text, oldNormalSubtotal, newNormalSubtotal, 'normal crossed subtotal');
+
+      text = replaceRequired(
+        text,
+        `{ label:'Sub Total', value:money(normalSubtotal) },`,
+        `{ label:'Normal Total', value:money(normalSubtotal) },`,
+        'Normal Total label',
+      );
 
       return { code: text, map: null };
     }
@@ -46,8 +49,8 @@ export const invoiceCrossedPriceMathPatch = () => ({
     if (id.endsWith('/src/lib/pdfGenerator.ts')) {
       // For existing orders, first reuse the old locked per-item crossed price when
       // it still agrees with the Confirm/Sheet Normal Total. If that old snapshot is
-      // corrupt, fall back to rebuilding only the aggregate crossed total from the
-      // confirmed amounts rather than trusting stale product prices.
+      // corrupt, rebuild only the reference-price metadata. The repaired item's
+      // unit_price/subtotal remain the actual confirmed customer prices.
       const repairedItemMarker = `      unit_price:unit,\n      subtotal:line,\n      supplier_offer_discount_per_unit:0,`;
       const repairedItemReplacement = `      unit_price:unit,\n      subtotal:line,\n      regular_unit_price:Math.max(unit,repairMoney(prior?.regular_unit_price),unit+repairMoney(prior?.supplier_offer_discount_per_unit)),\n      supplier_offer_discount_per_unit:Math.max(0,Math.max(unit,repairMoney(prior?.regular_unit_price),unit+repairMoney(prior?.supplier_offer_discount_per_unit))-unit),`;
       text = replaceRequired(text, repairedItemMarker, repairedItemReplacement, 'repair item crossed price seed');
