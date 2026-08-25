@@ -1,5 +1,5 @@
 const replaceRequired = (text: string, from: string, to: string, label: string) => {
-  if (text.includes(to)) return text;
+  if (to && text.includes(to)) return text;
   if (!text.includes(from)) throw new Error(`[O-RA product card offer layout] ${label} marker not found`);
   return text.replace(from, to);
 };
