@@ -5,15 +5,14 @@ const replaceRequired = (text: string, from: string, to: string, label: string) 
 };
 
 /**
- * Invoice presentation rule:
- * - item Unit Price / line Total ALWAYS show the actual customer selling price
- * - Normal Total shows the higher crossed/reference-price total
- * - Offer Discount subtracts every saved/Special Offer + Qty Offer amount
- * - final payable amount remains the locked order total
+ * Invoice follows the same Call Center math as Google Sheets:
+ * - item Unit Price / line Total show the crossed/reference price when active
+ * - Normal Total is the crossed/reference total
+ * - Special Offer + Qty Offer are deductions from that normal total
+ * - final payable amount remains the locked actual order total
  *
- * Example: actual Unit Price 850, crossed price 950 => row shows 850,
- * Normal Total shows 950, Offer Discount shows -100, final remains 850.
- * No cart, payment, stock, Sheet selling price, or customer charged price is changed.
+ * The real charged item.unit_price is never mutated. The invoice only renders the
+ * stored regular/reference snapshot for clarity.
  */
 export const invoiceCrossedPriceMathPatch = () => ({
   name: 'ora-invoice-crossed-price-math-patch',
@@ -30,8 +29,13 @@ export const invoiceCrossedPriceMathPatch = () => ({
         text = text.replace(priceMathMarker, helper);
       }
 
-      // IMPORTANT: item rows intentionally remain item.unit_price / item.subtotal.
-      // Only the summary's Normal Total uses crossed/reference prices.
+      text = replaceRequired(
+        text,
+        `<text class=\"t table\" x=\"1090\" y=\"\${ty}\">\${item?money(item.unit_price):''}</text>\n <text class=\"t table\" x=\"1280\" y=\"\${ty}\">\${item?money(item.subtotal):''}</text>`,
+        `<text class=\"t table\" x=\"1090\" y=\"\${ty}\">\${item?money(invoiceReferenceUnitPrice(item)):''}</text>\n <text class=\"t table\" x=\"1280\" y=\"\${ty}\">\${item?money(invoiceReferenceLineTotal(item)):''}</text>`,
+        'invoice crossed item cells',
+      );
+
       const oldNormalSubtotal = `  const normalSubtotal = Math.max(0, Number(order.subtotal || 0) + supplierOfferDiscount);`;
       const newNormalSubtotal = `  const normalSubtotal = Math.max(0, (order.items || []).reduce((sum,item) => sum + invoiceReferenceLineTotal(item), 0));`;
       text = replaceRequired(text, oldNormalSubtotal, newNormalSubtotal, 'normal crossed subtotal');
@@ -47,10 +51,6 @@ export const invoiceCrossedPriceMathPatch = () => ({
     }
 
     if (id.endsWith('/src/lib/pdfGenerator.ts')) {
-      // For existing orders, first reuse the old locked per-item crossed price when
-      // it still agrees with the Confirm/Sheet Normal Total. If that old snapshot is
-      // corrupt, rebuild only the reference-price metadata. The repaired item's
-      // unit_price/subtotal remain the actual confirmed customer prices.
       const repairedItemMarker = `      unit_price:unit,\n      subtotal:line,\n      supplier_offer_discount_per_unit:0,`;
       const repairedItemReplacement = `      unit_price:unit,\n      subtotal:line,\n      regular_unit_price:Math.max(unit,repairMoney(prior?.regular_unit_price),unit+repairMoney(prior?.supplier_offer_discount_per_unit)),\n      supplier_offer_discount_per_unit:Math.max(0,Math.max(unit,repairMoney(prior?.regular_unit_price),unit+repairMoney(prior?.supplier_offer_discount_per_unit))-unit),`;
       text = replaceRequired(text, repairedItemMarker, repairedItemReplacement, 'repair item crossed price seed');
@@ -59,7 +59,6 @@ export const invoiceCrossedPriceMathPatch = () => ({
       const newDisplaySpecial = `  const displaySpecial=Math.max(0,Math.round((normalTotal-subtotal)*100)/100);\n  const candidateCrossed=Math.round(repairedItems.reduce((sum,item)=>sum+Math.max(repairMoney(item.unit_price),repairMoney((item as any).regular_unit_price))*Math.max(1,Number(item.quantity||1)),0)*100)/100;\n  if(Math.abs(candidateCrossed-normalTotal)>0.01){\n    let allocated=0;\n    for(let i=0;i<repairedItems.length;i++){\n      const item=repairedItems[i];\n      const qty=Math.max(1,Number(item.quantity||1));\n      const actualLine=repairMoney(item.subtotal);\n      const saving=i===repairedItems.length-1\n        ? Math.max(0,Math.round((displaySpecial-allocated)*100)/100)\n        : Math.max(0,Math.round((displaySpecial*(subtotal>0?actualLine/subtotal:0))*100)/100);\n      allocated=Math.round((allocated+saving)*100)/100;\n      const perUnit=saving/qty;\n      repairedItems[i]={\n        ...item,\n        regular_unit_price:repairMoney(item.unit_price)+perUnit,\n        supplier_offer_discount_per_unit:perUnit,\n      };\n    }\n  }`;
       text = replaceRequired(text, oldDisplaySpecial, newDisplaySpecial, 'repair crossed-price reconstruction');
 
-      // Guard the mathematical identity before a repaired PDF can download.
       const computedMarker = `  const computed=Math.max(0,Math.round((subtotal-qtyOffer+delivery+wrapFee)*100)/100);`;
       const computedReplacement = `  const crossedSubtotal=Math.round((subtotal+displaySpecial)*100)/100;\n  const allDiscount=Math.round((displaySpecial+qtyOffer)*100)/100;\n  const computed=Math.max(0,Math.round((crossedSubtotal-allDiscount+delivery+wrapFee)*100)/100);`;
       text = replaceRequired(text, computedMarker, computedReplacement, 'repair crossed-total equation');
