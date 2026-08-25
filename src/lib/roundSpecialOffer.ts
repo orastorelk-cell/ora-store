@@ -4,7 +4,7 @@ export interface RoundSpecialOfferResult {
   regularPrice: number;
   saving: number;
   percent: number;
-  reason: 'active' | 'disabled' | 'free-delivery-required' | 'existing-offer' | 'already-round' | 'invalid-price';
+  reason: 'active' | 'disabled' | 'free-delivery-required' | 'existing-offer' | 'already-round' | 'invalid-price' | 'invalid-percent';
 }
 
 const money = (value: unknown) => Math.max(0, Math.round(Number(value || 0) * 100) / 100);
@@ -12,62 +12,60 @@ const money = (value: unknown) => Math.max(0, Math.round(Number(value || 0) * 10
 /**
  * O-RA display-only automatic Special Offer helper.
  *
- * The charged customer price never changes here. When the saved product toggle is ON,
- * Free Delivery is ON, and no real/supplier discount is already active, a non-round
- * customer price receives a higher clean reference price for the Special Offer display.
+ * The saved/current customer price is always the price actually charged. The admin
+ * selects the offer percentage and this helper works backwards to create only the
+ * higher crossed-out reference price. Free Delivery is intentionally NOT a condition;
+ * the feature works whether Free Delivery is ON or OFF.
  *
- * The rule matches the approved examples:
- *   860 -> 900
- *   1110 -> 1150
- *   1140 -> 1200
- *   1190 -> 1200
- *   1240 -> 1300
- *   2090 -> 2100
- * Prices already ending in 00/50 stay untouched.
+ * Example: current price Rs.1,110 + 5% offer => crossed reference about Rs.1,170,
+ * while the charged customer price remains exactly Rs.1,110.
  */
 export const calculateRoundSpecialOffer = (input: {
   currentPrice: number;
   enabled: boolean;
-  freeDeliveryEnabled: boolean;
+  percent?: number;
+  freeDeliveryEnabled?: boolean; // retained for backward compatibility; not a gate
   hasExistingDiscount?: boolean;
 }): RoundSpecialOfferResult => {
   const offerPrice = money(input.currentPrice);
+  const requestedPercent = Math.max(0, Math.min(80, Number(input.percent || 0)));
   const inactive = (reason: RoundSpecialOfferResult['reason']): RoundSpecialOfferResult => ({
     active: false,
     offerPrice,
     regularPrice: offerPrice,
     saving: 0,
-    percent: 0,
+    percent: requestedPercent,
     reason,
   });
 
   if (!input.enabled) return inactive('disabled');
-  if (!input.freeDeliveryEnabled) return inactive('free-delivery-required');
   if (input.hasExistingDiscount) return inactive('existing-offer');
   if (!(offerPrice > 0)) return inactive('invalid-price');
+  if (!(requestedPercent > 0 && requestedPercent < 100)) return inactive('invalid-percent');
 
-  const whole = Math.round(offerPrice);
-  if (whole % 50 === 0) return inactive('already-round');
-
-  const nextHundred = Math.ceil(whole / 100) * 100;
-  const nextFifty = Math.ceil(whole / 50) * 50;
-  // Prefer a clean hundred. If that jump would exceed Rs.60, use the next Rs.50 mark.
-  // This keeps the display saving small and reproduces the approved current-price examples.
-  let regularPrice = nextHundred - whole > 60 ? nextFifty : nextHundred;
-  if (regularPrice <= offerPrice) regularPrice = nextFifty > offerPrice ? nextFifty : nextHundred;
-  if (regularPrice <= offerPrice) return inactive('already-round');
+  // Work backwards from the real customer price. Round the display-only reference
+  // UP to the next Rs.10 so the crossed price stays clean and never drops below the
+  // percentage-derived reference value.
+  const rawRegularPrice = offerPrice / (1 - requestedPercent / 100);
+  const regularPrice = money(Math.ceil(rawRegularPrice / 10) * 10);
+  if (!(regularPrice > offerPrice)) return inactive('invalid-percent');
 
   const saving = money(regularPrice - offerPrice);
-  const percent = regularPrice > 0 ? Math.max(1, Math.round((saving / regularPrice) * 100)) : 0;
   return {
     active: saving > 0,
     offerPrice,
-    regularPrice: money(regularPrice),
+    regularPrice,
     saving,
-    percent,
-    reason: saving > 0 ? 'active' : 'already-round',
+    percent: requestedPercent,
+    reason: saving > 0 ? 'active' : 'invalid-percent',
   };
 };
 
 export const roundSpecialOfferEnabledForProduct = (product: any) =>
   product?.auto_round_special_offer_enabled === true;
+
+export const roundSpecialOfferPercentForProduct = (product: any) => {
+  const value = Number(product?.auto_round_special_offer_percent ?? 5);
+  if (!Number.isFinite(value)) return 5;
+  return Math.max(1, Math.min(80, Math.round(value * 10) / 10));
+};
