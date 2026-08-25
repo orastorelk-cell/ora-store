@@ -65,6 +65,7 @@ import dotenv from "dotenv";
 import crypto from "crypto";
 import fs from "fs";
 import { createClient } from "@supabase/supabase-js";
+import { validateProductBackup } from "./src/lib/productBackup";
 
 dotenv.config();
 
@@ -943,6 +944,43 @@ return res.json({ ok:true, version:state.version, updated_at:state.updated_at })
 
   } catch (e:any) {
     return res.status(500).json({ error:e?.message || 'Shared storefront state could not be saved.' });
+  }
+});
+
+// A catalog backup may only be restored into a completely empty catalog. This
+// server-side guard prevents an accidental or modified client from overwriting
+// live products. The existing storefront settings are preserved unchanged.
+app.post('/api/admin/storefront/product-backup/restore', requireSuperAdmin, async (req,res) => {
+  try {
+    const current = await readSharedStorefrontState();
+    if ((current?.products || []).length || (current?.categories || []).length) {
+      return res.status(409).json({
+        error:'For safety, Product Import works only after Products and Categories are both empty. Export a backup before using FULL LIVE START RESET.',
+      });
+    }
+
+    const backup = validateProductBackup(req.body?.backup);
+    const state = await writeSharedStorefrontState({
+      products:backup.products,
+      categories:backup.categories,
+      settings:{...(current?.settings || {})},
+    });
+    const persisted = await readSharedStorefrontState();
+    const expectedProducts = backup.products.map((product) => `${product.id}:${product.sku}`).sort().join('|');
+    const savedProducts = (persisted?.products || []).map((product:any) => `${product?.id}:${product?.sku}`).sort().join('|');
+    const expectedCategories = backup.categories.map((category) => `${category.id}:${category.slug}`).sort().join('|');
+    const savedCategories = (persisted?.categories || []).map((category:any) => `${category?.id}:${category?.slug}`).sort().join('|');
+    if (expectedProducts !== savedProducts || expectedCategories !== savedCategories) {
+      throw new Error('Server could not verify the restored product backup. Please try again; no restore was confirmed.');
+    }
+    return res.json({
+      ok:true,
+      restored_products:backup.products.length,
+      restored_categories:backup.categories.length,
+      state,
+    });
+  } catch (e:any) {
+    return res.status(400).json({ error:e?.message || 'Product backup could not be restored.' });
   }
 });
 

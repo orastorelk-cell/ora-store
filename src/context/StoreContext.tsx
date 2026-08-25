@@ -204,6 +204,7 @@ interface StoreContextType {
   updateProduct: (product: Product) => void;
   deleteProduct: (productId: string) => void;
   adjustStock: (productId: string, quantityChange: number, reason: string, performedBy?: string, variantId?: string) => void;
+  restoreProductBackup: (backup: unknown) => Promise<{ restoredProducts: number; restoredCategories: number }>;
 
 
   // Category CRUD
@@ -2509,6 +2510,27 @@ useEffect(() => {
   const updateProduct=(updatedProduct:Product)=>{ const clean=normalizeProductForStorage(updatedProduct); validateProductSkus(clean,clean.id); setProducts(prev=>repriceAutoBundles(prev.map(p=>p.id===clean.id?clean:p))); logActivity({action:'Product Updated',module:'Products',target_id:clean.id,target_label:clean.name_en}); };
   const deleteProduct=(productId:string)=>{ const target=products.find(p=>p.id===productId); if(!target)return; const used=products.find(p=>p.id!==productId&&(p.bundle_components||[]).some(c=>c.product_id===productId)); if(used)throw new Error(`Cannot delete ${target.name_en}; it is used inside bundle ${used.name_en}. Remove it from that bundle first.`); setProducts(prev=>prev.filter(p=>p.id!==productId)); logActivity({action:'Product Deleted',module:'Products',target_id:productId,target_label:target.name_en,details:'Current catalog removed; historical order/invoice snapshots are preserved.'}); };
 
+  const restoreProductBackup = async (backup: unknown) => {
+    if (adminUser?.role !== 'admin') throw new Error('Super Admin access is required to import a product backup.');
+    if (products.length || categories.length) {
+      throw new Error('For safety, Product Import works only after Products and Categories are both empty.');
+    }
+    const data = await sharedStaffRequest('/api/admin/storefront/product-backup/restore', {
+      method:'POST',
+      body:JSON.stringify({ backup }),
+    });
+    if (!data?.ok || !data?.state) throw new Error('Server did not confirm the product backup restore.');
+    applySharedStorefrontState(data.state, true);
+    const restoredProducts = Number(data.restored_products || 0);
+    const restoredCategories = Number(data.restored_categories || 0);
+    logActivity({
+      action:'Product Backup Restored',
+      module:'Products',
+      details:`${restoredProducts} product(s) and ${restoredCategories} category(s) restored after full validation.`,
+    });
+    return { restoredProducts, restoredCategories };
+  };
+
   const adjustStock=(productId:string,quantityChange:number,reason:string,performedBy='Admin',variantId?:string)=>{ const now=new Date().toISOString(); setProducts(prev=>prev.map(p=>{ if(p.id!==productId)return p; if(normalizedProductType(p)==='bundle')throw new Error('Bundle stock is calculated from component products. Adjust component stock instead.'); if(normalizedProductType(p)==='variant'){ if(!variantId)throw new Error('Select the exact color / variant before changing stock.'); const target=variantById(p,variantId); if(!target)throw new Error('Variant not found.'); const before=Number(target.stock_quantity||0),after=Math.max(0,before+quantityChange); const variants=(p.variants||[]).map(v=>v.id===variantId?{...v,stock_quantity:after,status:(after<=0?'Out of Stock':'Active') as Product['status']}:v); const total=variants.reduce((n,v)=>n+Number(v.stock_quantity||0),0); setStockHistory(logs=>[{id:`stk-${Date.now()}-${variantId}`,product_id:p.id,product_name:`${p.name_en} - ${target.option_value}`,change_type:quantityChange>=0?'Increase':'Decrease',quantity:Math.abs(quantityChange),previous_stock:before,new_stock:after,reason,performed_by:performedBy,created_at:now},...logs]); logActivity({action:'Variant Stock Adjusted',module:'Stock',target_id:p.id,target_label:`${p.name_en} - ${target.option_value}`,details:`${quantityChange>=0?'+':''}${quantityChange}; ${reason}`}); return {...p,variants,stock_quantity:total,status:total<=0?'Out of Stock':'Active'}; } const before=Number(p.stock_quantity||0),after=Math.max(0,before+quantityChange); setStockHistory(logs=>[{id:`stk-${Date.now()}`,product_id:p.id,product_name:p.name_en,change_type:quantityChange>=0?'Increase':'Decrease',quantity:Math.abs(quantityChange),previous_stock:before,new_stock:after,reason,performed_by:performedBy,created_at:now},...logs]); return {...p,stock_quantity:after,status:after<=0?'Out of Stock':'Active'}; })); };
 
   const addPurchaseOrder=(poData:{supplier_name:string;product_id:string;variant_id?:string;quantity_added:number;unit_buying_price:number;invoice_ref?:string;notes?:string;performed_by?:string;})=>{
@@ -2689,6 +2711,7 @@ useEffect(() => {
         updateProduct,
         deleteProduct,
         adjustStock,
+        restoreProductBackup,
         addCategory,
         updateCategory,
         deleteCategory,

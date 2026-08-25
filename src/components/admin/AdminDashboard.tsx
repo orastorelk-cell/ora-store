@@ -101,6 +101,7 @@ import { suggestProductMetadata } from '../../lib/productAutoPopular';
 import { buildVariantSku, normalizedProductType, productDisplayStock, productPriceRange, variantById, displayUnitPrice, oraProfitForBuyingPrice, repriceAfterBuyingCostChange, supplierPricePreview, variantOptions } from '../../lib/productVariants';
 import { compressImageFile, uploadPublicImage, uploadRawImageFile } from '../../lib/imageUpload';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
+import { createProductBackup, PRODUCT_BACKUP_MAX_BYTES, validateProductBackup } from '../../lib/productBackup';
 
 const ITEM_DETAIL_PRESETS: Array<{ label_en: string; label_si: string }> = [
   { label_en: 'Model', label_si: 'මාදිලිය' },
@@ -166,6 +167,7 @@ export const AdminDashboard: React.FC = () => {
     updateProduct,
     deleteProduct,
     adjustStock,
+    restoreProductBackup,
     addCategory,
     updateCategory,
     deleteCategory,
@@ -441,6 +443,55 @@ export const AdminDashboard: React.FC = () => {
   // Item Code (SKU) & Product Search Filters
   const [productSearchQuery, setProductSearchQuery] = useState('');
   const [manualItemSearch, setManualItemSearch] = useState('');
+  const productBackupInputRef = useRef<HTMLInputElement>(null);
+  const [productBackupBusy, setProductBackupBusy] = useState(false);
+
+  const exportProductBackup = () => {
+    if (!products.length) {
+      alert('There are no products to export.');
+      return;
+    }
+    const backup = createProductBackup(products, categories);
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type:'application/json' });
+    const url = URL.createObjectURL(blob);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `O-RA-Products-Backup-${timestamp}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  };
+
+  const openProductBackupImport = () => {
+    if (products.length || categories.length) {
+      alert('For safety, Product Import works only when both Products and Categories are empty. Export first, then use it after FULL LIVE START RESET.');
+      return;
+    }
+    productBackupInputRef.current?.click();
+  };
+
+  const importProductBackup = async (file?: File) => {
+    if (!file) return;
+    setProductBackupBusy(true);
+    try {
+      if (file.size > PRODUCT_BACKUP_MAX_BYTES) throw new Error('Product backup is too large (maximum 15 MB).');
+      const parsed: unknown = JSON.parse(await file.text());
+      const backup = validateProductBackup(parsed);
+      const confirmed = window.confirm(
+        `Restore ${backup.products.length} product(s) and ${backup.categories.length} category(s)?\n\nImages, details, prices, stock, variants and combo links will be restored. Current store settings will stay unchanged.`,
+      );
+      if (!confirmed) return;
+      const result = await restoreProductBackup(backup);
+      alert(`Product backup restored successfully.\n\nProducts: ${result.restoredProducts}\nCategories: ${result.restoredCategories}`);
+    } catch (error:any) {
+      alert(error?.message || 'Product backup could not be imported. No catalog data was changed.');
+    } finally {
+      setProductBackupBusy(false);
+      if (productBackupInputRef.current) productBackupInputRef.current.value = '';
+    }
+  };
 
 
   // New Product Form State
@@ -2455,7 +2506,7 @@ export const AdminDashboard: React.FC = () => {
               <p className="text-xs text-neutral-400">Search and manage product inventory by Item Code (SKU) or Name.</p>
             </div>
 
-            <div className="flex items-center space-x-2">
+            <div className="flex flex-wrap items-center gap-2">
               <div className="relative flex-1 sm:w-64">
                 <Search className="w-4 h-4 text-neutral-500 absolute left-3 top-2.5" />
                 <input
@@ -2466,6 +2517,37 @@ export const AdminDashboard: React.FC = () => {
                   className="w-full bg-neutral-900 border border-neutral-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white focus:border-amber-500 font-mono"
                 />
               </div>
+
+              <button
+                type="button"
+                onClick={exportProductBackup}
+                disabled={!products.length || productBackupBusy}
+                className="px-3 py-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 font-bold text-[10px] flex items-center gap-1.5 shrink-0 disabled:opacity-40"
+                title="Download all products, categories, images, details, variants, prices and stock as one JSON backup"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Export Products</span>
+              </button>
+
+              {adminUser?.role === 'admin' && <>
+                <input
+                  ref={productBackupInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={(event) => void importProductBackup(event.target.files?.[0])}
+                />
+                <button
+                  type="button"
+                  onClick={openProductBackupImport}
+                  disabled={productBackupBusy}
+                  className="px-3 py-2 rounded-xl border border-sky-500/40 bg-sky-500/10 text-sky-300 font-bold text-[10px] flex items-center gap-1.5 shrink-0 disabled:opacity-40"
+                  title="Restore a valid O-RA backup after FULL LIVE START RESET"
+                >
+                  {productBackupBusy ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                  <span>{productBackupBusy ? 'Checking...' : 'Import Backup'}</span>
+                </button>
+              </>}
 
               {canAccessTab('add_product') && <button type="button" onClick={handleVariantTestProduct} className="px-3 py-2 rounded-xl border border-violet-500/40 bg-violet-500/10 text-violet-300 font-black text-[10px] shrink-0">
                 {products.some(p=>String(p.sku).toUpperCase()==='TEST-WB01') ? 'Delete Variant Test Product' : 'Add Variant Test Product'}
