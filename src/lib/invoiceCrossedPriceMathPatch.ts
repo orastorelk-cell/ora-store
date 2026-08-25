@@ -35,8 +35,7 @@ export const invoiceCrossedPriceMathPatch = () => ({
         'invoice item crossed price cells',
       );
 
-      // Derive Sub Total from the exact same crossed/reference row values that are
-      // printed above. This removes any chance of row totals and summary disagreeing.
+      // Sub Total is derived from the exact crossed/reference rows printed above.
       const oldNormalSubtotal = `  const normalSubtotal = Math.max(0, Number(order.subtotal || 0) + supplierOfferDiscount);`;
       const newNormalSubtotal = `  const normalSubtotal = Math.max(0, (order.items || []).reduce((sum,item) => sum + invoiceReferenceLineTotal(item), 0));`;
       text = replaceRequired(text, oldNormalSubtotal, newNormalSubtotal, 'normal crossed subtotal');
@@ -45,14 +44,16 @@ export const invoiceCrossedPriceMathPatch = () => ({
     }
 
     if (id.endsWith('/src/lib/pdfGenerator.ts')) {
-      // Repair PDFs must reconstruct regular/crossed unit prices too, otherwise a
-      // repaired bill could have correct final totals but rows that do not add up.
+      // For existing orders, first reuse the old locked per-item crossed price when
+      // it still agrees with the Confirm/Sheet Normal Total. If that old snapshot is
+      // corrupt, fall back to rebuilding only the aggregate crossed total from the
+      // confirmed amounts rather than trusting stale product prices.
       const repairedItemMarker = `      unit_price:unit,\n      subtotal:line,\n      supplier_offer_discount_per_unit:0,`;
-      const repairedItemReplacement = `      unit_price:unit,\n      subtotal:line,\n      regular_unit_price:unit,\n      supplier_offer_discount_per_unit:0,`;
-      text = replaceRequired(text, repairedItemMarker, repairedItemReplacement, 'repair item regular price seed');
+      const repairedItemReplacement = `      unit_price:unit,\n      subtotal:line,\n      regular_unit_price:Math.max(unit,repairMoney(prior?.regular_unit_price),unit+repairMoney(prior?.supplier_offer_discount_per_unit)),\n      supplier_offer_discount_per_unit:Math.max(0,Math.max(unit,repairMoney(prior?.regular_unit_price),unit+repairMoney(prior?.supplier_offer_discount_per_unit))-unit),`;
+      text = replaceRequired(text, repairedItemMarker, repairedItemReplacement, 'repair item crossed price seed');
 
       const oldDisplaySpecial = `  const displaySpecial=Math.max(0,Math.round((normalTotal-subtotal)*100)/100);\n  if(displaySpecial>0 && repairedItems[0]){\n    repairedItems[0]={...repairedItems[0],supplier_offer_discount_per_unit:displaySpecial/Math.max(1,Number(repairedItems[0].quantity||1))};\n  }`;
-      const newDisplaySpecial = `  const displaySpecial=Math.max(0,Math.round((normalTotal-subtotal)*100)/100);\n  if(displaySpecial>0 && repairedItems[0]){\n    const firstQty=Math.max(1,Number(repairedItems[0].quantity||1));\n    const perUnit=displaySpecial/firstQty;\n    repairedItems[0]={\n      ...repairedItems[0],\n      regular_unit_price:repairMoney(repairedItems[0].unit_price)+perUnit,\n      supplier_offer_discount_per_unit:perUnit,\n    };\n  }`;
+      const newDisplaySpecial = `  const displaySpecial=Math.max(0,Math.round((normalTotal-subtotal)*100)/100);\n  const candidateCrossed=Math.round(repairedItems.reduce((sum,item)=>sum+Math.max(repairMoney(item.unit_price),repairMoney((item as any).regular_unit_price))*Math.max(1,Number(item.quantity||1)),0)*100)/100;\n  if(Math.abs(candidateCrossed-normalTotal)>0.01){\n    let allocated=0;\n    for(let i=0;i<repairedItems.length;i++){\n      const item=repairedItems[i];\n      const qty=Math.max(1,Number(item.quantity||1));\n      const actualLine=repairMoney(item.subtotal);\n      const saving=i===repairedItems.length-1\n        ? Math.max(0,Math.round((displaySpecial-allocated)*100)/100)\n        : Math.max(0,Math.round((displaySpecial*(subtotal>0?actualLine/subtotal:0))*100)/100);\n      allocated=Math.round((allocated+saving)*100)/100;\n      const perUnit=saving/qty;\n      repairedItems[i]={\n        ...item,\n        regular_unit_price:repairMoney(item.unit_price)+perUnit,\n        supplier_offer_discount_per_unit:perUnit,\n      };\n    }\n  }`;
       text = replaceRequired(text, oldDisplaySpecial, newDisplaySpecial, 'repair crossed-price reconstruction');
 
       // Guard the mathematical identity before a repaired PDF can download.
