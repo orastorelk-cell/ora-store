@@ -20,8 +20,8 @@ export const qtyOfferMergedDisplayPatch = () => ({
     if (id.endsWith('/src/lib/exactInvoiceTemplateBase.ts')) {
       let text = code;
       const oldLines = `    ...(supplierOfferDiscount > 0 ? [{ label:'Special Offer', value:\`- \${money(supplierOfferDiscount)}\` }] : []),\n    ...(qtyOfferDiscount > 0 ? [{ label:'Qty Offer', value:\`- \${money(qtyOfferDiscount)}\` }] : []),`;
-      const newLines = `    ...((supplierOfferDiscount + qtyOfferDiscount) > 0 ? [{ label:'Qty Offer', value:\`- \${money(supplierOfferDiscount + qtyOfferDiscount)}\` }] : []),`;
-      text = replaceRequired(text, oldLines, newLines, 'Invoice Qty Offer merge');
+      const newLines = `    ...((supplierOfferDiscount + qtyOfferDiscount) > 0 ? [{ label:'Offer Discount', value:\`- \${money(supplierOfferDiscount + qtyOfferDiscount)}\` }] : []),`;
+      text = replaceRequired(text, oldLines, newLines, 'Invoice Offer Discount merge');
       return { code: text, map: null };
     }
 
