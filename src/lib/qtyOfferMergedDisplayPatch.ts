@@ -7,9 +7,9 @@ const replaceRequired = (text: string, from: string, to: string, label: string) 
 /**
  * Presentation-only merge for the new percentage Special Offer.
  *
- * No new Google Sheet field and no new Invoice row is introduced. The display-only
- * percentage saving is added to the existing Qty Offer amount, while the real charged
- * price/final total remains unchanged.
+ * No new Google Sheet field and no new Invoice row is introduced. Invoice keeps one
+ * combined Offer Discount row, while the Sheet's existing Offer cell clearly names
+ * Special Offer and Qty Offer separately. The real charged/final total is unchanged.
  */
 export const qtyOfferMergedDisplayPatch = () => ({
   name: 'ora-qty-offer-merged-display-patch',
@@ -32,9 +32,9 @@ export const qtyOfferMergedDisplayPatch = () => ({
       const start = text.indexOf(startMarker);
       const end = text.indexOf(endMarker, start);
       if (start < 0 || end < 0) {
-        throw new Error('[O-RA merged qty offer display] Google Sheet Qty Offer helper markers not found');
+        throw new Error('[O-RA merged qty offer display] Google Sheet offer helper markers not found');
       }
-      const mergedHelper = `const orderQtyOfferLabel = (order: any): string => {\n  const items = Array.isArray(order?.items) ? order.items : [];\n  const totalQty = items.reduce(\n    (sum: number, item: any) => sum + Math.max(1, Number(item?.quantity || 1)),\n    0,\n  );\n  const discount = Math.max(0, roundMoney(\n    orderItemSpecialOfferDiscount(order) + Math.max(0, roundMoney(order?.special_offer_discount || order?.discount || 0)),\n  ));\n  return discount > 0 ? \`Qty Offer Rs. \${discount} (\${totalQty} items)\` : 'No Qty Offer';\n};`;
+      const mergedHelper = `const orderQtyOfferLabel = (order: any): string => {\n  const items = Array.isArray(order?.items) ? order.items : [];\n  const totalQty = items.reduce(\n    (sum: number, item: any) => sum + Math.max(1, Number(item?.quantity || 1)),\n    0,\n  );\n  const special = Math.max(0, roundMoney(orderItemSpecialOfferDiscount(order)));\n  const qtyDiscount = Math.max(0, roundMoney(order?.special_offer_discount || order?.discount || 0));\n  const labels: string[] = [];\n  if (special > 0) labels.push(\`Special Offer Rs. \${special}\`);\n  if (qtyDiscount > 0) labels.push(\`Qty Offer Rs. \${qtyDiscount} (\${totalQty} items)\`);\n  return labels.length ? labels.join(' + ') : 'No Offer';\n};`;
       text = text.slice(0, start) + mergedHelper + text.slice(end);
       return { code: text, map: null };
     }
