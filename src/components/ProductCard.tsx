@@ -37,6 +37,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
   const needsSelection = type === 'variant';
   const images = cleanImages(product.images);
   const primaryImage = images[0] || activeVariants(product).find((v) => String(v.image || '').trim())?.image || '';
+  const deliveryLabel = settings.free_delivery_enabled
+    ? 'FREE Islandwide Delivery'
+    : `Islandwide Delivery: Rs. ${formatLkr(Math.max(0, Number(settings.delivery_fee || 0)))}`;
 
   const handleBuyNow = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -104,6 +107,10 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
           <span className="ora-product-card-price text-base sm:text-lg font-black text-orange-600">
             {range.min === range.max ? `Rs. ${formatLkr(range.min)}` : `Rs. ${formatLkr(range.min)} - ${formatLkr(range.max)}`}
           </span>
+          <p className={`ora-product-card-delivery mt-1 flex items-center gap-1 whitespace-nowrap text-[9px] font-black leading-tight ${settings.free_delivery_enabled ? 'text-emerald-600' : 'text-gray-500'}`}>
+            <span aria-hidden="true">🚚</span>
+            <span>{deliveryLabel}</span>
+          </p>
         </div>
       </div>
 

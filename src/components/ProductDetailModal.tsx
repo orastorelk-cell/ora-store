@@ -115,6 +115,9 @@ export const ProductDetailModal: React.FC = () => {
   const regularUnitPrice = regularDisplayUnitPrice(selectedProduct, settings, selectedVariant);
   const discountPercent = selectionDiscountPercent(selectedProduct, selectedVariant, settings);
   const hasDiscount = discountPercent > 0;
+  const deliveryLabel = settings.free_delivery_enabled
+    ? 'FREE Islandwide Delivery'
+    : `Islandwide Delivery: Rs. ${formatLkr(Math.max(0, Number(settings.delivery_fee || 0)))}`;
   const galleryImages = cleanImages([
     ...(selectedVariant?.image ? [selectedVariant.image] : []),
     ...(selectedProduct.images || []),
@@ -290,7 +293,7 @@ export const ProductDetailModal: React.FC = () => {
             <div className="rounded-3xl border border-gray-100 bg-gray-50 p-5">
               {hasDiscount && <div className="mb-1 text-sm font-bold text-gray-400 line-through">Rs. {formatLkr(regularUnitPrice)}</div>}
               <div className="flex flex-wrap items-center gap-2"><span className="text-3xl font-black text-orange-600">Rs. {formatLkr(unitPrice)}</span>{hasDiscount && <span className="rounded-full bg-orange-100 px-2 py-1 text-[10px] font-black text-orange-700">SPECIAL OFFER</span>}</div>
-              <p className="mt-1 text-[10px] text-gray-500">{settings.free_delivery_enabled ? 'Displayed unit price follows current FREE delivery pricing rule.' : 'Delivery fee is added separately at checkout.'}</p>
+              <p className={`mt-1.5 flex items-center gap-1 text-[11px] font-black ${settings.free_delivery_enabled ? 'text-emerald-600' : 'text-gray-600'}`}><span aria-hidden="true">🚚</span><span>{deliveryLabel}</span></p>
             </div>
 
             {type === 'variant' && optionGroups.length > 0 && (

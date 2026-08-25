@@ -72,6 +72,13 @@
     line-height: 1.25;
   }
 
+  .ora-product-card-delivery {
+    max-width: 100%;
+    overflow: hidden;
+    font-size: clamp(0.47rem, 2.05vw, 0.5625rem);
+    text-overflow: ellipsis;
+  }
+
   .ora-product-card-discount {
     top: clamp(0.35rem, 1.8vw, 0.5rem);
     left: clamp(0.35rem, 1.8vw, 0.5rem);
