@@ -13,6 +13,7 @@ import { adminDashboardLeadPreviewPatch } from './src/lib/adminDashboardLeadPrev
 import { adminDashboardLeadServerPreviewPatch } from './src/lib/adminDashboardLeadServerPreviewPatch';
 import { adminDashboardProductAutoPopularPatch } from './src/lib/adminDashboardProductAutoPopularPatch';
 import { adminDashboardStoragePatch } from './src/lib/adminDashboardStoragePatch';
+import { mainCategoryHierarchyPatch } from './src/lib/mainCategoryHierarchyPatch';
 import { customerCartWordingPatch } from './src/lib/customerCartWordingPatch';
 import { welcomeSplashAppPatch } from './src/lib/welcomeSplashAppPatch';
 import { maintenanceBilingualNoticePatch } from './src/lib/maintenanceBilingualNoticePatch';
@@ -23,7 +24,7 @@ import { leadItemCodeBlankDefaultPatch } from './src/lib/leadItemCodeBlankDefaul
 
 export default defineConfig(() => {
   return {
-    plugins: [leadItemCodeBlankDefaultPatch(), waybillExistingGarbageCleanupPatch(), waybillDuplicateSafetyPatch(), deliveryCityAcceptancePatch(), maintenanceBilingualNoticePatch(), welcomeSplashAppPatch(), customerCartWordingPatch(), adminDashboardStoragePatch(), adminDashboardUnifiedUploadPatch(), confirmUploadPackingBatchPatch(), packingDownloadUxPatch(), pdfPerformancePatch(), adminDashboardFardarHistoryPatch(), adminDashboardFardarHistoryDurablePatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
+    plugins: [leadItemCodeBlankDefaultPatch(), waybillExistingGarbageCleanupPatch(), waybillDuplicateSafetyPatch(), deliveryCityAcceptancePatch(), maintenanceBilingualNoticePatch(), mainCategoryHierarchyPatch(), welcomeSplashAppPatch(), customerCartWordingPatch(), adminDashboardStoragePatch(), adminDashboardUnifiedUploadPatch(), confirmUploadPackingBatchPatch(), packingDownloadUxPatch(), pdfPerformancePatch(), adminDashboardFardarHistoryPatch(), adminDashboardFardarHistoryDurablePatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
