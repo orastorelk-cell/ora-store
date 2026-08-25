@@ -69,3 +69,19 @@ export const roundSpecialOfferPercentForProduct = (product: any) => {
   if (!Number.isFinite(value)) return 5;
   return Math.max(1, Math.min(80, Math.round(value * 10) / 10));
 };
+
+/**
+ * Variants inherit the product-level percentage by default. A variant only needs
+ * its own saved percentage when the admin intentionally overrides it in Product Edit.
+ * This means equal-price sub-items automatically share the same offer setup, while
+ * different-price sub-items can be tuned independently without changing real prices.
+ */
+export const roundSpecialOfferPercentForSelection = (product: any, variant?: any) => {
+  const override = variant?.auto_round_special_offer_percent;
+  if (override === undefined || override === null || override === '') {
+    return roundSpecialOfferPercentForProduct(product);
+  }
+  const value = Number(override);
+  if (!Number.isFinite(value)) return roundSpecialOfferPercentForProduct(product);
+  return Math.max(1, Math.min(80, Math.round(value * 10) / 10));
+};
