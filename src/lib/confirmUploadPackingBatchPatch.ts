@@ -50,7 +50,7 @@ export const confirmUploadPackingBatchPatch = () => ({
       }
 
       const nowMarker = "    const now=new Date().toISOString(); const updates=new Map<string,Partial<Order>>();";
-      if (!text.includes('const uploadPackingBatchId =')) {
+      if (!text.includes('const uploadPackingBatchId=')) {
         if (!text.includes(nowMarker)) throw new Error('[O-RA confirm invoice safety] confirm timestamp marker not found');
         text = text.replace(nowMarker, nowMarker + "\n    const uploadPackingBatchId=String(packingBatchId || ('PACK-UPLOAD-' + now.replace(/[^0-9]/g,'').slice(0,17)));" );
       }
@@ -67,7 +67,7 @@ export const confirmUploadPackingBatchPatch = () => ({
           const preservedUnit=Math.max(0,Number(existingItem.unit_price||0));
           nextItems.push({...existingItem,quantity:qty,subtotal:Math.round(preservedUnit*qty*100)/100});
         }else{
-          try{nextItems.push(buildOrderItemSnapshot(selection.product,qty,settings,selection.variant,products));}catch(e:any){errors.push(`${id}: ${e?.message||'Invalid item selection.'}`);bad=true;}
+          try{nextItems.push(buildOrderItemSnapshot(selection.product,qty,settings,selection.variant,products));}catch(e:any){errors.push(id + ': ' + (e?.message||'Invalid item selection.'));bad=true;}
         }`;
         text = text.replace(oldSnapshotPush, safeSnapshotPush);
       }
@@ -78,7 +78,6 @@ export const confirmUploadPackingBatchPatch = () => ({
         const snapshotInsert = String.raw`
       const stableQtyOfferDiscount=changed?special_offer_discount:Math.max(0,Number(order.special_offer_discount||0));
       const stableTotalAmount=Math.round(Math.max(0,subtotal-stableQtyOfferDiscount+order.delivery_fee+gift_wrap_fee));
-      const firstCsvRow=rows[0]||[];
       const csvMoney=(col:number)=>col>=0?Number(String(rows.map(c=>c[col]).find(v=>String(v||'').trim())||0).replace(/[^0-9.-]/g,'')):0;
       const csvText=(col:number)=>col>=0?String(rows.map(c=>c[col]).find(v=>String(v||'').trim())||'').trim():'';
       const sheetCity=csvText(cityI) || order.city;
