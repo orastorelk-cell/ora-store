@@ -22,6 +22,36 @@ export const confirmUploadPackingBatchPatch = () => ({
     }
 
     if (id.endsWith('/src/context/StoreContext.tsx')) {
+      const oldMirror = String.raw`  const mirrorOrderUpdate = (order: Order) => {
+    if (!getStaffSessionToken()) return;
+    sharedStaffRequest(`/api/orders/${encodeURIComponent(order.id)}`, {
+      method:'PUT',
+      body:JSON.stringify({order}),
+    }).catch(err=>console.warn('Order mirror update failed:',err?.message||err));
+  };`;
+      if (!text.includes('const orderMirrorQueueRef = useRef<Map<string,Promise<void>>>')) {
+        if (!text.includes(oldMirror)) throw new Error('[O-RA confirm invoice safety] order mirror marker not found');
+        const queuedMirror = String.raw`  const orderMirrorQueueRef = useRef<Map<string,Promise<void>>>(new Map());
+  const mirrorOrderUpdate = (order: Order) => {
+    if (!getStaffSessionToken()) return;
+    const key=String(order.id||order.order_number||'');
+    const prior=orderMirrorQueueRef.current.get(key) || Promise.resolve();
+    let queued:Promise<void>;
+    queued=prior.catch(()=>undefined).then(async()=>{
+      await sharedStaffRequest('/api/orders/'+encodeURIComponent(order.id), {
+        method:'PUT',
+        body:JSON.stringify({order}),
+      });
+    }).catch(err=>{
+      console.warn('Order mirror update failed:',err?.message||err);
+    }).finally(()=>{
+      if(orderMirrorQueueRef.current.get(key)===queued) orderMirrorQueueRef.current.delete(key);
+    });
+    orderMirrorQueueRef.current.set(key,queued);
+  };`;
+        text = text.replace(oldMirror, queuedMirror);
+      }
+
       const oldType = "  importConfirmedOrdersCsv: (csvText: string, source?: OrderSource) => { confirmedCount: number; notFoundCount: number; ignoredCount: number; orderNumbers: string[]; errors: string[] };";
       const newType = "  importConfirmedOrdersCsv: (csvText: string, source?: OrderSource, packingBatchId?: string) => { confirmedCount: number; notFoundCount: number; ignoredCount: number; orderNumbers: string[]; errors: string[] };";
       if (text.includes(oldType)) text = text.replace(oldType, newType);
@@ -112,8 +142,6 @@ export const confirmUploadPackingBatchPatch = () => ({
       if (text.includes(oldUpdate)) text = text.replace(oldUpdate, newUpdate);
       else if (!text.includes(newUpdate)) throw new Error('[O-RA confirm invoice safety] confirmed order update marker not found');
 
-      // Process a full 100-order ready wave at once. Larger upload groups can still
-      // merge under the same logical upload ID before download.
       text = text.replace("    const batch = unseen.slice(0,50);", "    const batch = unseen.slice(0,100);");
 
       const autoBatchOld = "      invoice_pack_batch_id:o.invoice_pack_batch_id || batchId,";
@@ -125,7 +153,6 @@ export const confirmUploadPackingBatchPatch = () => ({
       const manualBatchNew = "      invoice_pack_batch_id: o.invoice_pack_batch_id || (o.confirm_upload_batch_id && !orders.some(existing=>existing.confirm_upload_batch_id===o.confirm_upload_batch_id && Boolean(existing.invoice_pack_downloaded_at)) ? o.confirm_upload_batch_id : batchId),";
       if (text.includes(manualBatchOld)) text = text.replace(manualBatchOld, manualBatchNew);
 
-      // Never silently discard the 51st+ order while manually locking or marking a packing batch.
       text = text.replace("    const uniqueIds = Array.from(new Set(orderIds)).slice(0, 50);", "    const uniqueIds = Array.from(new Set(orderIds)).slice(0, 200);");
       text = text.replace("    const uniqueIds=Array.from(new Set(orderIds.map(String).filter(Boolean))).slice(0,50);", "    const uniqueIds=Array.from(new Set(orderIds.map(String).filter(Boolean))).slice(0,200);");
     }
