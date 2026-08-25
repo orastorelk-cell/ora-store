@@ -40,6 +40,13 @@ const normalize = (value: unknown) => String(value || '')
   .replace(/\s+/g, ' ')
   .trim();
 
+const phraseIncluded = (text: string, keyword: string) => {
+  const cleanText = normalize(text);
+  const cleanKeyword = normalize(keyword);
+  if (!cleanText || !cleanKeyword) return false;
+  return ` ${cleanText} `.includes(` ${cleanKeyword} `);
+};
+
 const EXACT_CATEGORY_MAP: Record<string, string> = {
   'baby and kids': 'baby-kids',
   'baby items': 'baby-kids',
@@ -77,14 +84,14 @@ const EXACT_CATEGORY_MAP: Record<string, string> = {
 const KEYWORD_RULES: Array<{ slug: string; keywords: string[] }> = [
   { slug: 'baby-kids', keywords: ['baby', 'babies', 'kid', 'kids', 'child', 'children', 'toddler', 'infant', 'feeding', 'toy', 'toys', 'maternity'] },
   { slug: 'beauty-personal-care', keywords: ['beauty', 'cosmetic', 'cosmetics', 'makeup', 'skin care', 'skincare', 'hair care', 'haircare', 'perfume', 'fragrance', 'grooming'] },
-  { slug: 'automotive', keywords: ['automotive', 'car ', 'vehicle', 'motorbike', 'motorcycle', 'garage', 'car accessory', 'car care'] },
+  { slug: 'automotive', keywords: ['automotive', 'vehicle', 'motorbike', 'motorcycle', 'garage', 'car accessory', 'car accessories', 'car care', 'car interior', 'car exterior'] },
   { slug: 'electronics-security', keywords: ['electronic', 'electronics', 'mobile', 'phone', 'charger', 'cable', 'bluetooth', 'earbud', 'earbuds', 'audio', 'speaker', 'camera', 'cctv', 'security', 'wifi', 'smart device', 'computer', 'laptop', 'gadget'] },
   { slug: 'sports-outdoors', keywords: ['sport', 'sports', 'fitness', 'gym', 'outdoor', 'camping', 'hiking', 'cycling', 'exercise'] },
-  { slug: 'office-stationery', keywords: ['office', 'stationery', 'school', 'book', 'notebook', 'pen ', 'pencil', 'document', 'file holder'] },
-  { slug: 'pet-supplies', keywords: ['pet ', 'pets', 'dog', 'cat ', 'cat accessory', 'aquarium', 'bird accessory'] },
+  { slug: 'office-stationery', keywords: ['office', 'stationery', 'school', 'book', 'notebook', 'pen', 'pencil', 'document', 'file holder'] },
+  { slug: 'pet-supplies', keywords: ['pet', 'pets', 'dog', 'cat', 'cat accessory', 'aquarium', 'bird accessory'] },
   { slug: 'health-wellness', keywords: ['health', 'wellness', 'medical', 'first aid', 'support brace', 'massager', 'therapy'] },
   { slug: 'kitchen-dining', keywords: ['kitchen', 'dining', 'cookware', 'cooking', 'utensil', 'cutlery', 'plate', 'bowl', 'cup', 'food storage', 'lunch box', 'lunch bag', 'baking'] },
-  { slug: 'fashion-accessories', keywords: ['fashion', 'apparel', 'clothing', 'garment', 'wear', 'umbrella', 'rainwear', 'jewelry', 'jewellery', 'watch', 'wallet', 'handbag', 'backpack', 'shoe', 'shoes', 'slipper', 'cap ', 'hat '] },
+  { slug: 'fashion-accessories', keywords: ['fashion', 'apparel', 'clothing', 'garment', 'wear', 'umbrella', 'rainwear', 'jewelry', 'jewellery', 'watch', 'wallet', 'handbag', 'backpack', 'shoe', 'shoes', 'slipper', 'cap', 'hat'] },
   { slug: 'home-bathroom', keywords: ['home', 'bath', 'bathroom', 'cleaning', 'cleaner', 'laundry', 'washing machine', 'floor', 'mat', 'carpet', 'scrubber', 'mop', 'brush', 'storage', 'organizer', 'garden', 'household'] },
 ];
 
@@ -104,7 +111,7 @@ export const mainCategorySlugForCategory = (category: CategoryLike | null | unde
   if (exact) return exact;
 
   for (const rule of KEYWORD_RULES) {
-    if (rule.keywords.some((keyword) => combined.includes(normalize(keyword)))) return rule.slug;
+    if (rule.keywords.some((keyword) => phraseIncluded(combined, keyword))) return rule.slug;
   }
   return 'other';
 };
