@@ -22,13 +22,14 @@ export const confirmUploadPackingBatchPatch = () => ({
     }
 
     if (id.endsWith('/src/context/StoreContext.tsx')) {
-      const oldMirror = String.raw`  const mirrorOrderUpdate = (order: Order) => {
-    if (!getStaffSessionToken()) return;
-    sharedStaffRequest(`/api/orders/${encodeURIComponent(order.id)}`, {
-      method:'PUT',
-      body:JSON.stringify({order}),
-    }).catch(err=>console.warn('Order mirror update failed:',err?.message||err));
-  };`;
+      const oldMirror =
+        "  const mirrorOrderUpdate = (order: Order) => {\n" +
+        "    if (!getStaffSessionToken()) return;\n" +
+        "    sharedStaffRequest(`/api/orders/${encodeURIComponent(order.id)}`, {\n" +
+        "      method:'PUT',\n" +
+        "      body:JSON.stringify({order}),\n" +
+        "    }).catch(err=>console.warn('Order mirror update failed:',err?.message||err));\n" +
+        "  };";
       if (!text.includes('const orderMirrorQueueRef = useRef<Map<string,Promise<void>>>')) {
         if (!text.includes(oldMirror)) throw new Error('[O-RA confirm invoice safety] order mirror marker not found');
         const queuedMirror = String.raw`  const orderMirrorQueueRef = useRef<Map<string,Promise<void>>>(new Map());
