@@ -7,7 +7,7 @@ export const packingDownloadUxPatch = () => ({
     let text = code;
 
     const pdfImportOld = "import { generateOrderInvoicePDF, generateBatchInvoicesPDF, generateA4FourUpInvoicesPDF, getInvoicePageCount, validateInvoiceOrder } from '../../lib/pdfGenerator';";
-    const pdfImportNew = "import { generateOrderInvoicePDF, generateRepairedOrderInvoicePDF, generateRepairedOrderInvoicePDFFromCsv, generateBatchInvoicesPDF, generateA4FourUpInvoicesPDF, getInvoicePageCount, validateInvoiceOrder } from '../../lib/pdfGenerator';";
+    const pdfImportNew = "import { generateOrderInvoicePDF, generateRepairedOrderInvoicePDF, generateRepairedOrderInvoicePDFFromCsv, generateRepairedBatchInvoicesPDFFromCsv, generateBatchInvoicesPDF, generateA4FourUpInvoicesPDF, getInvoicePageCount, validateInvoiceOrder } from '../../lib/pdfGenerator';";
     if (text.includes(pdfImportOld)) text = text.replace(pdfImportOld, pdfImportNew);
     else if (!text.includes(pdfImportNew)) throw new Error('[O-RA packing download UX] PDF import marker not found');
 
@@ -89,7 +89,7 @@ export const packingDownloadUxPatch = () => ({
 
     const actionsMarker = `                    <div className="flex flex-wrap xl:justify-end gap-2">
                       {singlePageOrders.length>0 && <>`;
-    if (!text.includes('Download ALL A6')) {
+    if (!text.includes('Repair ALL from CSV')) {
       if (!text.includes(actionsMarker)) throw new Error('[O-RA packing download UX] packing action marker not found');
       const actionsReplacement = `                    <div className="flex flex-wrap xl:justify-end gap-2">
                       <button data-ora-action="packing_download" type="button" disabled={Boolean(packingDownloadBusy)} onClick={downloadAllA6}
@@ -97,6 +97,26 @@ export const packingDownloadUxPatch = () => ({
                         <Download className="w-4 h-4"/>
                         {packingDownloadBusy==='all'?'Preparing ALL A6…':downloaded?'Download ALL A6 Again':\`Download ALL A6 (${'${batchOrders.length}'})\`}
                       </button>
+                      <label className="cursor-pointer rounded-xl border border-sky-400/40 bg-sky-500/10 px-3.5 py-2.5 text-xs font-black text-sky-300">
+                        {packingRepairBusy==='batch-'+batchId?'Repairing Batch…':'Repair ALL from CSV'}
+                        <input type="file" accept=".csv,text/csv" className="hidden" disabled={Boolean(packingRepairBusy)} onChange={async e=>{
+                          const input=e.currentTarget;
+                          const file=input.files?.[0];
+                          if(!file) return;
+                          setPackingRepairBusy('batch-'+batchId);
+                          try {
+                            const csv=await file.text();
+                            const chunkSize=100;
+                            const partCount=Math.ceil(batchOrders.length/chunkSize);
+                            for(let part=0;part<partCount;part++){
+                              const chunk=batchOrders.slice(part*chunkSize,(part+1)*chunkSize);
+                              const suffix=partCount>1?('_Part-'+(part+1)+'-of-'+partCount):'';
+                              await generateRepairedBatchInvoicesPDFFromCsv(chunk,settings,csv,'O-RA_REPAIRED_'+batchId+suffix+'.pdf');
+                            }
+                          } catch(err:any){ alert(err?.message || 'Batch CSV invoice repair failed.'); }
+                          finally { setPackingRepairBusy(''); input.value=''; }
+                        }}/>
+                      </label>
                       {singlePageOrders.length>0 && <>`;
       text = text.replace(actionsMarker, actionsReplacement);
     }
