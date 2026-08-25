@@ -112,13 +112,17 @@ export const confirmUploadPackingBatchPatch = () => ({
       if (text.includes(oldUpdate)) text = text.replace(oldUpdate, newUpdate);
       else if (!text.includes(newUpdate)) throw new Error('[O-RA confirm invoice safety] confirmed order update marker not found');
 
+      // Process a full 100-order ready wave at once. Larger upload groups can still
+      // merge under the same logical upload ID before download.
+      text = text.replace("    const batch = unseen.slice(0,50);", "    const batch = unseen.slice(0,100);");
+
       const autoBatchOld = "      invoice_pack_batch_id:o.invoice_pack_batch_id || batchId,";
-      const autoBatchNew = "      invoice_pack_batch_id:o.invoice_pack_batch_id || o.confirm_upload_batch_id || batchId,";
+      const autoBatchNew = "      invoice_pack_batch_id:o.invoice_pack_batch_id || (o.confirm_upload_batch_id && !orders.some(existing=>existing.confirm_upload_batch_id===o.confirm_upload_batch_id && Boolean(existing.invoice_pack_downloaded_at)) ? o.confirm_upload_batch_id : batchId),";
       if (text.includes(autoBatchOld)) text = text.replace(autoBatchOld, autoBatchNew);
       else if (!text.includes(autoBatchNew)) throw new Error('[O-RA confirm invoice safety] auto invoice batch marker not found');
 
       const manualBatchOld = "      invoice_pack_batch_id: o.invoice_pack_batch_id || batchId,";
-      const manualBatchNew = "      invoice_pack_batch_id: o.invoice_pack_batch_id || o.confirm_upload_batch_id || batchId,";
+      const manualBatchNew = "      invoice_pack_batch_id: o.invoice_pack_batch_id || (o.confirm_upload_batch_id && !orders.some(existing=>existing.confirm_upload_batch_id===o.confirm_upload_batch_id && Boolean(existing.invoice_pack_downloaded_at)) ? o.confirm_upload_batch_id : batchId),";
       if (text.includes(manualBatchOld)) text = text.replace(manualBatchOld, manualBatchNew);
 
       // Never silently discard the 51st+ order while manually locking or marking a packing batch.
