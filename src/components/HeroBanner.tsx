@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Sparkles,
   Zap,
@@ -22,6 +22,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ onBrowseAll }) => {
   const { language, setSelectedCategorySlug, products, settings, setSelectedProduct } = useStore();
   const [slideIndex, setSlideIndex] = useState(0);
   const [paused, setPaused] = useState(false);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
 
   const legacySlide: HeroBannerSlide = {
     id:'legacy-main-banner', type:'custom', enabled:true, order:1,
@@ -65,6 +66,27 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ onBrowseAll }) => {
   const hasBannerOverlay = Boolean(heroTag || heroTitle || heroSub || heroButton || isProductBanner);
 
   const goSlide = (direction:-1|1) => setSlideIndex((index)=>(index+direction+activeSlides.length)%activeSlides.length);
+  const handleTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    const touch = event.touches[0];
+    if (!touch) return;
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+    setPaused(true);
+  };
+  const handleTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+    const start = touchStartRef.current;
+    touchStartRef.current = null;
+    setPaused(false);
+    const touch = event.changedTouches[0];
+    if (!start || !touch || activeSlides.length <= 1) return;
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    if (Math.abs(deltaX) < 50 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.2) return;
+    goSlide(deltaX < 0 ? 1 : -1);
+  };
+  const handleTouchCancel = () => {
+    touchStartRef.current = null;
+    setPaused(false);
+  };
   const openSlide = () => {
     if (slide?.type === 'product' && slideProduct) { setSelectedProduct(slideProduct); return; }
     const type=slide?.link_type || 'products'; const value=slide?.link_value || '';
@@ -78,8 +100,9 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ onBrowseAll }) => {
     <div className="space-y-6">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div
-          className="lg:col-span-2 relative bg-black rounded-3xl overflow-hidden flex flex-col justify-between p-6 sm:p-8 min-h-[280px] sm:min-h-[340px] text-white group shadow-sm"
+          className="lg:col-span-2 relative bg-black rounded-3xl overflow-hidden flex flex-col justify-between p-6 sm:p-8 min-h-[280px] sm:min-h-[340px] text-white group shadow-sm touch-pan-y"
           onMouseEnter={()=>setPaused(true)} onMouseLeave={()=>setPaused(false)}
+          onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} onTouchCancel={handleTouchCancel}
         >
           {hasBannerOverlay && <div className="absolute top-0 right-0 p-8 opacity-10 text-8xl sm:text-9xl font-black select-none pointer-events-none">O-RA</div>}
           {heroImage && <img src={heroImage} alt={heroTitle || 'O-RA Promotional Banner'} className={`absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 pointer-events-none ${hasBannerOverlay?'opacity-45':'opacity-100'}`} referrerPolicy="no-referrer" />}
@@ -97,8 +120,8 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ onBrowseAll }) => {
           </div>
 
           {activeSlides.length > 1 && <>
-            <button type="button" aria-label="Previous banner" onClick={()=>goSlide(-1)} className="absolute left-3 top-1/2 z-20 -translate-y-1/2 rounded-full border border-white/15 bg-black/35 p-2 text-white opacity-90 backdrop-blur-sm hover:bg-black/65"><ChevronLeft className="h-5 w-5"/></button>
-            <button type="button" aria-label="Next banner" onClick={()=>goSlide(1)} className="absolute right-3 top-1/2 z-20 -translate-y-1/2 rounded-full border border-white/15 bg-black/35 p-2 text-white opacity-90 backdrop-blur-sm hover:bg-black/65"><ChevronRight className="h-5 w-5"/></button>
+            <button type="button" aria-label="Previous banner" onClick={()=>goSlide(-1)} className="hidden md:block absolute left-3 top-1/2 z-20 -translate-y-1/2 rounded-full border border-white/15 bg-black/35 p-2 text-white opacity-90 backdrop-blur-sm hover:bg-black/65"><ChevronLeft className="h-5 w-5"/></button>
+            <button type="button" aria-label="Next banner" onClick={()=>goSlide(1)} className="hidden md:block absolute right-3 top-1/2 z-20 -translate-y-1/2 rounded-full border border-white/15 bg-black/35 p-2 text-white opacity-90 backdrop-blur-sm hover:bg-black/65"><ChevronRight className="h-5 w-5"/></button>
             <div className="absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5">{activeSlides.map((row,index)=><button key={row.id} type="button" aria-label={`Banner ${index+1}`} onClick={()=>setSlideIndex(index)} className={`h-2 rounded-full transition-all ${index===slideIndex?'w-6 bg-orange-500':'w-2 bg-white/65 hover:bg-white'}`}/>)}</div>
           </>}
         </div>
