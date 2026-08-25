@@ -16,6 +16,7 @@ import { adminDashboardStoragePatch } from './src/lib/adminDashboardStoragePatch
 import { mainCategoryHierarchyPatch } from './src/lib/mainCategoryHierarchyPatch';
 import { roundSpecialOfferPatch } from './src/lib/roundSpecialOfferPatch';
 import { specialOfferPercentageRulePatch } from './src/lib/specialOfferPercentageRulePatch';
+import { specialOfferAdminPreviewPatch } from './src/lib/specialOfferAdminPreviewPatch';
 import { roundSpecialOfferPercentBadgePatch } from './src/lib/roundSpecialOfferPercentBadgePatch';
 import { customerCartWordingPatch } from './src/lib/customerCartWordingPatch';
 import { welcomeSplashAppPatch } from './src/lib/welcomeSplashAppPatch';
@@ -27,7 +28,7 @@ import { leadItemCodeBlankDefaultPatch } from './src/lib/leadItemCodeBlankDefaul
 
 export default defineConfig(() => {
   return {
-    plugins: [leadItemCodeBlankDefaultPatch(), waybillExistingGarbageCleanupPatch(), waybillDuplicateSafetyPatch(), deliveryCityAcceptancePatch(), maintenanceBilingualNoticePatch(), mainCategoryHierarchyPatch(), roundSpecialOfferPatch(), specialOfferPercentageRulePatch(), roundSpecialOfferPercentBadgePatch(), welcomeSplashAppPatch(), customerCartWordingPatch(), adminDashboardStoragePatch(), adminDashboardUnifiedUploadPatch(), confirmUploadPackingBatchPatch(), packingDownloadUxPatch(), pdfPerformancePatch(), adminDashboardFardarHistoryPatch(), adminDashboardFardarHistoryDurablePatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
+    plugins: [leadItemCodeBlankDefaultPatch(), waybillExistingGarbageCleanupPatch(), waybillDuplicateSafetyPatch(), deliveryCityAcceptancePatch(), maintenanceBilingualNoticePatch(), mainCategoryHierarchyPatch(), roundSpecialOfferPatch(), specialOfferPercentageRulePatch(), specialOfferAdminPreviewPatch(), roundSpecialOfferPercentBadgePatch(), welcomeSplashAppPatch(), customerCartWordingPatch(), adminDashboardStoragePatch(), adminDashboardUnifiedUploadPatch(), confirmUploadPackingBatchPatch(), packingDownloadUxPatch(), pdfPerformancePatch(), adminDashboardFardarHistoryPatch(), adminDashboardFardarHistoryDurablePatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
