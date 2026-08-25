@@ -31,8 +31,8 @@ export const packingDownloadUxPatch = () => ({
                   const partCount=Math.ceil(batchOrders.length/chunkSize);
                   for(let part=0;part<partCount;part++){
                     const chunk=batchOrders.slice(part*chunkSize,(part+1)*chunkSize);
-                    const suffix=partCount>1?`_Part-${part+1}-of-${partCount}`:'';
-                    await generateBatchInvoicesPDF(chunk,settings,`${stem}_ALL-A6${suffix}.pdf`);
+                    const suffix=partCount>1?('_Part-'+(part+1)+'-of-'+partCount):'';
+                    await generateBatchInvoicesPDF(chunk,settings,stem+'_ALL-A6'+suffix+'.pdf');
                   }
                   await savePackingDownloaded(batchOrders,setDate,setNumber);
                 } catch(e:any){ alert(e.message || 'All A6 invoice download failed. No batch status was changed unless every PDF completed.'); }
