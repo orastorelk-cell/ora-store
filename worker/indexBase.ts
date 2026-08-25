@@ -372,6 +372,20 @@ export default {
     const response = await nodeHandler.fetch(request, env, ctx);
     const bulkVerified = await guaranteeBulkImportSheetSync(request, env, response);
     if (bulkVerified !== response) return bulkVerified;
+
+    // Real storefront orders are durably saved by server.ts before this response is
+    // created. When server.ts says the Sheet mirror is queued, it has already put the
+    // Google Apps Script sync into Cloudflare waitUntil. Do NOT re-sync/read-back here
+    // on the customer request, because that makes the checkout wait 8-15 seconds.
+    // Test-order requests use wait_sheet_sync and therefore do not return `queued:true`;
+    // they keep the existing end-to-end physical verification behavior below.
+    if (request.method === 'POST' && new URL(request.url).pathname === '/api/orders' && response.ok) {
+      try {
+        const data: any = await response.clone().json();
+        if (data?.sheet_sync?.queued === true) return response;
+      } catch {}
+    }
+
     return guaranteeNewOrderSheetSync(request, env, response);
   },
 };
