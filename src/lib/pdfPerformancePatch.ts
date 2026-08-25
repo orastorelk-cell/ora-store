@@ -156,7 +156,7 @@ export async function generateRepairedOrderInvoicePDF(order:Order, settings:Stor
     if(pageIndex>0) doc.addPage('a6','landscape');
     await addExactPage(doc,repaired,settings,itemPages[pageIndex],pageIndex,itemPages.length);
   }
-  downloadPdfBlob(doc, `O-RA_REPAIRED_${repaired.invoice_number || repaired.order_number}.pdf`);
+  downloadPdfBlob(doc, 'O-RA_REPAIRED_'+String(repaired.invoice_number || repaired.order_number)+'.pdf');
 }
 
 `;
