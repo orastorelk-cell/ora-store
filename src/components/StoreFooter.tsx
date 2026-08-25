@@ -94,7 +94,10 @@ export const StoreFooter: React.FC = () => {
 
       <div className="mt-10 border-t border-slate-200 pt-5 text-[10px] leading-5 text-slate-500 sm:flex sm:items-center sm:justify-between sm:gap-4">
         <p>© 2026 {storeName}. All rights reserved. <span className="hidden sm:inline">|</span> <span className="block sm:inline">Owned and Managed by {ownerName}</span></p>
-        <p className="mt-2 sm:mt-0">{si?'Online Store • Customer Support • Islandwide Delivery':'Online Store • Customer Support • Islandwide Delivery'}</p>
+        <div className="mt-2 sm:mt-0 sm:text-right">
+          <p>{si?'Online Store • Customer Support • Islandwide Delivery':'Online Store • Customer Support • Islandwide Delivery'}</p>
+          <p className="mt-0.5 font-semibold text-slate-400">Designed &amp; Developed by UDN</p>
+        </div>
       </div>
     </div>
   </footer>;
