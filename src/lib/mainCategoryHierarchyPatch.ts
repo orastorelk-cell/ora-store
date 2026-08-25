@@ -58,8 +58,8 @@ export const mainCategoryHierarchyPatch = () => ({
       return [
         { slug: null, label: language === 'si' ? '← ප්‍රධාන වර්ග' : '← Main Categories', icon: '←', count: products.length },
         {
-          slug: `main:${main.slug}`,
-          label: language === 'si' ? `සියලු ${main.name_si}` : `All ${main.name_en}`,
+          slug: 'main:' + main.slug,
+          label: language === 'si' ? 'සියලු ' + main.name_si : 'All ' + main.name_en,
           icon: main.icon,
           count: countMain(main.slug),
         },
@@ -69,7 +69,7 @@ export const mainCategoryHierarchyPatch = () => ({
 
     const mainRows = MAIN_CATEGORY_DEFINITIONS
       .map((main) => ({
-        slug: `main:${main.slug}`,
+        slug: 'main:' + main.slug,
         label: language === 'si' ? main.name_si : main.name_en,
         icon: main.icon,
         count: countMain(main.slug),
@@ -79,7 +79,7 @@ export const mainCategoryHierarchyPatch = () => ({
     return [
       { slug: null, label: getTranslation(language, 'allCategories'), icon: '✦', count: products.length },
       ...mainRows,
-      ...(comboCount > 0 ? [{ slug: 'combo-pack', label: language === 'si' ? 'Combo Packs' : 'Combo Packs', icon: '🎁', count: comboCount }] : []),
+      ...(comboCount > 0 ? [{ slug: 'combo-pack', label: 'Combo Packs', icon: '🎁', count: comboCount }] : []),
     ];
   }, [categories, language, products, selectedCategorySlug]);
 
