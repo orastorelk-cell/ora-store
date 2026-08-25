@@ -1,6 +1,13 @@
 import fastWorker from './indexV2';
 
 type WorkersAiLike = { run: (model: string, input: Record<string, any>) => Promise<any> };
+type R2UsageBucket = {
+  list: (options?: { limit?: number; cursor?: string }) => Promise<{
+    objects?: Array<{ size?: number }>;
+    truncated?: boolean;
+    cursor?: string;
+  }>;
+};
 
 const SINHALA_RE = /[\u0D80-\u0DFF]/;
 const KNOWN_BRANDS = new Set([
@@ -65,8 +72,134 @@ const repairTranslations = async (ai:WorkersAiLike, sources:string[]) => {
   return parseJson(String(result?.response ?? result?.result?.response ?? result?.text ?? '').trim(), sources.length);
 };
 
+const storageJson = (data:unknown, status=200) => new Response(JSON.stringify(data), {
+  status,
+  headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'},
+});
+
+const verifyStorageAdmin = async (request:Request, envValue:unknown) => {
+  const env = (envValue || {}) as Record<string, any>;
+  const token = String(request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+  const [payload, signature] = token.split('.');
+  if (!payload || !signature) return null;
+
+  try {
+    const secret = String(env.STAFF_SESSION_SECRET || env.ABUSE_HASH_SALT || 'ora-local-staff-session-change-in-production');
+    const key = await globalThis.crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(secret),
+      { name:'HMAC', hash:'SHA-256' },
+      false,
+      ['verify'],
+    );
+    const valid = await globalThis.crypto.subtle.verify(
+      'HMAC',
+      key,
+      Buffer.from(signature, 'base64url'),
+      new TextEncoder().encode(payload),
+    );
+    if (!valid) return null;
+
+    const session = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { sub?:string; role?:string; exp?:number };
+    if (!session?.sub || Number(session.exp || 0) < Date.now()) return null;
+
+    const supabaseUrl = String(env.VITE_SUPABASE_URL || '').replace(/\/$/, '');
+    const supabaseKey = String(env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+    if (!supabaseUrl || !supabaseKey) return null;
+    const userResponse = await fetch(
+      `${supabaseUrl}/rest/v1/admin_users?id=eq.${encodeURIComponent(session.sub)}&is_active=eq.true&select=id,role&limit=1`,
+      { headers:{ apikey:supabaseKey, authorization:`Bearer ${supabaseKey}`, accept:'application/json' } },
+    );
+    const users:any[] = await userResponse.json().catch(()=>[]);
+    if (!userResponse.ok || users?.[0]?.role !== 'admin') return null;
+    return { supabaseUrl, supabaseKey };
+  } catch {
+    return null;
+  }
+};
+
+const readR2Usage = async (bucket:R2UsageBucket) => {
+  let usedBytes = 0;
+  let objectCount = 0;
+  let cursor:string|undefined;
+  for (let page=0; page<200; page+=1) {
+    const result = await bucket.list({ limit:1000, ...(cursor ? { cursor } : {}) });
+    const objects = Array.isArray(result?.objects) ? result.objects : [];
+    objectCount += objects.length;
+    for (const object of objects) usedBytes += Math.max(0, Number(object?.size || 0));
+    if (!result?.truncated || !result?.cursor) break;
+    cursor = result.cursor;
+  }
+  return { usedBytes, objectCount };
+};
+
+const storageUsageHandler = async (request:Request, envValue:unknown):Promise<Response|null> => {
+  const url = new URL(request.url);
+  if (request.method !== 'GET' || url.pathname !== '/api/admin/storage-usage') return null;
+  const runtime = await verifyStorageAdmin(request, envValue);
+  if (!runtime) return storageJson({ ok:false, error:'Super Admin login required.' }, 401);
+
+  const env = (envValue || {}) as Record<string, any>;
+  const r2Bucket = env.ORA_MEDIA_R2 as R2UsageBucket | undefined;
+  if (!r2Bucket || typeof r2Bucket.list !== 'function') return storageJson({ ok:false, error:'Cloudflare R2 storage binding is unavailable.' }, 503);
+
+  try {
+    const [r2, supabaseResponse] = await Promise.all([
+      readR2Usage(r2Bucket),
+      fetch(`${runtime.supabaseUrl}/rest/v1/rpc/ora_storage_usage_by_bucket`, {
+        method:'POST',
+        headers:{
+          apikey:runtime.supabaseKey,
+          authorization:`Bearer ${runtime.supabaseKey}`,
+          'content-type':'application/json',
+          accept:'application/json',
+        },
+        body:'{}',
+      }),
+    ]);
+    const supabaseRows:any[] = await supabaseResponse.json().catch(()=>[]);
+    if (!supabaseResponse.ok) throw new Error('Supabase Storage usage could not be read.');
+    const supabaseUsed = supabaseRows.reduce((sum,row)=>sum + Math.max(0,Number(row?.total_bytes || 0)),0);
+    const supabaseCount = supabaseRows.reduce((sum,row)=>sum + Math.max(0,Number(row?.object_count || 0)),0);
+
+    const r2FreeLimit = 10 * 1024 * 1024 * 1024;
+    const supabaseFreeLimit = 1 * 1024 * 1024 * 1024;
+    return storageJson({
+      ok:true,
+      updated_at:new Date().toISOString(),
+      storages:[
+        {
+          id:'cloudflare-r2',
+          name:'Cloudflare R2',
+          provider:'Cloudflare',
+          bucket:'ora-store-images',
+          used_bytes:r2.usedBytes,
+          object_count:r2.objectCount,
+          free_limit_bytes:r2FreeLimit,
+          remaining_free_bytes:Math.max(0,r2FreeLimit-r2.usedBytes),
+        },
+        {
+          id:'supabase-storage',
+          name:'Supabase Storage',
+          provider:'Supabase',
+          bucket:supabaseRows.length === 1 ? String(supabaseRows[0]?.bucket_name || 'ora-public-media') : `${supabaseRows.length} bucket(s)`,
+          used_bytes:supabaseUsed,
+          object_count:supabaseCount,
+          free_limit_bytes:supabaseFreeLimit,
+          remaining_free_bytes:Math.max(0,supabaseFreeLimit-supabaseUsed),
+        },
+      ],
+    });
+  } catch (error:any) {
+    return storageJson({ ok:false, error:String(error?.message || 'Storage usage could not be read.') }, 500);
+  }
+};
+
 export default {
   async fetch(request:Request, env:unknown, ctx:unknown) {
+    const storageResponse = await storageUsageHandler(request, env);
+    if (storageResponse) return storageResponse;
+
     const url = new URL(request.url);
     const requestCopy = request.clone();
     const response = await fastWorker.fetch(request, env, ctx);
