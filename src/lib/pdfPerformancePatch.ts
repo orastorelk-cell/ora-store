@@ -33,8 +33,6 @@ export const pdfPerformancePatch = () => ({
       text = text.replace(successMarker, successReplacement);
     }
 
-    // exactInvoiceTemplate.ts already renders a durable order.district. Only inject a
-    // Sheet fallback when the durable snapshot has no district, otherwise it is drawn twice.
     const districtDrawMarker = "  const svg = buildExactInvoiceSvg(order,settings,false,pageItems,pageIndex,totalPages);\n  const district = await resolveInvoiceDistrict(order, settings);";
     const districtDrawReplacement = "  const svg = buildExactInvoiceSvg(order,settings,false,pageItems,pageIndex,totalPages);\n  if (String((order as any).district || '').trim()) return svg;\n  const district = await resolveInvoiceDistrict(order, settings);";
     if (!text.includes(districtDrawReplacement)) {
@@ -42,8 +40,6 @@ export const pdfPerformancePatch = () => ({
       text = text.replace(districtDrawMarker, districtDrawReplacement);
     }
 
-    // Never silently drop order 51+. One logical upload can safely render up to 120
-    // orders in one A6 PDF; the Packing UI chunks larger logical batches separately.
     const batchMarker = "  const batch=orders.slice(0,50);";
     const batchReplacement = "  if(orders.length>120) throw new Error('This A6 PDF contains more than 120 orders. Use the Packing All-A6 download, which safely creates multiple parts.');\n  const batch=orders;";
     if (!text.includes(batchReplacement)) {
@@ -157,6 +153,77 @@ export async function generateRepairedOrderInvoicePDF(order:Order, settings:Stor
     await addExactPage(doc,repaired,settings,itemPages[pageIndex],pageIndex,itemPages.length);
   }
   downloadPdfBlob(doc, 'O-RA_REPAIRED_'+String(repaired.invoice_number || repaired.order_number)+'.pdf');
+}
+
+const parseInvoiceRepairCsvLine = (line:string) => {
+  const out:string[]=[]; let cur=''; let quoted=false;
+  for(let i=0;i<line.length;i++){
+    const ch=line[i];
+    if(ch==='"'){
+      if(quoted && line[i+1]==='"'){cur+='"';i++;}
+      else quoted=!quoted;
+    }else if(ch===',' && !quoted){out.push(cur.trim());cur='';}
+    else cur+=ch;
+  }
+  out.push(cur.trim());
+  return out;
+};
+const repairCsvKey=(value:string)=>String(value||'').trim().toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'');
+const repairSnapshotFromCsv=(order:Order,csvText:string):InvoiceRepairSnapshot=>{
+  const lines=String(csvText||'').split(/\r?\n/).filter(line=>line.trim());
+  if(lines.length<2) throw new Error('Selected CSV has no data rows.');
+  const headers=parseInvoiceRepairCsvLine(lines[0]).map(repairCsvKey);
+  const col=(names:string[])=>headers.findIndex(h=>names.includes(h));
+  const idI=col(['order_id','order_number','order']);
+  const codeI=col(['item_code','variant_code','actual_sku','sku']);
+  const itemNameI=col(['item_name','product_name']);
+  const variantI=col(['variant_color','variant','color','colour','option']);
+  const qtyI=col(['qty','quantity']);
+  const unitI=col(['unit_price_rs','unit_price','price']);
+  const lineI=col(['line_total_rs','line_total']);
+  const itemActionI=col(['item_action','item_status']);
+  const normalI=col(['normal_total_rs','normal_total']);
+  const offerI=col(['offer']);
+  const discountI=col(['discount_rs','discount']);
+  const deliveryI=col(['delivery_fee_rs','delivery_fee']);
+  const giftI=col(['gift_wrap','gift_wrapping','wrap']);
+  const wrappingI=col(['wrapping_cost_rs','wrapping_cost','gift_wrap_fee','wrapping_fee_rs','wrapping_fee']);
+  const finalI=col(['final_total_rs','final_total']);
+  const cityI=col(['city']);
+  const districtI=col(['district']);
+  if(idI<0 || codeI<0) throw new Error('Selected CSV does not contain Order ID and Item Code columns.');
+  const wanted=String(order.order_number||'').trim().toUpperCase();
+  const rows=lines.slice(1).map(parseInvoiceRepairCsvLine).filter(row=>String(row[idI]||'').trim().toUpperCase()===wanted);
+  if(!rows.length) throw new Error('Selected CSV has no rows for '+wanted+'.');
+  const firstText=(i:number)=>i>=0?String(rows.map(row=>row[i]).find(v=>String(v||'').trim())||'').trim():'';
+  const firstMoney=(i:number)=>repairMoney(firstText(i));
+  return {
+    captured_at:new Date().toISOString(),
+    city:firstText(cityI),
+    district:firstText(districtI),
+    normal_total:firstMoney(normalI),
+    offer:firstText(offerI),
+    discount:firstMoney(discountI),
+    delivery_fee:firstMoney(deliveryI),
+    gift_wrap:firstText(giftI),
+    wrapping_cost:firstMoney(wrappingI),
+    final_total:firstMoney(finalI),
+    items:rows.map(row=>({
+      item_code:String(row[codeI]||'').trim(),
+      item_name:itemNameI>=0?String(row[itemNameI]||'').trim():'',
+      variant:variantI>=0?String(row[variantI]||'').trim():'',
+      qty:Math.max(1,Number(qtyI>=0?row[qtyI]:1)||1),
+      unit_price:unitI>=0?repairMoney(row[unitI]):0,
+      line_total:lineI>=0?repairMoney(row[lineI]):0,
+      item_action:itemActionI>=0?String(row[itemActionI]||'').trim():'',
+    }))
+  };
+};
+
+export async function generateRepairedOrderInvoicePDFFromCsv(order:Order, settings:StoreSettings = {} as StoreSettings, csvText='') {
+  const snapshot=repairSnapshotFromCsv(order,csvText);
+  const withSnapshot={...(order as any),invoice_confirm_snapshot:snapshot} as Order;
+  await generateRepairedOrderInvoicePDF(withSnapshot,settings);
 }
 
 `;
