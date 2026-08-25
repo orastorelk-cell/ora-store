@@ -7,7 +7,7 @@ export const packingDownloadUxPatch = () => ({
     let text = code;
 
     const pdfImportOld = "import { generateOrderInvoicePDF, generateBatchInvoicesPDF, generateA4FourUpInvoicesPDF, getInvoicePageCount, validateInvoiceOrder } from '../../lib/pdfGenerator';";
-    const pdfImportNew = "import { generateOrderInvoicePDF, generateRepairedOrderInvoicePDF, generateBatchInvoicesPDF, generateA4FourUpInvoicesPDF, getInvoicePageCount, validateInvoiceOrder } from '../../lib/pdfGenerator';";
+    const pdfImportNew = "import { generateOrderInvoicePDF, generateRepairedOrderInvoicePDF, generateRepairedOrderInvoicePDFFromCsv, generateBatchInvoicesPDF, generateA4FourUpInvoicesPDF, getInvoicePageCount, validateInvoiceOrder } from '../../lib/pdfGenerator';";
     if (text.includes(pdfImportOld)) text = text.replace(pdfImportOld, pdfImportNew);
     else if (!text.includes(pdfImportNew)) throw new Error('[O-RA packing download UX] PDF import marker not found');
 
@@ -120,21 +120,33 @@ export const packingDownloadUxPatch = () => ({
       if (!text.includes(rowOld)) throw new Error('[O-RA packing download UX] repair row marker not found');
       const rowNew = `                            <td className="p-3">{o.invoice_pack_downloaded_at ? <span className="text-emerald-300">Downloaded</span> : <span className="text-orange-300">Pending</span>}</td>
                             <td className="p-3">
-                              <button type="button" disabled={Boolean(packingRepairBusy)} onClick={async()=>{
-                                setPackingRepairBusy(o.id);
-                                try { await generateRepairedOrderInvoicePDF(o,settings); }
-                                catch(e:any){ alert(e?.message || 'Invoice repair failed.'); }
-                                finally { setPackingRepairBusy(''); }
-                              }} className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-[10px] font-black text-amber-300 disabled:opacity-50">
-                                {packingRepairBusy===o.id?'Repairing…':'Repair Invoice'}
-                              </button>
+                              <div className="flex flex-col gap-1.5">
+                                <button type="button" disabled={Boolean(packingRepairBusy)} onClick={async()=>{
+                                  setPackingRepairBusy(o.id);
+                                  try { await generateRepairedOrderInvoicePDF(o,settings); }
+                                  catch(e:any){ alert(e?.message || 'Invoice repair failed. If this is an older invoice, use Repair from CSV below.'); }
+                                  finally { setPackingRepairBusy(''); }
+                                }} className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-[10px] font-black text-amber-300 disabled:opacity-50">
+                                  {packingRepairBusy===o.id?'Repairing…':'Repair Invoice'}
+                                </button>
+                                <label className="cursor-pointer rounded-lg border border-sky-500/40 bg-sky-500/10 px-2.5 py-1.5 text-center text-[10px] font-black text-sky-300">
+                                  Repair from CSV
+                                  <input type="file" accept=".csv,text/csv" className="hidden" onChange={async e=>{
+                                    const input=e.currentTarget;
+                                    const file=input.files?.[0];
+                                    if(!file) return;
+                                    setPackingRepairBusy(o.id);
+                                    try { await generateRepairedOrderInvoicePDFFromCsv(o,settings,await file.text()); }
+                                    catch(err:any){ alert(err?.message || 'CSV invoice repair failed.'); }
+                                    finally { setPackingRepairBusy(''); input.value=''; }
+                                  }}/>
+                                </label>
+                              </div>
                             </td>
                           </tr>)}`;
       text = text.replace(rowOld, rowNew);
     }
 
-    // Disable every packing-download action while one PDF is rendering. This gives
-    // immediate visual feedback and prevents accidental double-generation.
     text = text.replace(/data-ora-action="packing_download" type="button" onClick=\{([^}]+)\}/g,
       'data-ora-action="packing_download" type="button" disabled={Boolean(packingDownloadBusy)} onClick={$1}');
 
