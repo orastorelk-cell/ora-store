@@ -21,11 +21,11 @@ export const invoiceCrossedPriceMathPatch = () => ({
     let text = code;
 
     if (id.endsWith('/src/lib/exactInvoiceTemplateBase.ts')) {
-      const rowsMarker = `  const rowY = [569, 607, 645, 683];`;
-      const helper = `  const invoiceReferenceUnitPrice = (item:any) => {\n    const actual = Math.max(0, Number(item?.unit_price || 0));\n    const savedRegular = Math.max(0, Number(item?.regular_unit_price || 0));\n    const offerSaving = Math.max(0, Number(item?.supplier_offer_discount_per_unit || 0));\n    const derivedRegular = actual + offerSaving;\n    return Math.max(actual, savedRegular, derivedRegular);\n  };\n  const invoiceReferenceLineTotal = (item:any) =>\n    invoiceReferenceUnitPrice(item) * Math.max(0, Number(item?.quantity || 0));\n\n` + rowsMarker;
+      const priceMathMarker = `  const deliveryFree = order.delivery_included_in_item_price || Number(order.delivery_fee || 0) <= 0;`;
+      const helper = `  const invoiceReferenceUnitPrice = (item:any) => {\n    const actual = Math.max(0, Number(item?.unit_price || 0));\n    const savedRegular = Math.max(0, Number(item?.regular_unit_price || 0));\n    const offerSaving = Math.max(0, Number(item?.supplier_offer_discount_per_unit || 0));\n    const derivedRegular = actual + offerSaving;\n    return Math.max(actual, savedRegular, derivedRegular);\n  };\n  const invoiceReferenceLineTotal = (item:any) =>\n    invoiceReferenceUnitPrice(item) * Math.max(0, Number(item?.quantity || 0));\n\n` + priceMathMarker;
       if (!text.includes('const invoiceReferenceUnitPrice = (item:any) =>')) {
-        if (!text.includes(rowsMarker)) throw new Error('[O-RA invoice crossed math] row helper marker not found');
-        text = text.replace(rowsMarker, helper);
+        if (!text.includes(priceMathMarker)) throw new Error('[O-RA invoice crossed math] price helper marker not found');
+        text = text.replace(priceMathMarker, helper);
       }
 
       text = replaceRequired(
