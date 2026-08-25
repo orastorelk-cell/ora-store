@@ -4,11 +4,13 @@ import path from 'path';
 import {defineConfig} from 'vite';
 import { adminDashboardUnifiedUploadPatch } from './src/lib/adminDashboardUnifiedUploadPatch';
 import { confirmUploadPackingBatchPatch } from './src/lib/confirmUploadPackingBatchPatch';
+import { confirmUploadCrossPriceSnapshotPatch } from './src/lib/confirmUploadCrossPriceSnapshotPatch';
 import { packingDownloadUxPatch } from './src/lib/packingDownloadUxPatch';
 import { pdfPerformancePatch } from './src/lib/pdfPerformancePatch';
 import { invoiceRepairMoneyParsingPatch } from './src/lib/invoiceRepairMoneyParsingPatch';
 import { invoiceCrossedPriceMathPatch } from './src/lib/invoiceCrossedPriceMathPatch';
 import { googleAppsScriptCurrencyParsePatch } from './src/lib/googleAppsScriptCurrencyParsePatch';
+import { googleAppsScriptOrderCrossPricePatch } from './src/lib/googleAppsScriptOrderCrossPricePatch';
 import { adminDashboardFardarHistoryPatch } from './src/lib/adminDashboardFardarHistoryPatch';
 import { adminDashboardFardarHistoryDurablePatch } from './src/lib/adminDashboardFardarHistoryDurablePatch';
 import { adminDashboardVisibleTemplatePatch } from './src/lib/adminDashboardVisibleTemplatePatch';
@@ -39,7 +41,7 @@ import { leadItemCodeBlankDefaultPatch } from './src/lib/leadItemCodeBlankDefaul
 
 export default defineConfig(() => {
   return {
-    plugins: [leadItemCodeBlankDefaultPatch(), waybillExistingGarbageCleanupPatch(), waybillDuplicateSafetyPatch(), deliveryCityAcceptancePatch(), maintenanceBilingualNoticePatch(), mainCategoryHierarchyPatch(), roundSpecialOfferPatch(), specialOfferPercentageRulePatch(), specialOfferAdminPreviewPatch(), specialOfferLivePreviewDecimalPatch(), roundSpecialOfferPercentBadgePatch(), productCardOfferLayoutPatch(), bundleComponentOfferDisplayPatch(), qtyOfferMergedDisplayPatch(), checkoutCombinedOfferPatch(), bundleCheckoutOfferPatch(), productCatalogOfferColumnsPatch(), googleAppsScriptCurrencyParsePatch(), productBackupDryRunPatch(), welcomeSplashAppPatch(), customerCartWordingPatch(), adminDashboardStoragePatch(), adminDashboardUnifiedUploadPatch(), confirmUploadPackingBatchPatch(), packingDownloadUxPatch(), pdfPerformancePatch(), invoiceRepairMoneyParsingPatch(), invoiceCrossedPriceMathPatch(), adminDashboardFardarHistoryPatch(), adminDashboardFardarHistoryDurablePatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
+    plugins: [leadItemCodeBlankDefaultPatch(), waybillExistingGarbageCleanupPatch(), waybillDuplicateSafetyPatch(), deliveryCityAcceptancePatch(), maintenanceBilingualNoticePatch(), mainCategoryHierarchyPatch(), roundSpecialOfferPatch(), specialOfferPercentageRulePatch(), specialOfferAdminPreviewPatch(), specialOfferLivePreviewDecimalPatch(), roundSpecialOfferPercentBadgePatch(), productCardOfferLayoutPatch(), bundleComponentOfferDisplayPatch(), qtyOfferMergedDisplayPatch(), checkoutCombinedOfferPatch(), bundleCheckoutOfferPatch(), productCatalogOfferColumnsPatch(), googleAppsScriptCurrencyParsePatch(), googleAppsScriptOrderCrossPricePatch(), productBackupDryRunPatch(), welcomeSplashAppPatch(), customerCartWordingPatch(), adminDashboardStoragePatch(), adminDashboardUnifiedUploadPatch(), confirmUploadPackingBatchPatch(), confirmUploadCrossPriceSnapshotPatch(), packingDownloadUxPatch(), pdfPerformancePatch(), invoiceRepairMoneyParsingPatch(), invoiceCrossedPriceMathPatch(), adminDashboardFardarHistoryPatch(), adminDashboardFardarHistoryDurablePatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
