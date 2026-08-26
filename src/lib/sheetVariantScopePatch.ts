@@ -43,10 +43,13 @@ export const sheetVariantScopePatch = () => ({
       'original variant column',
     );
 
+    // productCatalogOfferColumnsPatch runs earlier and creates catalogProductsWithOfferMeta().
+    // Sanitize only the outgoing Sheet payload so stale hidden variants on a normal/combo
+    // product can never create a false Variant / Color dropdown.
     text = replaceRequired(
       text,
-      "  const posted = await postToAppsScript(webhookUrl, { action: 'catalog_sync', products });",
-      "  const catalogProducts = (products || []).map((product:any) => {\n    const explicitType = String(product?.product_type || '').trim().toLowerCase();\n    const hasVariants = Array.isArray(product?.variants) && product.variants.length > 0;\n    const isVariant = explicitType ? explicitType === 'variant' : hasVariants;\n    return isVariant ? product : { ...product, variants: [] };\n  });\n  const posted = await postToAppsScript(webhookUrl, { action: 'catalog_sync', products: catalogProducts });",
+      "  const catalogProducts = catalogProductsWithOfferMeta(products, settings);\n  const posted = await postToAppsScript(webhookUrl, { action: 'catalog_sync', products: catalogProducts });",
+      "  const catalogProductsWithMeta = catalogProductsWithOfferMeta(products, settings);\n  const catalogProducts = catalogProductsWithMeta.map((product:any) => {\n    const explicitType = String(product?.product_type || '').trim().toLowerCase();\n    const hasVariants = Array.isArray(product?.variants) && product.variants.length > 0;\n    const isVariant = explicitType ? explicitType === 'variant' : hasVariants;\n    return isVariant ? product : { ...product, variants: [] };\n  });\n  const posted = await postToAppsScript(webhookUrl, { action: 'catalog_sync', products: catalogProducts });",
       'catalog sync sanitization',
     );
 
