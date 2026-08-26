@@ -48,8 +48,11 @@ export const invoiceSnapshotConsistencyPatch = () => ({
       const newFinalCheck = `  const snapshotFinal=repairMoney(snapshot.final_total);\n  const snapshotWrapEnabled=['yes','true','1','on','add wrap','gift wrap'].includes(wrapText);\n  const snapshotWrapFee=snapshotWrapEnabled?repairMoney(snapshot.wrapping_cost):0;\n  const snapshotNoWrap=Math.max(0,Math.round((repairMoney(snapshot.normal_total)-repairMoney(snapshot.discount)+repairMoney(snapshot.delivery_fee))*100)/100);\n  const expectedSnapshotFinal=(snapshotWrapEnabled && snapshotWrapFee>0 && snapshotFinal>0 && Math.abs(snapshotFinal-snapshotNoWrap)<=1)\n    ? Math.max(0,Math.round((snapshotNoWrap+snapshotWrapFee)*100)/100)\n    : snapshotFinal;\n  if(expectedSnapshotFinal>0 && Math.abs(expectedSnapshotFinal-repairMoney(order.total_amount))>0.01) reasons.push('final total');`;
       text = replaceRequired(text, oldFinalCheck, newFinalCheck, 'Gift Wrap final safety check');
 
-      const oldRepairFinal = `  const finalTotal=repairMoney(snapshot.final_total) || computed;`;
-      const newRepairFinal = `  const savedFinalTotal=repairMoney(snapshot.final_total);\n  const noWrapComputed=Math.max(0,Math.round((crossedSubtotal-allDiscount+delivery)*100)/100);\n  const savedFinalMissedWrap=Boolean(giftWrap && wrapFee>0 && savedFinalTotal>0 && Math.abs(savedFinalTotal-noWrapComputed)<=1);\n  const finalTotal=savedFinalMissedWrap?computed:(savedFinalTotal||computed);`;
+      // invoiceRepairMoneyParsingPatch runs before this patch and intentionally replaces
+      // the original one-line final-total assignment with parsedFinal + validity guard.
+      // Target that transformed block so build order remains deterministic.
+      const oldRepairFinal = `  const parsedFinal=repairMoney(snapshot.final_total);\n  if(parsedFinal<=0 && repairMoney(order.total_amount)>0) throw new Error('Repair Final Total is invalid. Use the original Confirm CSV and try again.');\n  const finalTotal=parsedFinal || computed;`;
+      const newRepairFinal = `  const parsedFinal=repairMoney(snapshot.final_total);\n  if(parsedFinal<=0 && repairMoney(order.total_amount)>0) throw new Error('Repair Final Total is invalid. Use the original Confirm CSV and try again.');\n  const noWrapComputed=Math.max(0,Math.round((crossedSubtotal-allDiscount+delivery)*100)/100);\n  const parsedFinalMissedWrap=Boolean(giftWrap && wrapFee>0 && parsedFinal>0 && Math.abs(parsedFinal-noWrapComputed)<=1);\n  const finalTotal=parsedFinalMissedWrap?computed:(parsedFinal||computed);`;
       text = replaceRequired(text, oldRepairFinal, newRepairFinal, 'Repair Gift Wrap final total');
 
       return { code: text, map: null };
