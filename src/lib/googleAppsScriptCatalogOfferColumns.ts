@@ -2,11 +2,12 @@ export const GOOGLE_APPS_SCRIPT_CATALOG_OFFER_COLUMNS = String.raw`// ==========
 // O-RA STORE - PRODUCT CATALOG OFFER DISPLAY COLUMNS
 // Append-only: existing PRODUCT CATALOG columns keep their exact positions.
 // Selling Price stays the real working price used by item/variant change logic.
-// Crossed Price + Offer % are display/reference values only.
+// Crossed Price + Actual Selling Price + Offer % are display/reference values only.
 // ============================================================
 ORA_VERSION = 'O-RA Store Google Sheets Clean V1 + Catalog Offer Columns';
 
 if (ORA_CATALOG_HEADERS.indexOf('Crossed Price (Rs)') < 0) ORA_CATALOG_HEADERS.push('Crossed Price (Rs)');
+if (ORA_CATALOG_HEADERS.indexOf('Actual Selling Price (Rs)') < 0) ORA_CATALOG_HEADERS.push('Actual Selling Price (Rs)');
 if (ORA_CATALOG_HEADERS.indexOf('Offer %') < 0) ORA_CATALOG_HEADERS.push('Offer %');
 
 var oraCatalogRowsOfferColumnsBase_ = oraCatalogRows_;
@@ -19,8 +20,10 @@ oraCatalogRows_ = function(products) {
     if (rowIndex >= rows.length) return;
     target = target || {};
     var crossed = oraRound_(target.sheet_crossed_price || 0);
+    var actual = oraRound_(target.sheet_actual_selling_price || 0);
     var percent = Number(target.sheet_offer_percent || 0);
     rows[rowIndex].push(crossed > 0 ? crossed : '');
+    rows[rowIndex].push(actual > 0 ? actual : '');
     rows[rowIndex].push(isFinite(percent) && percent > 0 ? Math.round(percent * 10) / 10 : '');
     rowIndex++;
   }
