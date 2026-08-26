@@ -126,6 +126,23 @@ export const productEnglishOnlyPatch = () => ({
         "      item_details: (productForm.item_details || []).filter(detail=>String(detail.label_en||'').trim() && String(detail.value_en||'').trim()).map(detail=>({ id:detail.id, label_en:String(detail.label_en).trim(), value_en:String(detail.value_en).trim() })),",
       );
 
+      // Product gallery upload cap: allow up to 10 images per product.
+      text = replaceIfPresent(
+        text,
+        '    const remainingSlots = Math.max(0, 6 - currentRealImages.length);',
+        '    const remainingSlots = Math.max(0, 10 - currentRealImages.length);',
+      );
+      text = replaceIfPresent(
+        text,
+        "    if (remainingSlots <= 0) { alert('Maximum 6 product images per item.'); return; }",
+        "    if (remainingSlots <= 0) { alert('Maximum 10 product images per item.'); return; }",
+      );
+      text = replaceIfPresent(
+        text,
+        '                  <p className="text-[10px] text-neutral-500 mb-2">Select JPG, PNG or WEBP • max 6 • auto-compressed & stored as URLs</p>',
+        '                  <p className="text-[10px] text-neutral-500 mb-2">Select JPG, PNG or WEBP • max 10 • auto-compressed & stored as URLs</p>',
+      );
+
       return text === code ? null : { code: text, map: null };
     }
 
