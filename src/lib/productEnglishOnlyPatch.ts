@@ -74,6 +74,13 @@ export const productEnglishOnlyPatch = () => ({
         '',
       );
 
+      // Keep the Add/Edit Product workspace entirely product-English-only.
+      text = replaceIfPresent(
+        text,
+        '                    placeholder="toy car, kids toy, remote car, සෙල්ලම් කාර්"',
+        '                    placeholder="toy car, kids toy, remote control car, gift item"',
+      );
+
       // Existing Products admin list should not show a Sinhala subtitle.
       text = replaceIfPresent(
         text,
