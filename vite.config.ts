@@ -43,10 +43,11 @@ import { deliveryCityAcceptancePatch } from './src/lib/deliveryCityAcceptancePat
 import { waybillDuplicateSafetyPatch } from './src/lib/waybillDuplicateSafetyPatch';
 import { waybillExistingGarbageCleanupPatch } from './src/lib/waybillExistingGarbageCleanupPatch';
 import { leadItemCodeBlankDefaultPatch } from './src/lib/leadItemCodeBlankDefaultPatch';
+import { productEnglishOnlyPatch } from './src/lib/productEnglishOnlyPatch';
 
 export default defineConfig(() => {
   return {
-    plugins: [leadItemCodeBlankDefaultPatch(), waybillExistingGarbageCleanupPatch(), waybillDuplicateSafetyPatch(), deliveryCityAcceptancePatch(), maintenanceBilingualNoticePatch(), mainCategoryHierarchyPatch(), roundSpecialOfferPatch(), specialOfferPercentageRulePatch(), specialOfferAdminPreviewPatch(), specialOfferLivePreviewDecimalPatch(), roundSpecialOfferPercentBadgePatch(), productCardOfferLayoutPatch(), bundleComponentOfferDisplayPatch(), qtyOfferMergedDisplayPatch(), checkoutCombinedOfferPatch(), bundleCheckoutOfferPatch(), productCatalogOfferColumnsPatch(), googleAppsScriptCurrencyParsePatch(), googleAppsScriptOrderCrossPricePatch(), orderCrossPriceActualSourcePatch(), productBackupDryRunPatch(), welcomeSplashAppPatch(), customerCartWordingPatch(), adminDashboardStoragePatch(), adminDashboardUnifiedUploadPatch(), confirmUploadPackingBatchPatch(), confirmUploadCrossPriceSnapshotPatch(), confirmUploadCustomerNamePatch(), packingDownloadUxPatch(), pdfPerformancePatch(), invoiceRepairMoneyParsingPatch(), invoiceCrossedPriceMathPatch(), invoiceCombinedDiscountPatch(), invoiceSnapshotConsistencyPatch(), repairA4FourUpCsvPatch(), adminDashboardFardarHistoryPatch(), adminDashboardFardarHistoryDurablePatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), react(), tailwindcss()],
+    plugins: [leadItemCodeBlankDefaultPatch(), waybillExistingGarbageCleanupPatch(), waybillDuplicateSafetyPatch(), deliveryCityAcceptancePatch(), maintenanceBilingualNoticePatch(), mainCategoryHierarchyPatch(), roundSpecialOfferPatch(), specialOfferPercentageRulePatch(), specialOfferAdminPreviewPatch(), specialOfferLivePreviewDecimalPatch(), roundSpecialOfferPercentBadgePatch(), productCardOfferLayoutPatch(), bundleComponentOfferDisplayPatch(), qtyOfferMergedDisplayPatch(), checkoutCombinedOfferPatch(), bundleCheckoutOfferPatch(), productCatalogOfferColumnsPatch(), googleAppsScriptCurrencyParsePatch(), googleAppsScriptOrderCrossPricePatch(), orderCrossPriceActualSourcePatch(), productBackupDryRunPatch(), welcomeSplashAppPatch(), customerCartWordingPatch(), adminDashboardStoragePatch(), adminDashboardUnifiedUploadPatch(), confirmUploadPackingBatchPatch(), confirmUploadCrossPriceSnapshotPatch(), confirmUploadCustomerNamePatch(), packingDownloadUxPatch(), pdfPerformancePatch(), invoiceRepairMoneyParsingPatch(), invoiceCrossedPriceMathPatch(), invoiceCombinedDiscountPatch(), invoiceSnapshotConsistencyPatch(), repairA4FourUpCsvPatch(), adminDashboardFardarHistoryPatch(), adminDashboardFardarHistoryDurablePatch(), adminDashboardVisibleTemplatePatch(), adminDashboardLeadPreviewPatch(), adminDashboardLeadServerPreviewPatch(), adminDashboardProductAutoPopularPatch(), productEnglishOnlyPatch(), react(), tailwindcss()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
@@ -56,7 +57,7 @@ export default defineConfig(() => {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
-      // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
+      // Disable file watching when DISABLE_HMR is true to save CPU.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
   };
