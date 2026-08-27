@@ -118,7 +118,7 @@ export const leadMetaCsvCompatibilityPatch = () => ({
         city: iCity >= 0 ? String(c[iCity] || '').trim() : '',
         order_source: source,
         payment_method: 'COD' as const,
-        notes: iNotes >= 0 ? String(c[iNotes] || '').trim() : `${source} raw lead`,
+        notes: iNotes >= 0 ? String(c[iNotes] || '').trim() : source + ' raw lead',
         is_confirmed: false,
       };
     }).filter(row => row.platform_lead_id || row.item_code || row.phone || row.customer_name);
