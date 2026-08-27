@@ -27,16 +27,16 @@ export const leadMetaCsvCompatibilityPatch = () => ({
     const handlerStart = "  const handleDirectSourceUpload = (file: File, source: 'Facebook Ads' | 'TikTok Ads') => {";
 
     const newParser = String.raw`  const parseSourceCsvForDirectImport = (text:string,source:'Facebook Ads'|'TikTok Ads',selectedItemCode:string) => {
-    const rawText = String(text || '').replace(/^\\uFEFF/, '');
-    const lines = rawText.split(/\\r?\\n/).filter(line => line.trim());
+    const rawText = String(text || '').replace(/^\uFEFF/, '');
+    const lines = rawText.split(/\r?\n/).filter(line => line.trim());
     if (lines.length < 2) return [];
 
     // Meta commonly exports UTF-16 TSV even when the file extension is .csv.
     // The file reader handles encoding below; here we detect tab vs comma safely.
     const firstLine = lines[0] || '';
-    const tabCount = (firstLine.match(/\\t/g) || []).length;
+    const tabCount = (firstLine.match(/\t/g) || []).length;
     const commaCount = (firstLine.match(/,/g) || []).length;
-    const delimiter = tabCount > commaCount ? '\\t' : ',';
+    const delimiter = tabCount > commaCount ? '\t' : ',';
 
     const parseLine = (line:string) => {
       const out:string[] = [];
@@ -55,7 +55,7 @@ export const leadMetaCsvCompatibilityPatch = () => ({
       return out;
     };
 
-    const rawHeaders = parseLine(firstLine).map(h => String(h || '').replace(/^\\uFEFF/, '').trim());
+    const rawHeaders = parseLine(firstLine).map(h => String(h || '').replace(/^\uFEFF/, '').trim());
     const headers = rawHeaders.map(h => h.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, ''));
     const findExact = (names:string[]) => {
       for (const name of names) {
@@ -91,9 +91,9 @@ export const leadMetaCsvCompatibilityPatch = () => ({
     if (iQty < 0) iQty = findRawLoose(['ඔබට_අවශ්‍ය_ප්‍රමාණය', 'ඔබට අවශ්‍ය ප්‍රමාණය', 'ප්‍රමාණය']);
 
     const cleanPhone = (value:unknown) => String(value ?? '').trim().replace(/^p:/i, '');
-    const cleanChoice = (value:unknown) => String(value ?? '').trim().replace(/_/g, ' ').replace(/\\s+/g, ' ');
+    const cleanChoice = (value:unknown) => String(value ?? '').trim().replace(/_/g, ' ').replace(/\s+/g, ' ');
     const parseQty = (value:unknown) => {
-      const match = String(value ?? '').match(/\\d+/);
+      const match = String(value ?? '').match(/\d+/);
       return match ? Math.max(0, Number(match[0])) : 0;
     };
 
