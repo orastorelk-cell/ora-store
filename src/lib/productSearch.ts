@@ -98,3 +98,67 @@ export const productSearchScore = (product: Product, query: string, categories: 
 
 export const matchesProductSearch = (product: Product, query: string, categories: Category[] = []) =>
   productSearchScore(product, query, categories) > 0;
+
+
+const conservativeCustomerTokenMatch = (queryToken: string, candidateToken: string) => {
+  if (!queryToken || !candidateToken) return false;
+  if (queryToken === candidateToken) return true;
+  // Prefix matching is useful for natural typing ("speak" -> "speaker") but avoid
+  // very short substring matches that make unrelated products appear.
+  if (queryToken.length >= 3 && candidateToken.startsWith(queryToken)) return true;
+  if (queryToken.length < 5 || candidateToken.length < 5) return false;
+  const maxLen = Math.max(queryToken.length, candidateToken.length);
+  const maxDistance = maxLen >= 9 ? 2 : 1;
+  return editDistance(queryToken, candidateToken) <= maxDistance;
+};
+
+/**
+ * Strict customer-store search.
+ *
+ * Product descriptions are intentionally excluded from matching because common
+ * words inside long descriptions caused unrelated cards to appear. The customer
+ * bar now searches only product names, exact item codes, category names and
+ * admin search keywords, with conservative typo tolerance.
+ */
+export const customerProductSearchScore = (product: Product, query: string, categories: Category[] = []) => {
+  const rawQuery = String(query || '').trim();
+  if (!rawQuery) return 1;
+
+  const category = categoryForProduct(product, categories);
+  if (category?.icon && category.icon.includes(rawQuery)) return 115;
+
+  const q = normalize(rawQuery);
+  if (!q) return 0;
+
+  const name = normalize(`${product.name_en} ${product.name_si}`);
+  const sku = normalize(product.sku);
+  const keywords = normalize(product.search_keywords || '');
+  const categoryText = normalize(`${category?.name_en || ''} ${category?.name_si || ''} ${product.category_slug}`);
+
+  if (sku === q) return 140;
+  if (name === q) return 130;
+  if (name.startsWith(q)) return 120;
+  if (name.includes(q)) return 112;
+  if (categoryText === q) return 108;
+  if (categoryText.includes(q)) return 102;
+  if (keywords.includes(q)) return 96;
+
+  const qTokens = q.split(/\s+/).filter(Boolean);
+  if (!qTokens.length) return 0;
+
+  const nameTokens = name.split(/\s+/).filter(Boolean);
+  const categoryTokens = categoryText.split(/\s+/).filter(Boolean);
+  const keywordTokens = keywords.split(/\s+/).filter(Boolean);
+  const candidateTokens = [...nameTokens, ...categoryTokens, ...keywordTokens, sku].filter(Boolean);
+
+  // Every word typed by the customer must have a real match. This is the key
+  // difference from the broad AI/product-discovery search above.
+  const allMatched = qTokens.every((qt) =>
+    candidateTokens.some((ct) => conservativeCustomerTokenMatch(qt, ct))
+  );
+  if (!allMatched) return 0;
+
+  const exactNameTokenMatches = qTokens.filter((qt) => nameTokens.includes(qt)).length;
+  const prefixNameMatches = qTokens.filter((qt) => nameTokens.some((ct) => ct.startsWith(qt))).length;
+  return 70 + exactNameTokenMatches * 8 + prefixNameMatches * 3;
+};
