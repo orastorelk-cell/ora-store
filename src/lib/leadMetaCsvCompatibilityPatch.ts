@@ -27,7 +27,11 @@ export const leadMetaCsvCompatibilityPatch = () => ({
     const handlerStart = "  const handleDirectSourceUpload = (file: File, source: 'Facebook Ads' | 'TikTok Ads') => {";
 
     const newParser = String.raw`  const parseSourceCsvForDirectImport = (text:string,source:'Facebook Ads'|'TikTok Ads',selectedItemCode:string) => {
-    const rawText = String(text || '').replace(/^\uFEFF/, '');
+    const rawInput = String(text || '');
+    // Extra safety: if a browser decoded a UTF-16 Meta export as UTF-8, the text
+    // contains NUL bytes between ASCII characters. Strip those NULs so the English
+    // header suffixes remain readable instead of making the whole lead row fail.
+    const rawText = rawInput.replace(/\u0000/g, '').replace(/^\uFFFD+/, '').replace(/^\uFEFF/, '');
     const lines = rawText.split(/\r?\n/).filter(line => line.trim());
     if (lines.length < 2) return [];
 
