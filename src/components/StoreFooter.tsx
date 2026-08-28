@@ -16,7 +16,7 @@ export const StoreFooter: React.FC = () => {
   const storeName=settings.brand_store_name||'O-RA';
   const ownerName=String(settings.business_registration_name||storeName).trim()||storeName;
   const whatsappDigits=digitsOnly(settings.whatsapp_number||'');
-  const facebookUrl='https://www.facebook.com/orastoreofficial';
+  const facebookUrl=String(settings.website_facebook_page_url || 'https://www.facebook.com/orastoreofficial').trim();
 
   const shop = (slug:string|null) => {
     go('/');
