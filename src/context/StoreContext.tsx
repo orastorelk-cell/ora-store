@@ -342,6 +342,29 @@ const sharedStaffRequest = async (url: string, options: RequestInit = {}) => {
   return data;
 };
 
+const refreshStaffSessionToken = async () => {
+  const token = getStaffSessionToken();
+  if (!token) return '';
+  const exp = decodeStaffSessionExpiry(token);
+  // Existing staff sessions are 12 hours. Renew only in the final 6 hours so
+  // active dashboards stay signed in without creating unnecessary requests.
+  if (exp - Date.now() > 6 * 60 * 60 * 1000) return token;
+  const response = await fetch('/api/staff/session/refresh', {
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error:any = new Error(data?.error || `Session refresh failed (${response.status})`);
+    error.status = response.status;
+    throw error;
+  }
+  const nextToken = String(data?.token || '');
+  if (!nextToken || !decodeStaffSessionExpiry(nextToken)) throw new Error('Server returned an invalid refreshed session.');
+  localStorage.setItem('ora_staff_session_token', nextToken);
+  return nextToken;
+};
+
 const publicOrderSave = async (order: Order, customerAccessToken?: string, deferSheetSync = false, waitForSheetSync = false): Promise<Order> => {
   const headers: Record<string,string> = {'Content-Type':'application/json'};
   if (customerAccessToken) headers.Authorization = `Bearer ${customerAccessToken}`;
@@ -634,6 +657,35 @@ useEffect(() => {
     const safeUsers = staffUsers.map((user:any) => { const { password: _legacyPassword, ...safeUser } = user || {}; return safeUser; });
     localStorage.setItem('ora_staff_accounts', JSON.stringify(safeUsers));
   }, [staffUsers]);
+
+  // Rolling Admin/Staff session refresh. Customer storefront/order APIs do not use
+  // this token, so this keep-alive is isolated to authenticated staff activity.
+  useEffect(() => {
+    if (!adminUser || isLocalStorefrontHost()) return;
+    let cancelled = false;
+    const keepSessionAlive = async () => {
+      try {
+        await refreshStaffSessionToken();
+      } catch (err:any) {
+        if (Number(err?.status || 0) !== 401 || cancelled) return;
+        localStorage.removeItem('ora_staff_session_token');
+        localStorage.removeItem('ora_admin_user');
+        setAdminUser(null);
+      }
+    };
+    keepSessionAlive();
+    const timer = window.setInterval(keepSessionAlive, 15 * 60 * 1000);
+    const onFocus = () => { keepSessionAlive(); };
+    const onVisibility = () => { if (document.visibilityState === 'visible') keepSessionAlive(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [adminUser?.id]);
 
 
   // ---------------------------------------------------------------------------

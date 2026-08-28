@@ -390,6 +390,14 @@ app.post('/api/staff/login', async (req, res) => {
   return res.json({ user: publicStaff(user), token: signStaffToken(user) });
 });
 
+// Keep an already-authenticated Admin/Staff session alive while the dashboard is
+// actively being used. This does not affect public/customer order submission.
+app.post('/api/staff/session/refresh', requireAdminSession, async (req,res) => {
+  const user=(req as any).staffSessionUser as ServerStaffAccount | undefined;
+  if(!user)return res.status(401).json({error:'Login session required.'});
+  return res.json({ok:true,token:signStaffToken(user)});
+});
+
 
 app.post('/api/staff/change-password', requireAdminSession, async (req,res) => {
   try {
