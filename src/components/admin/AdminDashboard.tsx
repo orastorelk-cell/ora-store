@@ -627,11 +627,36 @@ export const AdminDashboard: React.FC = () => {
     const result:ProductContentTemplateData={specifications:[],item_details:[]};
     const scalarBuffers:Record<string,string[]>={};
     let currentKey='';
+    let pendingStructuredLabel='';
     const lines=String(text || '').replace(/^\uFEFF/,'').replace(/\r\n?/g,'\n').split('\n');
 
     const pushScalar=(key:string,value:string)=>{
       if(!scalarBuffers[key])scalarBuffers[key]=[];
       scalarBuffers[key].push(value);
+    };
+
+    const pushStructuredValue=(section:'specifications'|'item_details',label:string,rawValue:string)=>{
+      const cleanLabel=String(label || '').trim();
+      const cleanValue=String(rawValue || '').trim();
+      if(!cleanLabel || !cleanValue)return;
+
+      if(section==='specifications'){
+        const unitMatch=cleanValue.match(/^(.+?)\s+(mm|cm|m|km|ml|l|g|kg|pc|pcs|piece|pieces)$/i);
+        result.specifications.push({
+          id:`spec-import-${Date.now()}-${result.specifications.length}-${Math.random().toString(36).slice(2,5)}`,
+          label:cleanLabel,
+          value:unitMatch ? String(unitMatch[1]).trim() : cleanValue,
+          unit:unitMatch ? String(unitMatch[2]).trim() : '',
+        });
+      }else{
+        result.item_details.push({
+          id:`item-import-${Date.now()}-${result.item_details.length}-${Math.random().toString(36).slice(2,5)}`,
+          label_en:cleanLabel,
+          value_en:cleanValue,
+          label_si:'',
+          value_si:'',
+        });
+      }
     };
 
     lines.forEach((rawLine)=>{
@@ -644,6 +669,7 @@ export const AdminDashboard: React.FC = () => {
         const maybeKey=productContentHeadingKey(headingMatch[1]);
         if(maybeKey){
           currentKey=maybeKey;
+          pendingStructuredLabel='';
           const inlineValue=String(headingMatch[2] || '').trim();
           if(inlineValue && currentKey!=='specifications' && currentKey!=='item_details')pushScalar(currentKey,inlineValue);
           return;
@@ -653,33 +679,35 @@ export const AdminDashboard: React.FC = () => {
       const headingOnlyKey=productContentHeadingKey(trimmed.replace(/:$/,''));
       if(headingOnlyKey){
         currentKey=headingOnlyKey;
+        pendingStructuredLabel='';
         return;
       }
 
       if(currentKey==='specifications' || currentKey==='item_details'){
         const clean=trimmed.replace(/^[•\-*]\s*/,'');
-        const pair=clean.match(/^([^:]{1,80}):\s*(.+)$/);
-        if(!pair)return;
-        const label=String(pair[1] || '').trim();
-        const rawValue=String(pair[2] || '').trim();
-        if(!label || !rawValue)return;
+        const pair=clean.match(/^([^:]{1,80}):\s*(.*)$/);
 
-        if(currentKey==='specifications'){
-          const unitMatch=rawValue.match(/^(.+?)\s+(mm|cm|m|km|ml|l|g|kg|pc|pcs|piece|pieces)$/i);
-          result.specifications.push({
-            id:`spec-import-${Date.now()}-${result.specifications.length}-${Math.random().toString(36).slice(2,5)}`,
-            label,
-            value:unitMatch ? String(unitMatch[1]).trim() : rawValue,
-            unit:unitMatch ? String(unitMatch[2]).trim() : '',
-          });
-        }else{
-          result.item_details.push({
-            id:`item-import-${Date.now()}-${result.item_details.length}-${Math.random().toString(36).slice(2,5)}`,
-            label_en:label,
-            value_en:rawValue,
-            label_si:'',
-            value_si:'',
-          });
+        if(pair){
+          const label=String(pair[1] || '').trim();
+          const rawValue=String(pair[2] || '').trim();
+          if(!label)return;
+
+          if(rawValue){
+            pushStructuredValue(currentKey,label,rawValue);
+            pendingStructuredLabel='';
+          }else{
+            // Support the downloaded TXT layout where the label is on one line
+            // and its value is typed on the next line, e.g.:
+            // Size:
+            // 120 × 41 × 13 cm
+            pendingStructuredLabel=label;
+          }
+          return;
+        }
+
+        if(pendingStructuredLabel){
+          pushStructuredValue(currentKey,pendingStructuredLabel,clean);
+          pendingStructuredLabel='';
         }
         return;
       }
