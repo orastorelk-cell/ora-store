@@ -17,6 +17,8 @@ type VerifiedOrder = {
   address?: string;
   city?: string;
   status: string;
+  call_center_status?: string;
+  stock_status?: string;
   payment_method?: string;
   payment_status: string;
   payment_verification_status?: string;
@@ -40,7 +42,7 @@ type VerifiedOrder = {
   expected_payment_amount?: number;
   is_advance_required?: boolean;
   payment_eligible?: boolean;
-  items?: { name: string; sku?: string; main_sku?: string; variant_name?: string; quantity: number; unit_price?: number; subtotal?: number }[];
+  items?: { name: string; sku?: string; main_sku?: string; variant_name?: string; quantity: number; unit_price?: number; regular_unit_price?: number; subtotal?: number }[];
 };
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -352,52 +354,88 @@ export const OraAssistant: React.FC = () => {
     const more = Math.max(0,(order.items || []).length-5);
     const fullAddress = [order.address, order.city].filter(Boolean).join(', ');
     const orderDate = order.created_at ? new Date(order.created_at).toLocaleDateString() : '';
+
+    const currentItemTotal = (order.items || []).reduce((sum, item) => {
+      const qty = Math.max(1, Number(item.quantity || 1));
+      const unit = Math.max(0, Number(item.unit_price || 0));
+      return sum + unit * qty;
+    }, 0) || Math.max(0, Number(order.subtotal || 0));
+
+    const regularItemTotal = (order.items || []).reduce((sum, item) => {
+      const qty = Math.max(1, Number(item.quantity || 1));
+      const unit = Math.max(0, Number(item.unit_price || 0));
+      const regular = Math.max(unit, Number(item.regular_unit_price || 0));
+      return sum + regular * qty;
+    }, 0) || currentItemTotal;
+
+    const crossPriceDiscount = Math.max(0, regularItemTotal - currentItemTotal);
+    const orderDiscount = Math.max(0, Number(order.special_offer_discount || 0));
+    const totalOfferDiscount = crossPriceDiscount + orderDiscount;
+    const offerItemTotal = Math.max(0, currentItemTotal - orderDiscount);
+
+    const isConfirmed = String(order.call_center_status || '').toLowerCase() === 'confirmed';
+    const waitingForStock = isConfirmed && String(order.stock_status || '').toLowerCase() === 'waiting for stock';
+
     if (lang === 'si') return [
       `📦 Order ${order.order_number}`,
       order.customer_name ? `👤 Customer: ${order.customer_name}` : '',
       order.phone ? `📞 Phone: ${order.phone}` : '',
       fullAddress ? `📍 Address: ${fullAddress}` : '',
       orderDate ? `🗓️ Date: ${orderDate}` : '',
-      `තත්ත්වය: ${translateStatus(order.status,lang)}`,
+      isConfirmed ? '✅ Order Status: Confirmed' : `තත්ත්වය: ${translateStatus(order.status,lang)}`,
+      waitingForStock ? '⏳ Stock Status: Waiting for Stock' : '',
+      waitingForStock ? 'Order එක confirm. Stock ලැබුණු පසු process කරයි.' : '',
       `💵 ගෙවීම: ${paymentLine(order)}`,
       order.waybill_number ? `🚚 Delivery: ${translateStatus(order.delivery_status || 'Waybill Assigned',lang)}` : `🚚 Delivery: ${translateStatus(order.delivery_status || order.tracking_status || 'Pending',lang)}`,
       order.waybill_number ? `Waybill: ${order.waybill_number}` : '',
       packingLine(order),
-      `සාමාන්‍ය එකතුව: Rs. ${formatLkr(order.subtotal||0)}`,
-      Number(order.special_offer_discount||0)>0 ? `🏷️ Offer / Discount: -Rs. ${formatLkr(order.special_offer_discount||0)}` : `🏷️ Offer / Discount: Rs. 0`,
-      `💰 අවසන් මුදල: Rs. ${formatLkr(order.total_amount||0)}`,
+      `💵 Normal Price: Rs. ${formatLkr(regularItemTotal)}`,
+      totalOfferDiscount > 0 ? `🏷️ SPECIAL OFFER: -Rs. ${formatLkr(totalOfferDiscount)}` : '🏷️ Offer / Discount: Rs. 0',
+      totalOfferDiscount > 0 ? `💰 Offer Price: Rs. ${formatLkr(offerItemTotal)}` : '',
+      Number(order.delivery_fee || 0) > 0 ? `🚚 Delivery Fee: Rs. ${formatLkr(order.delivery_fee || 0)}` : '',
+      `💳 Final Amount: Rs. ${formatLkr(order.total_amount||0)}`,
       itemLines.length ? `🛍️ භාණ්ඩ (${(order.items||[]).reduce((s,x)=>s+x.quantity,0)}):\n${itemLines.join('\n')}${more?`\n• තවත් ${more} භාණ්ඩ`:''}` : '',
     ].filter(Boolean).join('\n');
+
     if (lang === 'ta') return [
       `📦 Order ${order.order_number}`,
       order.customer_name ? `👤 Customer: ${order.customer_name}` : '',
       order.phone ? `📞 Phone: ${order.phone}` : '',
       fullAddress ? `📍 Address: ${fullAddress}` : '',
       orderDate ? `🗓️ Date: ${orderDate}` : '',
-      `நிலை: ${translateStatus(order.status,lang)}`,
+      isConfirmed ? '✅ Order Status: Confirmed' : `நிலை: ${translateStatus(order.status,lang)}`,
+      waitingForStock ? '⏳ Stock Status: Waiting for Stock' : '',
+      waitingForStock ? 'Order confirmed. Stock கிடைத்ததும் process செய்யப்படும்.' : '',
       `💵 Payment: ${paymentLine(order)}`,
       `🚚 Delivery: ${translateStatus(order.delivery_status || order.tracking_status || 'Pending',lang)}`,
       order.waybill_number ? `Waybill: ${order.waybill_number}` : '',
       packingLine(order),
-      `Normal Total: Rs. ${formatLkr(order.subtotal||0)}`,
-      `Offer / Discount: -Rs. ${formatLkr(order.special_offer_discount||0)}`,
-      `💰 Final Amount: Rs. ${formatLkr(order.total_amount||0)}`,
+      `Normal Price: Rs. ${formatLkr(regularItemTotal)}`,
+      totalOfferDiscount > 0 ? `SPECIAL OFFER: -Rs. ${formatLkr(totalOfferDiscount)}` : 'Offer / Discount: Rs. 0',
+      totalOfferDiscount > 0 ? `Offer Price: Rs. ${formatLkr(offerItemTotal)}` : '',
+      Number(order.delivery_fee || 0) > 0 ? `Delivery Fee: Rs. ${formatLkr(order.delivery_fee || 0)}` : '',
+      `💳 Final Amount: Rs. ${formatLkr(order.total_amount||0)}`,
       itemLines.length ? `🛍️ Items:\n${itemLines.join('\n')}${more?`\n• மேலும் ${more}`:''}` : '',
     ].filter(Boolean).join('\n');
+
     return [
       `📦 Order ${order.order_number}`,
       order.customer_name ? `👤 Customer: ${order.customer_name}` : '',
       order.phone ? `📞 Phone: ${order.phone}` : '',
       fullAddress ? `📍 Address: ${fullAddress}` : '',
       orderDate ? `🗓️ Date: ${orderDate}` : '',
-      `Status: ${translateStatus(order.status,lang)}`,
+      isConfirmed ? '✅ Order Status: Confirmed' : `Status: ${translateStatus(order.status,lang)}`,
+      waitingForStock ? '⏳ Stock Status: Waiting for Stock' : '',
+      waitingForStock ? 'Order confirmed. It will be processed when stock is available.' : '',
       `💵 Payment: ${paymentLine(order)}`,
       `🚚 Delivery: ${translateStatus(order.delivery_status || order.tracking_status || 'Pending',lang)}`,
       order.waybill_number ? `Waybill: ${order.waybill_number}` : '',
       packingLine(order),
-      `Normal Total: Rs. ${formatLkr(order.subtotal||0)}`,
-      `Offer / Discount: -Rs. ${formatLkr(order.special_offer_discount||0)}`,
-      `💰 Final Amount: Rs. ${formatLkr(order.total_amount||0)}`,
+      `Normal Price: Rs. ${formatLkr(regularItemTotal)}`,
+      totalOfferDiscount > 0 ? `SPECIAL OFFER: -Rs. ${formatLkr(totalOfferDiscount)}` : 'Offer / Discount: Rs. 0',
+      totalOfferDiscount > 0 ? `Offer Price: Rs. ${formatLkr(offerItemTotal)}` : '',
+      Number(order.delivery_fee || 0) > 0 ? `Delivery Fee: Rs. ${formatLkr(order.delivery_fee || 0)}` : '',
+      `💳 Final Amount: Rs. ${formatLkr(order.total_amount||0)}`,
       itemLines.length ? `🛍️ Items:\n${itemLines.join('\n')}${more?`\n• ${more} more`:''}` : '',
     ].filter(Boolean).join('\n');
   };
