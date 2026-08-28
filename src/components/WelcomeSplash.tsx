@@ -4,9 +4,12 @@ import { useStore } from '../context/StoreContext';
 
 const SESSION_KEY = 'ora_welcome_splash_seen_v1';
 
+const isManagerPath = () =>
+  typeof window !== 'undefined' &&
+  (window.location.pathname.startsWith('/system') || window.location.pathname.startsWith('/ora-manager'));
+
 const shouldShowWelcomeIntro = () => {
-  if (typeof window === 'undefined') return false;
-  if (window.location.pathname.startsWith('/system') || window.location.pathname.startsWith('/ora-manager')) return false;
+  if (typeof window === 'undefined' || isManagerPath()) return false;
   try {
     return window.sessionStorage.getItem(SESSION_KEY) !== '1';
   } catch {
@@ -21,6 +24,7 @@ export const WelcomeSplash: React.FC = () => {
   // flashing for one frame before the welcome animation appears.
   const [introVisible, setIntroVisible] = React.useState<boolean>(() => shouldShowWelcomeIntro());
   const introWasRequested = React.useRef(introVisible);
+  const [introMinimumDone, setIntroMinimumDone] = React.useState(false);
   const [leaving, setLeaving] = React.useState(false);
 
   React.useEffect(() => {
@@ -31,14 +35,23 @@ export const WelcomeSplash: React.FC = () => {
     } catch {}
 
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    const leaveTimer = window.setTimeout(() => setLeaving(true), reduceMotion ? 650 : 1650);
+    const minimumTimer = window.setTimeout(() => setIntroMinimumDone(true), reduceMotion ? 650 : 1650);
     const removeTimer = window.setTimeout(() => setIntroVisible(false), reduceMotion ? 900 : 2150);
 
     return () => {
-      window.clearTimeout(leaveTimer);
+      window.clearTimeout(minimumTimer);
       window.clearTimeout(removeTimer);
     };
   }, []);
+
+  // Never fade the welcome cover away while the real storefront is still loading.
+  // If loading takes longer than the intro, it changes into the small boot loader
+  // instead of exposing stale/default data underneath.
+  React.useEffect(() => {
+    if (introVisible && introMinimumDone && sharedStoreReady) setLeaving(true);
+  }, [introVisible, introMinimumDone, sharedStoreReady]);
+
+  if (isManagerPath()) return null;
 
   // After the intro has already been seen (including normal refreshes), keep a
   // clean white boot cover until the shared server catalog/settings finish loading.
