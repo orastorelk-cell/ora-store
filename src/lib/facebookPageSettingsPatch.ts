@@ -8,7 +8,7 @@ export const facebookPageSettingsPatch = () => ({
   name: 'ora-facebook-page-settings-patch',
   enforce: 'pre' as const,
   transform(code: string, rawId: string) {
-    const id = rawId.split('?')[0].replace(/\\\\/g, '/');
+    const id = rawId.split('?')[0].replace(/\\/g, '/');
 
     if (id.endsWith('/src/components/admin/AdminDashboard.tsx')) {
       let text = code;
