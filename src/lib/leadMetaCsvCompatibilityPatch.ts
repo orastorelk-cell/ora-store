@@ -98,7 +98,9 @@ export const leadMetaCsvCompatibilityPatch = () => ({
     const cleanChoice = (value:unknown) => String(value ?? '').trim().replace(/_/g, ' ').replace(/\s+/g, ' ');
     const parseQty = (value:unknown) => {
       const match = String(value ?? '').match(/\d+/);
-      return match ? Math.max(0, Number(match[0])) : 0;
+      // Meta forms that do not ask Quantity should still create one pending order item.
+      // A missing / blank / zero quantity therefore defaults safely to 1.
+      return match ? Math.max(1, Number(match[0]) || 1) : 1;
     };
 
     return lines.slice(1).map(line => {
@@ -114,7 +116,7 @@ export const leadMetaCsvCompatibilityPatch = () => ({
         item_code: String(selectedItemCode || '').trim(),
 
         variant_value: iVariant >= 0 ? cleanChoice(c[iVariant]) : undefined,
-        quantity: iQty >= 0 ? parseQty(c[iQty]) : 0,
+        quantity: iQty >= 0 ? parseQty(c[iQty]) : 1,
         customer_name: iName >= 0 ? String(c[iName] || '').trim() : '',
         phone,
         whatsapp,
