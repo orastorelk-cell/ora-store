@@ -16,7 +16,7 @@ import { ProductRequestSection } from './components/ProductRequestSection';
 import { AdminDashboard } from './components/admin/AdminDashboard';
 import { AdminLoginModal } from './components/admin/AdminLoginModal';
 import { getTranslation } from './lib/i18n';
-import { productSearchScore } from './lib/productSearch';
+import { customerProductSearchScore } from './lib/productSearch';
 import { activeVariants, displayUnitPrice, normalizedProductType } from './lib/productVariants';
 import { Sparkles, ShieldCheck, Truck, Headphones, Flame } from 'lucide-react';
 
@@ -198,7 +198,7 @@ const CustomerStorefront: React.FC = () => {
     const rows = products
       .filter((p) => selectedCategorySlug === 'combo-pack' ? normalizedProductType(p) === 'bundle' : (selectedCategorySlug ? (normalizedProductType(p) !== 'bundle' && p.category_slug === selectedCategorySlug) : true))
       .filter((p) => customerPrices(p).some(matchesPriceRange))
-      .map((p) => ({ product: p, score: query ? productSearchScore(p, query, categories) : 1 }))
+      .map((p) => ({ product: p, score: query ? customerProductSearchScore(p, query, categories) : 1 }))
       .filter((row) => row.score > 0);
 
     rows.sort((a, b) => {
