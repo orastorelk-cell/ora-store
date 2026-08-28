@@ -444,6 +444,7 @@ export const AdminDashboard: React.FC = () => {
   const [productSearchQuery, setProductSearchQuery] = useState('');
   const [manualItemSearch, setManualItemSearch] = useState('');
   const productBackupInputRef = useRef<HTMLInputElement>(null);
+  const productContentTemplateInputRef = useRef<HTMLInputElement>(null);
   const [productBackupBusy, setProductBackupBusy] = useState(false);
 
   const exportProductBackup = () => {
@@ -583,6 +584,214 @@ export const AdminDashboard: React.FC = () => {
     resetProductFormForNew();
     setIsAddProductOpen(true);
     setActiveTab('add_product');
+  };
+
+  type ProductContentTemplateData = {
+    name_en?: string;
+    category_name?: string;
+    description_en?: string;
+    brand?: string;
+    search_keywords?: string;
+    specifications: ProductSpecification[];
+    item_details: ProductItemDetail[];
+  };
+
+  const productContentHeadingKey = (raw: string) => {
+    const key=String(raw || '').trim().toUpperCase().replace(/\s+/g,' ');
+    const aliases:Record<string,string>={
+      'PRODUCT NAME':'name_en',
+      'PRODUCT NAME ENGLISH':'name_en',
+      'NAME':'name_en',
+      'NAME ENGLISH':'name_en',
+      'CATEGORY':'category_name',
+      'PRODUCT CATEGORY':'category_name',
+      'DESCRIPTION':'description_en',
+      'DESCRIPTION ENGLISH':'description_en',
+      'BRAND':'brand',
+      'SEARCH KEYWORDS':'search_keywords',
+      'SEARCH KEYWORDS / TAGS':'search_keywords',
+      'SEARCH KEYWORDS/TAGS':'search_keywords',
+      'KEYWORDS':'search_keywords',
+      'SIZE / MEASUREMENT DETAILS':'specifications',
+      'SIZE / MEASUREMENTS / PACK DETAILS':'specifications',
+      'SIZE / MEASUREMENTS / PACK DETAIL':'specifications',
+      'MEASUREMENTS':'specifications',
+      'ITEM DETAILS':'item_details',
+      'ITEM DETAILS / SPECIFICATIONS':'item_details',
+      'ITEM DETAILS/SPECIFICATIONS':'item_details',
+    };
+    return aliases[key] || '';
+  };
+
+  const parseProductContentTemplate = (text: string): ProductContentTemplateData => {
+    const result:ProductContentTemplateData={specifications:[],item_details:[]};
+    const scalarBuffers:Record<string,string[]>={};
+    let currentKey='';
+    const lines=String(text || '').replace(/^\uFEFF/,'').replace(/\r\n?/g,'\n').split('\n');
+
+    const pushScalar=(key:string,value:string)=>{
+      if(!scalarBuffers[key])scalarBuffers[key]=[];
+      scalarBuffers[key].push(value);
+    };
+
+    lines.forEach((rawLine)=>{
+      const line=rawLine.trimEnd();
+      const trimmed=line.trim();
+      if(!trimmed)return;
+
+      const headingMatch=trimmed.match(/^([^:]{2,80}):\s*(.*)$/);
+      if(headingMatch){
+        const maybeKey=productContentHeadingKey(headingMatch[1]);
+        if(maybeKey){
+          currentKey=maybeKey;
+          const inlineValue=String(headingMatch[2] || '').trim();
+          if(inlineValue && currentKey!=='specifications' && currentKey!=='item_details')pushScalar(currentKey,inlineValue);
+          return;
+        }
+      }
+
+      const headingOnlyKey=productContentHeadingKey(trimmed.replace(/:$/,''));
+      if(headingOnlyKey){
+        currentKey=headingOnlyKey;
+        return;
+      }
+
+      if(currentKey==='specifications' || currentKey==='item_details'){
+        const clean=trimmed.replace(/^[•\-*]\s*/,'');
+        const pair=clean.match(/^([^:]{1,80}):\s*(.+)$/);
+        if(!pair)return;
+        const label=String(pair[1] || '').trim();
+        const rawValue=String(pair[2] || '').trim();
+        if(!label || !rawValue)return;
+
+        if(currentKey==='specifications'){
+          const unitMatch=rawValue.match(/^(.+?)\s+(mm|cm|m|km|ml|l|g|kg|pc|pcs|piece|pieces)$/i);
+          result.specifications.push({
+            id:`spec-import-${Date.now()}-${result.specifications.length}-${Math.random().toString(36).slice(2,5)}`,
+            label,
+            value:unitMatch ? String(unitMatch[1]).trim() : rawValue,
+            unit:unitMatch ? String(unitMatch[2]).trim() : '',
+          });
+        }else{
+          result.item_details.push({
+            id:`item-import-${Date.now()}-${result.item_details.length}-${Math.random().toString(36).slice(2,5)}`,
+            label_en:label,
+            value_en:rawValue,
+            label_si:'',
+            value_si:'',
+          });
+        }
+        return;
+      }
+
+      if(currentKey)pushScalar(currentKey,line);
+    });
+
+    const scalar=(key:string)=>String((scalarBuffers[key] || []).join('\n')).trim();
+    result.name_en=scalar('name_en') || undefined;
+    result.category_name=scalar('category_name') || undefined;
+    result.description_en=scalar('description_en') || undefined;
+    result.brand=scalar('brand') || undefined;
+    result.search_keywords=scalar('search_keywords').replace(/\n+/g,', ').trim() || undefined;
+
+    const hasAny=Boolean(
+      result.name_en || result.category_name || result.description_en || result.brand ||
+      result.search_keywords || result.specifications.length || result.item_details.length
+    );
+    if(!hasAny)throw new Error('No supported product content fields were found in this TXT file.');
+    return result;
+  };
+
+  const downloadProductContentTemplate = () => {
+    const template=`O-RA PRODUCT CONTENT TEMPLATE
+Fill only the fields you need. Leave unused fields blank.
+This template NEVER controls Item Code, prices, stock, Product Type, offers/discounts, variants or images.
+
+PRODUCT NAME:
+
+CATEGORY:
+
+DESCRIPTION:
+
+BRAND:
+
+SEARCH KEYWORDS:
+
+SIZE / MEASUREMENT DETAILS:
+Size:
+Length:
+Width:
+Height:
+Capacity:
+Weight:
+Material:
+Pack Size:
+
+ITEM DETAILS:
+Model:
+Type:
+Condition:
+Material:
+Warranty:
+Country of Origin:
+Suitable For:
+`;
+    const blob=new Blob([template],{type:'text/plain;charset=utf-8'});
+    const url=URL.createObjectURL(blob);
+    const anchor=document.createElement('a');
+    anchor.href=url;
+    anchor.download='O-RA-Product-Content-Template.txt';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(()=>URL.revokeObjectURL(url),1000);
+  };
+
+  const importProductContentTemplate = async (file?:File) => {
+    if(!file)return;
+    try{
+      if(file.size > 256 * 1024)throw new Error('TXT template is too large. Maximum size is 256 KB.');
+      const parsed=parseProductContentTemplate(await file.text());
+
+      const hasExistingContent=Boolean(
+        productForm.name_en.trim() || productForm.category_name.trim() ||
+        productForm.description_en.trim() || productForm.brand.trim() ||
+        productForm.search_keywords.trim() || productForm.specifications.length ||
+        productForm.item_details.length
+      );
+      if(hasExistingContent){
+        const ok=window.confirm(
+          'This will replace only the descriptive/content fields included in the TXT template.\n\nItem Code, prices, stock, Product Type, offers/discounts, variants and images will NOT change.\n\nContinue?'
+        );
+        if(!ok)return;
+      }
+
+      setProductForm((prev)=>{
+        const importedName=String(parsed.name_en || '').trim();
+        const importedKeywords=String(parsed.search_keywords || '').trim();
+        const autoKeywords=importedName && !importedKeywords
+          ? String(suggestProductMetadata(importedName,categories)?.search_keywords || '').trim()
+          : '';
+        return {
+          ...prev,
+          ...(parsed.name_en ? {name_en:parsed.name_en} : {}),
+          ...(parsed.category_name ? {category_name:parsed.category_name} : {}),
+          ...(parsed.description_en ? {description_en:parsed.description_en} : {}),
+          ...(parsed.brand ? {brand:parsed.brand} : {}),
+          ...((importedKeywords || autoKeywords) ? {search_keywords:importedKeywords || autoKeywords} : {}),
+          ...(parsed.specifications.length ? {specifications:parsed.specifications} : {}),
+          ...(parsed.item_details.length ? {item_details:parsed.item_details} : {}),
+        };
+      });
+
+      alert(
+        'Product content loaded into the form.\n\nPlease review it and continue entering Item Code, prices, stock, Product Type, offer/discount settings, variants and images manually. Nothing has been saved yet.'
+      );
+    }catch(error:any){
+      alert(error?.message || 'Product content TXT could not be read. No product data was changed.');
+    }finally{
+      if(productContentTemplateInputRef.current)productContentTemplateInputRef.current.value='';
+    }
   };
 
   // Manual Phone / FB Order Form State
@@ -5053,6 +5262,32 @@ export const AdminDashboard: React.FC = () => {
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
               <div className="order-2 xl:order-1">
             <form onSubmit={handleCreateProduct} className="space-y-3 text-xs">
+              <div className="rounded-2xl border border-cyan-500/25 bg-cyan-500/5 p-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="font-black text-cyan-300">Product Content TXT Template</p>
+                    <p className="mt-1 text-[10px] leading-4 text-neutral-400">
+                      Optional helper only — manual entry stays fully available. TXT upload pre-fills Product Name, Category, Description, Brand, Search Keywords, Measurements and Item Details only. It never saves automatically and never changes Item Code, prices, stock, Product Type, offers/discounts, variants or images.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2 shrink-0">
+                    <button type="button" onClick={downloadProductContentTemplate} className="inline-flex items-center gap-1.5 rounded-xl border border-cyan-500/30 bg-neutral-950 px-3 py-2 text-[10px] font-black text-cyan-300">
+                      <Download className="h-3.5 w-3.5"/>Download TXT Template
+                    </button>
+                    <input
+                      ref={productContentTemplateInputRef}
+                      type="file"
+                      accept=".txt,text/plain"
+                      className="hidden"
+                      onChange={(event)=>void importProductContentTemplate(event.target.files?.[0])}
+                    />
+                    <button type="button" onClick={()=>productContentTemplateInputRef.current?.click()} className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-[10px] font-black text-emerald-300">
+                      <Upload className="h-3.5 w-3.5"/>Upload Filled TXT
+                    </button>
+                  </div>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <div className="mb-1 flex items-center justify-between gap-2"><label className="block text-neutral-300">Item Code / SKU *</label><label className="flex items-center gap-1.5 text-[9px] font-black text-amber-300"><input type="checkbox" checked={productAutoCode} disabled={Boolean(editingProduct)} onChange={(e)=>{const on=e.target.checked;setProductAutoCode(on);if(on && products.length > 0)setProductForm(prev=>({...prev,sku:nextAutoSku()}));}} className="accent-amber-500"/> AUTO CODE</label></div>
