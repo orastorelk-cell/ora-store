@@ -103,12 +103,20 @@ export const matchesProductSearch = (product: Product, query: string, categories
 const conservativeCustomerTokenMatch = (queryToken: string, candidateToken: string) => {
   if (!queryToken || !candidateToken) return false;
   if (queryToken === candidateToken) return true;
-  // Prefix matching is useful for natural typing ("speak" -> "speaker") but avoid
-  // very short substring matches that make unrelated products appear.
+
+  // Natural partial typing is allowed only as a real word prefix.
+  // Example: "speak" -> "speaker". Mid-word substring matches are never allowed.
   if (queryToken.length >= 3 && candidateToken.startsWith(queryToken)) return true;
+
+  // Typo tolerance is intentionally narrow for the customer storefront:
+  // same first two characters, similar length, and only a very small edit distance.
+  // This prevents unrelated products with vaguely similar words from appearing.
   if (queryToken.length < 5 || candidateToken.length < 5) return false;
+  if (queryToken.slice(0, 2) !== candidateToken.slice(0, 2)) return false;
+  if (Math.abs(queryToken.length - candidateToken.length) > 2) return false;
+
   const maxLen = Math.max(queryToken.length, candidateToken.length);
-  const maxDistance = maxLen >= 9 ? 2 : 1;
+  const maxDistance = maxLen >= 10 && queryToken.slice(0, 3) === candidateToken.slice(0, 3) ? 2 : 1;
   return editDistance(queryToken, candidateToken) <= maxDistance;
 };
 
@@ -135,30 +143,41 @@ export const customerProductSearchScore = (product: Product, query: string, cate
   const keywords = normalize(product.search_keywords || '');
   const categoryText = normalize(`${category?.name_en || ''} ${category?.name_si || ''} ${product.category_slug}`);
 
-  if (sku === q) return 140;
-  if (name === q) return 130;
-  if (name.startsWith(q)) return 120;
-  if (name.includes(q)) return 112;
-  if (categoryText === q) return 108;
-  if (categoryText.includes(q)) return 102;
-  if (keywords.includes(q)) return 96;
-
   const qTokens = q.split(/\s+/).filter(Boolean);
   if (!qTokens.length) return 0;
 
   const nameTokens = name.split(/\s+/).filter(Boolean);
   const categoryTokens = categoryText.split(/\s+/).filter(Boolean);
   const keywordTokens = keywords.split(/\s+/).filter(Boolean);
-  const candidateTokens = [...nameTokens, ...categoryTokens, ...keywordTokens, sku].filter(Boolean);
 
-  // Every word typed by the customer must have a real match. This is the key
-  // difference from the broad AI/product-discovery search above.
-  const allMatched = qTokens.every((qt) =>
-    candidateTokens.some((ct) => conservativeCustomerTokenMatch(qt, ct))
-  );
-  if (!allMatched) return 0;
+  // Item code is deliberately exact. A partial code must not pull unrelated items.
+  if (sku === q) return 150;
 
-  const exactNameTokenMatches = qTokens.filter((qt) => nameTokens.includes(qt)).length;
-  const prefixNameMatches = qTokens.filter((qt) => nameTokens.some((ct) => ct.startsWith(qt))).length;
-  return 70 + exactNameTokenMatches * 8 + prefixNameMatches * 3;
+  const allTokensMatch = (candidateTokens: string[]) =>
+    qTokens.every((qt) => candidateTokens.some((ct) => conservativeCustomerTokenMatch(qt, ct)));
+
+  // Prefer genuine product-name matches, then admin-curated keywords, then category.
+  // No description or brand text participates in customer storefront search.
+  if (allTokensMatch(nameTokens)) {
+    const exact = qTokens.filter((qt) => nameTokens.includes(qt)).length;
+    const prefix = qTokens.filter((qt) => nameTokens.some((ct) => ct.startsWith(qt))).length;
+    return 120 + exact * 8 + prefix * 3;
+  }
+
+  if (allTokensMatch(keywordTokens)) {
+    const exact = qTokens.filter((qt) => keywordTokens.includes(qt)).length;
+    return 95 + exact * 5;
+  }
+
+  if (allTokensMatch(categoryTokens)) {
+    const exact = qTokens.filter((qt) => categoryTokens.includes(qt)).length;
+    return 80 + exact * 4;
+  }
+
+  // Allow a useful mixed match only between the product name and its explicit
+  // admin search tags. Category words are not mixed in, which avoids broad noise.
+  const nameAndKeywords = [...nameTokens, ...keywordTokens];
+  if (allTokensMatch(nameAndKeywords)) return 72;
+
+  return 0;
 };
