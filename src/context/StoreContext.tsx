@@ -723,6 +723,7 @@ useEffect(() => {
     if (!hasStaffSession && !isLocalStorefrontHost()) {
       localStorage.removeItem('ora_admin_user');
       setAdminUser(null);
+      window.alert('Admin session expired. Please login again before saving products. Unsynced changes are not live on other devices.');
       return;
     }
     const timer = window.setTimeout(() => {
@@ -742,7 +743,22 @@ useEffect(() => {
           window.alert('Admin session expired. Please login again, then save the product again so it publishes to all devices.');
           return;
         }
-        console.warn('Shared storefront publish failed:', err?.message || err);
+        // One automatic retry covers short network/server hiccups. Never leave an
+        // Admin believing a product is live when only this browser cache changed.
+        window.setTimeout(() => {
+          const retry = getStaffSessionToken()
+            ? sharedStaffRequest('/api/admin/storefront/state', {
+                method:'PUT',
+                body:JSON.stringify({ products, categories, settings }),
+              })
+            : Promise.reject(new Error('Admin session is no longer active.'));
+          retry.then((data) => {
+            sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, Number(data?.version || 0));
+          }).catch((retryErr:any) => {
+            console.warn('Shared storefront publish failed after retry:', retryErr?.message || retryErr);
+            window.alert('Website sync failed. This change may be visible only in this browser. Please login again and save once more.');
+          });
+        }, 1500);
       });
     }, 500);
     return () => window.clearTimeout(timer);
