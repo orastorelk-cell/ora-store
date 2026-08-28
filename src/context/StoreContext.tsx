@@ -293,7 +293,26 @@ const buildKidsWaterBottleSample = (sku: string): Product => {
   } as Product);
 };
 
-const getStaffSessionToken = () => localStorage.getItem('ora_staff_session_token') || '';
+const decodeStaffSessionExpiry = (token: string) => {
+  try {
+    const payload = String(token || '').split('.')[0] || '';
+    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(payload.length / 4) * 4, '=');
+    const data = JSON.parse(window.atob(base64));
+    return Number(data?.exp || 0);
+  } catch {
+    return 0;
+  }
+};
+const getStaffSessionToken = () => {
+  const token = localStorage.getItem('ora_staff_session_token') || '';
+  if (!token) return '';
+  const exp = decodeStaffSessionExpiry(token);
+  if (!exp || exp <= Date.now() + 5_000) {
+    localStorage.removeItem('ora_staff_session_token');
+    return '';
+  }
+  return token;
+};
 const isLocalStorefrontHost = () => {
   const host = String(window.location.hostname || '').toLowerCase();
   return host === 'localhost' || host === '127.0.0.1' || host === '::1';
@@ -315,7 +334,11 @@ const sharedStaffRequest = async (url: string, options: RequestInit = {}) => {
   if (token) headers.set('Authorization', `Bearer ${token}`);
   const response = await fetch(url, { ...options, headers });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data?.error || `Request failed (${response.status})`);
+  if (!response.ok) {
+    const error:any = new Error(data?.error || `Request failed (${response.status})`);
+    error.status = response.status;
+    throw error;
+  }
   return data;
 };
 
@@ -484,10 +507,21 @@ useEffect(() => {
   const [adminUser, setAdminUser] = useState<AdminUser | null>(() => {
     const saved = localStorage.getItem('ora_admin_user');
     if (!saved) return null;
-    const parsed = JSON.parse(saved);
-    const { password: _legacyPassword, ...safeParsed } = parsed || {};
-    const isAdmin = safeParsed.role === 'admin';
-    return { ...safeParsed, role: isAdmin ? 'admin' : 'staff', permissions: isAdmin ? undefined : (safeParsed.permissions || legacyPermissions(safeParsed.role)), is_active: safeParsed.is_active !== false };
+    if (!isLocalStorefrontHost() && !getStaffSessionToken()) {
+      // Do not trust a remembered admin profile after its real server session
+      // has expired. Otherwise product edits look saved in this Chrome only.
+      localStorage.removeItem('ora_admin_user');
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(saved);
+      const { password: _legacyPassword, ...safeParsed } = parsed || {};
+      const isAdmin = safeParsed.role === 'admin';
+      return { ...safeParsed, role: isAdmin ? 'admin' : 'staff', permissions: isAdmin ? undefined : (safeParsed.permissions || legacyPermissions(safeParsed.role)), is_active: safeParsed.is_active !== false };
+    } catch {
+      localStorage.removeItem('ora_admin_user');
+      return null;
+    }
   });
 
   const [staffUsers, setStaffUsers] = useState<AdminUser[]>(() => {
@@ -662,7 +696,14 @@ useEffect(() => {
           if (saved) sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, Number(saved?.version || 1));
         }
       } catch (err:any) {
-        console.warn('Shared storefront load failed; using this browser cache temporarily:', err?.message || err);
+        if (Number(err?.status || 0) === 401 && adminUser && !isLocalStorefrontHost()) {
+          localStorage.removeItem('ora_staff_session_token');
+          localStorage.removeItem('ora_admin_user');
+          if (!cancelled) setAdminUser(null);
+          console.warn('Admin session expired. Login again before editing the shared storefront.');
+        } else {
+          console.warn('Shared storefront load failed; using this browser cache temporarily:', err?.message || err);
+        }
       } finally {
         if (!cancelled) setSharedStoreReady(true);
       }
@@ -679,7 +720,11 @@ useEffect(() => {
   useEffect(() => {
     if (!sharedStoreReady || !adminUser) return;
     const hasStaffSession = Boolean(getStaffSessionToken());
-    if (!hasStaffSession && !isLocalStorefrontHost()) return;
+    if (!hasStaffSession && !isLocalStorefrontHost()) {
+      localStorage.removeItem('ora_admin_user');
+      setAdminUser(null);
+      return;
+    }
     const timer = window.setTimeout(() => {
       const publish = hasStaffSession
         ? sharedStaffRequest('/api/admin/storefront/state', {
@@ -689,7 +734,16 @@ useEffect(() => {
         : localStorefrontRequest({ products, categories, settings });
       publish.then((data) => {
         sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, Number(data?.version || 0));
-      }).catch((err) => console.warn('Shared storefront publish failed:', err?.message || err));
+      }).catch((err:any) => {
+        if (Number(err?.status || 0) === 401 && !isLocalStorefrontHost()) {
+          localStorage.removeItem('ora_staff_session_token');
+          localStorage.removeItem('ora_admin_user');
+          setAdminUser(null);
+          window.alert('Admin session expired. Please login again, then save the product again so it publishes to all devices.');
+          return;
+        }
+        console.warn('Shared storefront publish failed:', err?.message || err);
+      });
     }, 500);
     return () => window.clearTimeout(timer);
   }, [products, categories, settings, sharedStoreReady, adminUser?.id]);
