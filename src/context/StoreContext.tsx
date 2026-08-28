@@ -97,6 +97,8 @@ interface StoreContextType {
     performed_by?: string;
   }) => void;
   settings: StoreSettings;
+  /** True after the authoritative shared storefront state has finished its first load attempt. */
+  sharedStoreReady: boolean;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   selectedCategorySlug: string | null;
@@ -2657,6 +2659,7 @@ useEffect(() => {
         isCustomerBlocked,
         addPurchaseOrder,
         settings,
+        sharedStoreReady,
         searchQuery,
         setSearchQuery,
         selectedCategorySlug,
