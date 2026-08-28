@@ -444,8 +444,8 @@ export const AdminDashboard: React.FC = () => {
   const [productSearchQuery, setProductSearchQuery] = useState('');
   const [manualItemSearch, setManualItemSearch] = useState('');
   const productBackupInputRef = useRef<HTMLInputElement>(null);
-  const productContentTemplateInputRef = useRef<HTMLInputElement>(null);
   const [productBackupBusy, setProductBackupBusy] = useState(false);
+  const productContentTemplateInputRef = useRef<HTMLInputElement>(null);
 
   const exportProductBackup = () => {
     if (!products.length) {
