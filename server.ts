@@ -2949,6 +2949,8 @@ const assistantSafeOrder = (order:any) => {
     address: String(order.address || ''),
     city: String(order.city || ''),
     status: String(order.order_status || 'Processing'),
+    call_center_status: String(order.call_center_status || ''),
+    stock_status: String(order.stock_status || ''),
     payment_method: String(order.payment_method || 'COD'),
     payment_status: String(order.payment_status || 'Pending'),
     payment_verification_status: order.payment_verification_status,
@@ -2979,6 +2981,7 @@ const assistantSafeOrder = (order:any) => {
       variant_name: String(item.variant_name || ''),
       quantity: Math.max(1, Number(item.quantity || 1)),
       unit_price: Number(item.unit_price || 0),
+      regular_unit_price: Number(item.regular_unit_price || item.unit_price || 0),
       subtotal: Number(item.subtotal || 0),
     })),
   };
