@@ -374,6 +374,8 @@ export interface StoreSettings {
   hotline_number?: string;
   company_email?: string;
   company_address?: string;
+  /** Facebook Page link used by the public website footer. */
+  website_facebook_page_url?: string;
 
   // Public Website Information / Legal Pages
   about_page_enabled?: boolean;
