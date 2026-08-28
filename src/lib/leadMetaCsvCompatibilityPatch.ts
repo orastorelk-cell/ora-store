@@ -31,7 +31,7 @@ export const leadMetaCsvCompatibilityPatch = () => ({
     // Extra safety: if a browser decoded a UTF-16 Meta export as UTF-8, the text
     // contains NUL bytes between ASCII characters. Strip those NULs so the English
     // header suffixes remain readable instead of making the whole lead row fail.
-    const rawText = rawInput.replace(/\u0000/g, '').replace(/^\uFFFD+/, '').replace(/^\uFEFF/, '');
+    const rawText = rawInput.replace(/\u0000/g, '').replace(/\r/g, '').replace(/^\uFFFD+/, '').replace(/^\uFEFF/, '');
     const lines = rawText.split(/\r?\n/).filter(line => line.trim());
     if (lines.length < 2) return [];
 
