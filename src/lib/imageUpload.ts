@@ -53,7 +53,7 @@ export async function compressImageFile(file: File, maxDimension = 1280, maxByte
   throw new Error(`Image could not be compressed below ${Math.round(maxBytes / 1000)} KB. Please choose a simpler or smaller image.`);
 }
 
-export async function uploadPublicImage(file: File | string, purpose: 'review' | 'product-request' | 'product' | 'branding' | 'payment-receipt'): Promise<string> {
+export async function uploadPublicImage(file: File | string, purpose: 'review' | 'product-request' | 'product' | 'branding' | 'payment-receipt' | 'purchase-bill' | 'packing-expense'): Promise<string> {
   const dataUrl = typeof file === 'string' ? file : await compressImageFile(file);
   const response = await fetch('/api/uploads/image', {
     method: 'POST',

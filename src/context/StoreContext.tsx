@@ -90,6 +90,7 @@ interface StoreContextType {
     quantity_added: number;
     unit_buying_price: number;
     invoice_ref?: string;
+    bill_image_url?: string;
     notes?: string;
     performed_by?: string;
   }) => void;
@@ -2812,7 +2813,7 @@ useEffect(() => {
 
   const adjustStock=(productId:string,quantityChange:number,reason:string,performedBy='Admin',variantId?:string)=>{ const now=new Date().toISOString(); setProducts(prev=>prev.map(p=>{ if(p.id!==productId)return p; if(normalizedProductType(p)==='bundle')throw new Error('Bundle stock is calculated from component products. Adjust component stock instead.'); if(normalizedProductType(p)==='variant'){ if(!variantId)throw new Error('Select the exact color / variant before changing stock.'); const target=variantById(p,variantId); if(!target)throw new Error('Variant not found.'); const before=Number(target.stock_quantity||0),after=Math.max(0,before+quantityChange); const variants=(p.variants||[]).map(v=>v.id===variantId?{...v,stock_quantity:after,status:(after<=0?'Out of Stock':'Active') as Product['status']}:v); const total=variants.reduce((n,v)=>n+Number(v.stock_quantity||0),0); setStockHistory(logs=>[{id:`stk-${Date.now()}-${variantId}`,product_id:p.id,product_name:`${p.name_en} - ${target.option_value}`,change_type:quantityChange>=0?'Increase':'Decrease',quantity:Math.abs(quantityChange),previous_stock:before,new_stock:after,reason,performed_by:performedBy,created_at:now},...logs]); logActivity({action:'Variant Stock Adjusted',module:'Stock',target_id:p.id,target_label:`${p.name_en} - ${target.option_value}`,details:`${quantityChange>=0?'+':''}${quantityChange}; ${reason}`}); return {...p,variants,stock_quantity:total,status:total<=0?'Out of Stock':'Active'}; } const before=Number(p.stock_quantity||0),after=Math.max(0,before+quantityChange); setStockHistory(logs=>[{id:`stk-${Date.now()}`,product_id:p.id,product_name:p.name_en,change_type:quantityChange>=0?'Increase':'Decrease',quantity:Math.abs(quantityChange),previous_stock:before,new_stock:after,reason,performed_by:performedBy,created_at:now},...logs]); return {...p,stock_quantity:after,status:after<=0?'Out of Stock':'Active'}; })); };
 
-  const addPurchaseOrder=(poData:{supplier_name:string;product_id:string;variant_id?:string;quantity_added:number;unit_buying_price:number;invoice_ref?:string;notes?:string;performed_by?:string;})=>{
+  const addPurchaseOrder=(poData:{supplier_name:string;product_id:string;variant_id?:string;quantity_added:number;unit_buying_price:number;invoice_ref?:string;bill_image_url?:string;notes?:string;performed_by?:string;})=>{
     const product=products.find(p=>p.id===poData.product_id);
     if(!product)throw new Error('Selected product was not found.');
     if(poData.quantity_added<=0)throw new Error('Purchase quantity must be greater than zero.');
@@ -2820,7 +2821,7 @@ useEffect(() => {
     const variant=poData.variant_id?variantById(product,poData.variant_id):undefined;
     if(normalizedProductType(product)==='variant'&&!variant)throw new Error('Select the exact variant/color for this purchase.');
     const now=new Date().toISOString(),before=variant?Number(variant.stock_quantity||0):Number(product.stock_quantity||0),after=before+poData.quantity_added,poNumber=`PO-${new Date().getFullYear()}-${String(purchaseOrders.length+1).padStart(4,'0')}`;
-    const purchase:PurchaseOrder={id:`po-${Date.now()}`,po_number:poNumber,supplier_name:poData.supplier_name.trim(),product_id:product.id,product_name:product.name_en,sku:variant?.sku||product.sku,variant_id:variant?.id,variant_name:variant?.option_value,variant_sku:variant?.sku,quantity_added:poData.quantity_added,unit_buying_price:poData.unit_buying_price,total_cost:poData.quantity_added*poData.unit_buying_price,invoice_ref:poData.invoice_ref?.trim(),notes:poData.notes?.trim(),performed_by:poData.performed_by||adminUser?.name||'Admin',created_at:now};
+    const purchase:PurchaseOrder={id:`po-${Date.now()}`,po_number:poNumber,supplier_name:poData.supplier_name.trim(),product_id:product.id,product_name:product.name_en,sku:variant?.sku||product.sku,variant_id:variant?.id,variant_name:variant?.option_value,variant_sku:variant?.sku,quantity_added:poData.quantity_added,unit_buying_price:poData.unit_buying_price,total_cost:poData.quantity_added*poData.unit_buying_price,invoice_ref:poData.invoice_ref?.trim(),bill_image_url:poData.bill_image_url?.trim(),notes:poData.notes?.trim(),performed_by:poData.performed_by||adminUser?.name||'Admin',created_at:now};
     setPurchaseOrders(prev=>[purchase,...prev]);
     setProducts(prev=>repriceAutoBundles(prev.map(p=>{
       if(p.id!==product.id)return p;

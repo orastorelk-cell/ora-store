@@ -95,6 +95,7 @@ import { WebsiteInfoPanel } from './WebsiteInfoPanel';
 import { ComboPacksPanel } from './ComboPacksPanel';
 import { BannersPanel } from './BannersPanel';
 import { NotificationsPanel } from './NotificationsPanel';
+import { PackingExpensesPanel } from './PackingExpensesPanel';
 import { getCustomerMembership } from '../../lib/membership';
 import { slugifyCategory, suggestCategoryFields } from '../../lib/categoryAuto';
 import { suggestProductMetadata } from '../../lib/productAutoPopular';
@@ -210,7 +211,7 @@ export const AdminDashboard: React.FC = () => {
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'add_product' | 'combo_packs' | 'supplier_offer' | 'products' | 'categories' | 'banners' | 'notifications' | 'stock' | 'orders' | 'out_of_stock' | 'returns' | 'lead_import' | 'confirm_upload' | 'invoices' | 'packing' | 'invoice_design' | 'delivery' | 'dispatch' | 'cod_payments' | 'bank_transfer_check' | 'assistant_chats' | 'complaints' | 'reports' | 'reviews' | 'product_requests' | 'customers' | 'sheets' | 'activity' | 'branding' | 'website_info' | 'settings' | 'user_access' | 'deploy'
+    'overview' | 'add_product' | 'combo_packs' | 'supplier_offer' | 'products' | 'categories' | 'banners' | 'notifications' | 'stock' | 'orders' | 'out_of_stock' | 'packing_expenses' | 'returns' | 'lead_import' | 'confirm_upload' | 'invoices' | 'packing' | 'invoice_design' | 'delivery' | 'dispatch' | 'cod_payments' | 'bank_transfer_check' | 'assistant_chats' | 'complaints' | 'reports' | 'reviews' | 'product_requests' | 'customers' | 'sheets' | 'activity' | 'branding' | 'website_info' | 'settings' | 'user_access' | 'deploy'
   >('overview');
   const [comboEditProductId, setComboEditProductId] = useState<string | undefined>(undefined);
   const [packingSearch, setPackingSearch] = useState('');
@@ -404,6 +405,8 @@ export const AdminDashboard: React.FC = () => {
   const [stockReason, setStockReason] = useState('Stock Refill');
   const [isPurchaseOpen, setIsPurchaseOpen] = useState(false);
   const [purchaseItemCode, setPurchaseItemCode] = useState('');
+  const [purchaseBillFile, setPurchaseBillFile] = useState<File | null>(null);
+  const [purchaseSaving, setPurchaseSaving] = useState(false);
   const [purchaseForm, setPurchaseForm] = useState({
     supplier_name: '',
     product_id: products[0]?.id || '',
@@ -2328,9 +2331,9 @@ Suitable For:
     staff: 'Custom Access Staff',
   };
 
-  const allPermissionIds: AdminPermission[] = ['overview','add_product','combo_packs','supplier_offer','products','orders','lead_import','confirm_upload','packing','delivery','dispatch','returns','cod_payments','bank_transfer_check','stock','out_of_stock','categories','banners','reviews','product_requests','assistant_chats','complaints','notifications','customers','invoices','invoice_design','reports','sheets','activity','branding','website_info','settings','user_access','deploy'];
+  const allPermissionIds: AdminPermission[] = ['overview','add_product','combo_packs','supplier_offer','products','orders','lead_import','confirm_upload','packing','delivery','dispatch','returns','cod_payments','bank_transfer_check','stock','out_of_stock','packing_expenses','categories','banners','reviews','product_requests','assistant_chats','complaints','notifications','customers','invoices','invoice_design','reports','sheets','activity','branding','website_info','settings','user_access','deploy'];
   const permissionLabels: Record<AdminPermission, string> = {
-    overview: 'Dashboard', add_product:'Add Product', combo_packs:'Combo Packs', supplier_offer:'Supplier Price / Offer', products: 'Products', stock: 'Inventory & Stock', orders: 'Orders', out_of_stock: 'Out of Stock Needs', returns: 'Returns Verification', lead_import: 'FB / TikTok Lead Import', confirm_upload: 'Confirm / Cancel Upload', invoices: 'Invoices', packing: 'Packing Invoice Downloads', invoice_design: 'Invoice Design', delivery: 'Delivery & Waybills', dispatch: 'Dispatch Scan', cod_payments: 'COD Payments', bank_transfer_check: 'Bank Transfer Check', assistant_chats: 'Assistant Chats', complaints: 'Complaints', notifications:'Customer Notifications', reports: 'Reports', reviews: 'Product Reviews', product_requests: 'Product Requests', sheets: 'Google Sheets Sync', customers: 'Customers', categories: 'Categories', banners:'Banners', activity: 'Activity Log', branding: 'Branding & Logo Studio', website_info: 'Website Info & Policies', settings: 'Store Settings', deploy: 'Deployment Guide', user_access: 'System Access'
+    overview: 'Dashboard', add_product:'Add Product', combo_packs:'Combo Packs', supplier_offer:'Supplier Price / Offer', products: 'Products', stock: 'Inventory & Stock', orders: 'Orders', out_of_stock: 'Out of Stock Needs', packing_expenses: 'Packing Materials Expenses', returns: 'Returns Verification', lead_import: 'FB / TikTok Lead Import', confirm_upload: 'Confirm / Cancel Upload', invoices: 'Invoices', packing: 'Packing Invoice Downloads', invoice_design: 'Invoice Design', delivery: 'Delivery & Waybills', dispatch: 'Dispatch Scan', cod_payments: 'COD Payments', bank_transfer_check: 'Bank Transfer Check', assistant_chats: 'Assistant Chats', complaints: 'Complaints', notifications:'Customer Notifications', reports: 'Reports', reviews: 'Product Reviews', product_requests: 'Product Requests', sheets: 'Google Sheets Sync', customers: 'Customers', categories: 'Categories', banners:'Banners', activity: 'Activity Log', branding: 'Branding & Logo Studio', website_info: 'Website Info & Policies', settings: 'Store Settings', deploy: 'Deployment Guide', user_access: 'System Access'
   };
   type StaffAccessLevel = 'none' | 'view' | 'edit';
   const currentRole = adminUser?.role || 'staff';
@@ -2396,6 +2399,9 @@ Suitable For:
     { id:'STOCK', label:'STOCK', items:[
       { id:'stock', label:`Inventory & Stock (${lowStockProducts.length} Alert)`, icon:Database },
       { id:'out_of_stock', label:`Out of Stock (${outOfStockNeeds.length})`, icon:ShieldAlert },
+    ]},
+    { id:'EXPENSES', label:'EXPENSES', items:[
+      { id:'packing_expenses', label:'Packing Materials', icon:ReceiptText },
     ]},
     { id:'STORE', label:'STORE', items:[
       { id:'categories', label:`Categories (${categories.length})`, icon:FolderTree },
@@ -3089,7 +3095,9 @@ Suitable For:
               onClick={() => {
                 const first = products.find((p)=>normalizedProductType(p)!=='bundle');
                 setPurchaseForm({ supplier_name: '', product_id: first?.id || '', variant_id: '', quantity_added: 1, unit_buying_price: first?.buying_price || 0, invoice_ref: '', notes: '' });
-                setPurchaseItemCode(products.find(p=>p.id===purchaseForm.product_id)?.sku || ''); setIsPurchaseOpen(true);
+                setPurchaseBillFile(null);
+                setPurchaseItemCode(first?.sku || '');
+                setIsPurchaseOpen(true);
               }}
               className="px-4 py-2 rounded-xl bg-amber-500 text-neutral-950 font-bold text-xs flex items-center gap-2 hover:bg-amber-400"
             >
@@ -3152,7 +3160,7 @@ Suitable For:
             <div className="p-4 border-b border-neutral-800"><h3 className="font-bold text-white text-sm">Purchase History</h3></div>
             <table className="w-full text-left text-xs text-neutral-300">
               <thead className="bg-neutral-950 text-neutral-400 uppercase text-[10px]"><tr><th className="p-3">PO / Date</th><th className="p-3">Supplier</th><th className="p-3">Product</th><th className="p-3">Qty</th><th className="p-3">Unit Cost</th><th className="p-3">Total</th><th className="p-3">Invoice</th></tr></thead>
-              <tbody className="divide-y divide-neutral-800">{purchaseOrders.map((po) => <tr key={po.id}><td className="p-3"><p className="font-bold text-amber-400">{po.po_number}</p><p className="text-[10px] text-neutral-500">{new Date(po.created_at).toLocaleString()}</p></td><td className="p-3">{po.supplier_name}</td><td className="p-3"><p className="text-white font-semibold">{po.product_name}</p><p className="text-[10px] text-neutral-500">{po.sku}</p></td><td className="p-3 font-bold">+{po.quantity_added}</td><td className="p-3">Rs. {po.unit_buying_price.toLocaleString()}</td><td className="p-3 font-bold text-white">Rs. {po.total_cost.toLocaleString()}</td><td className="p-3">{po.invoice_ref || '-'}</td></tr>)}</tbody>
+              <tbody className="divide-y divide-neutral-800">{purchaseOrders.map((po) => <tr key={po.id}><td className="p-3"><p className="font-bold text-amber-400">{po.po_number}</p><p className="text-[10px] text-neutral-500">{new Date(po.created_at).toLocaleString()}</p></td><td className="p-3">{po.supplier_name}</td><td className="p-3"><p className="text-white font-semibold">{po.product_name}</p><p className="text-[10px] text-neutral-500">{po.sku}</p></td><td className="p-3 font-bold">+{po.quantity_added}</td><td className="p-3">Rs. {po.unit_buying_price.toLocaleString()}</td><td className="p-3 font-bold text-white">Rs. {po.total_cost.toLocaleString()}</td><td className="p-3"><div>{po.invoice_ref || '-'}</div>{po.bill_image_url && <a href={po.bill_image_url} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 rounded-lg border border-sky-500/30 bg-sky-500/10 px-2 py-1 text-[10px] font-bold text-sky-300"><ImageIcon className="h-3 w-3"/>View Bill</a>}</td></tr>)}</tbody>
             </table>
           </div>
 
@@ -3879,6 +3887,13 @@ Suitable For:
             Purchase/stock refill clears eligible waiting orders using the existing FIFO rule. When an item is no longer stock 0 or no longer blocks a waiting order, it disappears from this page automatically.
           </p>
         </div>
+      )}
+
+      {activeTab === 'packing_expenses' && (
+        <PackingExpensesPanel
+          canEdit={canEditTab('packing_expenses')}
+          performedBy={adminUser?.name || adminUser?.username || 'Admin'}
+        />
       )}
 
       {activeTab === 'returns' && (() => {
@@ -6489,18 +6504,24 @@ Suitable For:
       {isPurchaseOpen && (
         <div className="fixed inset-0 z-[120] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
           <form
-            onSubmit={(e) => {
+            onSubmit={async (e) => {
               e.preventDefault();
+              if (purchaseSaving) return;
+              setPurchaseSaving(true);
               try {
-                addPurchaseOrder({ ...purchaseForm, performed_by: adminUser?.name || 'Admin' });
+                const billImageUrl = purchaseBillFile ? await uploadPublicImage(purchaseBillFile, 'purchase-bill') : '';
+                addPurchaseOrder({ ...purchaseForm, bill_image_url: billImageUrl || undefined, performed_by: adminUser?.name || 'Admin' });
+                setPurchaseBillFile(null);
                 setIsPurchaseOpen(false);
               } catch (error) {
                 alert(error instanceof Error ? error.message : 'Unable to save purchase.');
+              } finally {
+                setPurchaseSaving(false);
               }
             }}
             className="w-full max-w-xl bg-neutral-950 border border-neutral-800 rounded-3xl p-5 space-y-4 shadow-2xl"
           >
-            <div className="flex items-center justify-between"><div><h3 className="font-bold text-white">Add Purchase / Stock In</h3><p className="text-xs text-neutral-500">Saving this purchase automatically increases stock.</p></div><button type="button" onClick={() => setIsPurchaseOpen(false)} className="p-2 rounded-lg bg-neutral-900 text-neutral-400"><X className="w-4 h-4" /></button></div>
+            <div className="flex items-center justify-between"><div><h3 className="font-bold text-white">Add Purchase / Stock In</h3><p className="text-xs text-neutral-500">Saving this purchase automatically increases stock.</p></div><button type="button" onClick={() => { setPurchaseBillFile(null); setIsPurchaseOpen(false); }} className="p-2 rounded-lg bg-neutral-900 text-neutral-400"><X className="w-4 h-4" /></button></div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <label className="text-xs text-neutral-400 sm:col-span-2">Supplier Name<input required value={purchaseForm.supplier_name} onChange={(e) => setPurchaseForm({ ...purchaseForm, supplier_name: e.target.value })} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white" /></label>
               <label className="text-xs text-neutral-400 sm:col-span-2">Product<div className="space-y-2">
@@ -6544,9 +6565,13 @@ Suitable For:
               <label className="text-xs text-neutral-400">Unit Buying Price<input required min="0" type="number" value={purchaseForm.unit_buying_price} onChange={(e) => setPurchaseForm({ ...purchaseForm, unit_buying_price: Number(e.target.value) })} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white" /></label>
               <label className="text-xs text-neutral-400">Supplier Invoice Ref<input value={purchaseForm.invoice_ref} onChange={(e) => setPurchaseForm({ ...purchaseForm, invoice_ref: e.target.value })} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white" /></label>
               <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-3"><p className="text-[10px] text-neutral-500">TOTAL PURCHASE COST</p><p className="font-bold text-amber-400">Rs. {(purchaseForm.quantity_added * purchaseForm.unit_buying_price).toLocaleString()}</p></div>
+              <label className="text-xs text-neutral-400 sm:col-span-2">Bill Image <span className="text-neutral-600">(Optional)</span>
+                <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e)=>setPurchaseBillFile(e.target.files?.[0] || null)} className="mt-1 block w-full rounded-xl border border-neutral-700 bg-neutral-900 px-3 py-2 text-xs text-neutral-300 file:mr-3 file:rounded-lg file:border-0 file:bg-amber-500 file:px-3 file:py-1.5 file:font-bold file:text-neutral-950" />
+                {purchaseBillFile && <span className="mt-1 block break-all text-[10px] text-emerald-400">Selected: {purchaseBillFile.name}</span>}
+              </label>
               <label className="text-xs text-neutral-400 sm:col-span-2">Notes<textarea value={purchaseForm.notes} onChange={(e) => setPurchaseForm({ ...purchaseForm, notes: e.target.value })} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white min-h-20" /></label>
             </div>
-            <button type="submit" className="w-full py-3 rounded-xl bg-amber-500 text-neutral-950 font-bold">Save Purchase & Increase Stock</button>
+            <button type="submit" disabled={purchaseSaving} className="w-full py-3 rounded-xl bg-amber-500 text-neutral-950 font-bold disabled:cursor-not-allowed disabled:opacity-50">{purchaseSaving ? 'Saving Purchase...' : 'Save Purchase & Increase Stock'}</button>
           </form>
         </div>
       )}

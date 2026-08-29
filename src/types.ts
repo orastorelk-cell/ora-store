@@ -324,6 +324,7 @@ export interface PurchaseOrder {
   unit_buying_price: number;
   total_cost: number;
   invoice_ref?: string;
+  bill_image_url?: string;
   notes?: string;
   performed_by: string;
   created_at: string;
@@ -534,6 +535,7 @@ export type AdminPermission =
   | 'stock'
   | 'orders'
   | 'out_of_stock'
+  | 'packing_expenses'
   | 'returns'
   | 'lead_import'
   | 'confirm_upload'

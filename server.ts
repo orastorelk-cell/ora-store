@@ -1509,6 +1509,48 @@ app.put('/api/admin-data/:key', requireAdminSession, async (req,res) => {
 });
 
 // -----------------------------------------------------------------------------
+// Packing material expenses. Kept completely separate from product inventory,
+// purchase stock-in, FIFO allocation and product buying-price calculations.
+// -----------------------------------------------------------------------------
+const cleanPackingExpenseRows = (input: any[]) => (Array.isArray(input) ? input : [])
+  .slice(0, 600)
+  .map((row:any) => {
+    const quantity = Math.max(0, Number(row?.quantity || 0));
+    const unitCost = Math.max(0, Number(row?.unit_cost || 0));
+    return {
+      id: String(row?.id || '').trim().slice(0,120),
+      expense_date: String(row?.expense_date || '').trim().slice(0,20),
+      material_name: String(row?.material_name || '').trim().slice(0,180),
+      supplier_name: String(row?.supplier_name || '').trim().slice(0,180),
+      quantity,
+      unit_cost: unitCost,
+      total_cost: Math.round(quantity * unitCost * 100) / 100,
+      invoice_ref: String(row?.invoice_ref || '').trim().slice(0,180) || undefined,
+      bill_image_url: String(row?.bill_image_url || '').trim().slice(0,2000) || undefined,
+      notes: String(row?.notes || '').trim().slice(0,1200) || undefined,
+      performed_by: String(row?.performed_by || '').trim().slice(0,120) || 'Admin',
+      created_at: String(row?.created_at || new Date().toISOString()),
+    };
+  })
+  .filter((row:any) => row.id && row.expense_date && row.material_name && row.quantity > 0 && row.unit_cost >= 0)
+  .sort((a:any,b:any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+app.get('/api/admin/packing-expenses', requireStaffPermission('packing_expenses'), async (_req,res) => {
+  const expenses = cleanPackingExpenseRows(await getSharedAdminPayload('packing-expenses'));
+  return res.json({ expenses });
+});
+
+app.put('/api/admin/packing-expenses', requireStaffPermission('packing_expenses'), async (req,res) => {
+  try {
+    const expenses = cleanPackingExpenseRows(req.body?.expenses);
+    await saveSharedAdminPayload('packing-expenses', expenses);
+    return res.json({ ok:true, expenses });
+  } catch (e:any) {
+    return res.status(500).json({ error:e?.message || 'Packing expenses could not be saved.' });
+  }
+});
+
+// -----------------------------------------------------------------------------
 // Google/Supabase customer profile + authenticated customer order history.
 // Google display name is intentionally NOT copied to real_name.
 // -----------------------------------------------------------------------------
