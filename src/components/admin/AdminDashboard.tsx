@@ -6519,7 +6519,7 @@ Suitable For:
                 setPurchaseSaving(false);
               }
             }}
-            className="w-full max-w-xl bg-neutral-950 border border-neutral-800 rounded-3xl p-5 space-y-4 shadow-2xl"
+            className="w-full max-w-xl max-h-[92vh] overflow-y-auto bg-neutral-950 border border-neutral-800 rounded-3xl p-5 space-y-4 shadow-2xl"
           >
             <div className="flex items-center justify-between"><div><h3 className="font-bold text-white">Add Purchase / Stock In</h3><p className="text-xs text-neutral-500">Saving this purchase automatically increases stock.</p></div><button type="button" onClick={() => { setPurchaseBillFile(null); setIsPurchaseOpen(false); }} className="p-2 rounded-lg bg-neutral-900 text-neutral-400"><X className="w-4 h-4" /></button></div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
