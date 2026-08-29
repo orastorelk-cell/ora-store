@@ -23,12 +23,59 @@ export const adminDashboardFardarHistoryDurablePatch = () => ({
         );`;
 
     const newDerived = String.raw`        const activeOrderNumbers = new Set(orders.map(order => order.order_number));
-        const activeSavedConfirmBatches = unifiedConfirmHistory.filter(batch => batch.orderNumbers.some(orderNumber => activeOrderNumbers.has(orderNumber)));
-        const durableConfirmDates = orders.map(order => unifiedHistoryDateKey(order.call_center_updated_at)).filter(Boolean);
-        const fardarHistoryDates = Array.from(new Set([
-          ...activeSavedConfirmBatches.map(batch => unifiedHistoryDateKey(batch.at)).filter(Boolean),
-          ...durableConfirmDates,
-        ])).sort().reverse();
+
+        // Confirm history used to live only in this browser's localStorage.
+        // Rebuild missing batch cards from durable order snapshots so previous
+        // Confirm/Cancel uploads remain visible after another Staff/Admin login.
+        const durableBatchMap = new Map<string, {
+          orderNumbers: string[];
+          uploaded: number;
+          failed: number;
+          ignored: number;
+          errors: string[];
+          fileCount: number;
+          at: string;
+        }>();
+        orders.forEach(order => {
+          const at = String(order.call_center_updated_at || '');
+          const status = String(order.call_center_status || '');
+          if (!at || (status !== 'Confirmed' && status !== 'Cancelled')) return;
+          const rawBatchId = String((order as any).confirm_upload_batch_id || '').trim();
+          const batchKey = rawBatchId || at;
+          const existing = durableBatchMap.get(batchKey);
+          if (existing) {
+            if (!existing.orderNumbers.includes(order.order_number)) existing.orderNumbers.push(order.order_number);
+            existing.uploaded = existing.orderNumbers.length;
+            if (new Date(at).getTime() < new Date(existing.at).getTime()) existing.at = at;
+          } else {
+            durableBatchMap.set(batchKey, {
+              orderNumbers: [order.order_number],
+              uploaded: 1,
+              failed: 0,
+              ignored: 0,
+              errors: [],
+              fileCount: 1,
+              at,
+            });
+          }
+        });
+
+        const durableConfirmBatches = Array.from(durableBatchMap.values());
+        const mergedConfirmHistory = [
+          ...unifiedConfirmHistory,
+          ...durableConfirmBatches.filter(durableBatch =>
+            !unifiedConfirmHistory.some(savedBatch =>
+              unifiedHistoryDateKey(savedBatch.at) === unifiedHistoryDateKey(durableBatch.at) &&
+              savedBatch.orderNumbers.some(orderNumber => durableBatch.orderNumbers.includes(orderNumber))
+            )
+          ),
+        ];
+        const activeSavedConfirmBatches = mergedConfirmHistory.filter(batch =>
+          batch.orderNumbers.some(orderNumber => activeOrderNumbers.has(orderNumber))
+        );
+        const fardarHistoryDates = Array.from(new Set(
+          activeSavedConfirmBatches.map(batch => unifiedHistoryDateKey(batch.at)).filter(Boolean)
+        )).sort().reverse();
         const selectedFardarHistoryDate = unifiedConfirmHistoryDate || fardarHistoryDates[0] || '';
         const selectedDateBatches = activeSavedConfirmBatches
           .filter(batch => unifiedHistoryDateKey(batch.at) === selectedFardarHistoryDate)

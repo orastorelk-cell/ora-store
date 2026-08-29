@@ -26,11 +26,8 @@ import {
   initialCategories,
   initialProducts,
   initialOrders,
-  initialCustomers,
-  initialStockHistory,
   initialSettings,
   initialStaffAccounts,
-  initialPurchaseOrders,
 } from '../data/initialData';
 import { syncOrderToGoogleSheets, syncOrdersBatchToGoogleSheets, syncProductCatalogToGoogleSheets, clearGoogleSheetTestData, clearGoogleSheetLiveStartData, deleteOrderFromGoogleSheets } from '../lib/googleSheets';
 import { buildOrderItemSnapshot, displayUnitPrice, effectiveBuyingPrice, findProductSelection, normalizeProductForStorage, normalizedProductType, productDisplayStock, variantById, variantBySku, repriceAfterBuyingCostChange } from '../lib/productVariants';
@@ -448,18 +445,30 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   });
 
   const [customers, setCustomers] = useState<Customer[]>(() => {
-    const saved = localStorage.getItem('ora_customers');
-    return saved ? JSON.parse(saved) : initialCustomers;
+    try {
+      const saved = JSON.parse(localStorage.getItem('ora_customers') || '[]');
+      return (Array.isArray(saved) ? saved : []).filter((row:any) => !['cust-1','cust-2'].includes(String(row?.id || '')));
+    } catch {
+      return [];
+    }
   });
 
   const [stockHistory, setStockHistory] = useState<StockHistory[]>(() => {
-    const saved = localStorage.getItem('ora_stock_history');
-    return saved ? JSON.parse(saved) : initialStockHistory;
+    try {
+      const saved = JSON.parse(localStorage.getItem('ora_stock_history') || '[]');
+      return (Array.isArray(saved) ? saved : []).filter((row:any) => !['stk-1','stk-2'].includes(String(row?.id || '')));
+    } catch {
+      return [];
+    }
   });
 
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>(() => {
-    const saved = localStorage.getItem('ora_purchase_orders');
-    return saved ? JSON.parse(saved) : initialPurchaseOrders;
+    try {
+      const saved = JSON.parse(localStorage.getItem('ora_purchase_orders') || '[]');
+      return (Array.isArray(saved) ? saved : []).filter((row:any) => !['po-1','po-2','po-3'].includes(String(row?.id || '')));
+    } catch {
+      return [];
+    }
   });
 
   const [waybillRecords, setWaybillRecords] = useState<WaybillRecord[]>(() => {
@@ -862,9 +871,59 @@ useEffect(() => {
     if (!adminUser || !getStaffSessionToken()) return;
     const data = await sharedStaffRequest('/api/orders');
     const serverOrders: Order[] = Array.isArray(data?.orders) ? data.orders : [];
-    setOrders(serverOrders.sort((a,b)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime()));
+    const sortedServerOrders = [...serverOrders].sort((a,b)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime());
+
+    // Customer DB is derived from the same durable order snapshots for every
+    // authenticated Admin/Staff browser. Local browser demo data is never authoritative.
+    const phoneKey = (value: unknown) => {
+      let digits = String(value || '').replace(/\D/g, '');
+      if (digits.startsWith('94') && digits.length === 11) digits = '0' + digits.slice(2);
+      return digits;
+    };
+    const customerMap = new Map<string, Customer>();
+    [...sortedServerOrders]
+      .filter((order:any) =>
+        !order?.is_test_order &&
+        !/^(WEB-TEST-|TEST-FB-|TEST-TK-|ORA-DIAG-)/i.test(String(order?.order_number || ''))
+      )
+      .sort((a,b)=>new Date(a.created_at).getTime()-new Date(b.created_at).getTime())
+      .forEach((order) => {
+        const key = phoneKey(order.phone);
+        if (!key) return;
+        const previous = customerMap.get(key);
+        if (previous) {
+          customerMap.set(key, {
+            ...previous,
+            name: String(order.customer_name || previous.name),
+            phone: String(order.phone || previous.phone),
+            whatsapp: String(order.whatsapp || order.phone || previous.whatsapp || ''),
+            address: String(order.address || previous.address || ''),
+            city: String(order.city || previous.city || ''),
+            total_orders: Number(previous.total_orders || 0) + 1,
+            total_spent: Number(previous.total_spent || 0) + Number(order.total_amount || 0),
+          });
+          return;
+        }
+        customerMap.set(key, {
+          id: 'cust-order-' + key,
+          name: String(order.customer_name || 'Customer'),
+          phone: String(order.phone || ''),
+          whatsapp: String(order.whatsapp || order.phone || ''),
+          address: String(order.address || ''),
+          city: String(order.city || ''),
+          total_orders: 1,
+          total_spent: Number(order.total_amount || 0),
+          created_at: String(order.created_at || new Date().toISOString()),
+        });
+      });
+    const serverCustomers = Array.from(customerMap.values())
+      .sort((a,b)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime());
+
+    setOrders(sortedServerOrders);
+    setCustomers(serverCustomers);
     try {
-      localStorage.setItem('ora_orders', JSON.stringify(serverOrders));
+      localStorage.setItem('ora_orders', JSON.stringify(sortedServerOrders));
+      localStorage.setItem('ora_customers', JSON.stringify(serverCustomers));
     } catch {}
   };
 

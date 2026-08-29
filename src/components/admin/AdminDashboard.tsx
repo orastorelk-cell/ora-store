@@ -2091,6 +2091,7 @@ Suitable For:
   // ONLY zero-stock products that are currently blocking at least one Confirmed waiting order.
   const outOfStockNeeds = (() => {
     const activeUnallocatedOrders = orders.filter((o) =>
+      o.call_center_status === 'Confirmed' &&
       o.order_status !== 'Cancelled' &&
       !o.is_duplicate_order &&
       !o.stock_allocated
