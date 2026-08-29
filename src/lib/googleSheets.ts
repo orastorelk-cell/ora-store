@@ -84,6 +84,16 @@ const buildOrderSheetRow = (order: any, item: any, isFirst: boolean, settings:Re
   const qty = Math.max(1, Number(item?.quantity ?? 1));
   const unitPrice = roundMoney(item?.unit_price ?? 0);
   const lineTotal = roundMoney(item?.subtotal ?? qty * unitPrice);
+  const actualSellingTotal = roundMoney(
+    (Array.isArray(order?.items) ? order.items : []).reduce(
+      (sum:number, row:any) => {
+        const rowQty=Math.max(1,Number(row?.quantity ?? 1));
+        const regularUnit=roundMoney(row?.regular_unit_price ?? row?.unit_price ?? 0);
+        return sum + regularUnit * rowQty;
+      },
+      0,
+    ),
+  );
   return {
     'Order ID': String(order?.order_number || ''),
     'Customer Name': isFirst ? String(order?.customer_name || '') : '',
@@ -101,7 +111,7 @@ const buildOrderSheetRow = (order: any, item: any, isFirst: boolean, settings:Re
     'Line Total (Rs)': lineTotal,
     'Offer': isFirst ? orderQtyOfferLabel(order) : '',
     'Discount (Rs)': isFirst ? roundMoney(order?.special_offer_discount || order?.discount || 0) : '',
-    'Normal Total (Rs)': isFirst ? roundMoney(order?.subtotal || 0) : '',
+    'Normal Total (Rs)': isFirst ? actualSellingTotal : '',
     'Delivery Fee (Rs)': isFirst ? roundMoney(order?.delivery_fee || 0) : '',
     'Final Total (Rs)': isFirst ? roundMoney(order?.total_amount || 0) : '',
     'Gift Wrap': isFirst ? (order?.gift_wrap_selected ? 'YES' : 'NO') : '',
