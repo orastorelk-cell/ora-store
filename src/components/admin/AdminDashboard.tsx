@@ -3818,32 +3818,61 @@ Suitable For:
               <div className="mt-2 text-sm font-bold text-emerald-300">No stock-0 items are blocking orders now.</div>
             </div>
           ) : (
-            <div className="overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-900">
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[650px] text-left text-sm">
-                  <thead className="bg-neutral-950 text-[10px] uppercase text-neutral-500">
-                    <tr>
-                      <th className="p-3">Item Code</th>
-                      <th className="p-3">Item</th>
-                      <th className="p-3 text-center">Current Stock</th>
-                      <th className="p-3 text-center">Pending Orders</th>
-                      <th className="p-3 text-center">Needed Qty</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-neutral-800">
-                    {outOfStockNeeds.map(({product,pendingOrders,neededQty}) => (
-                      <tr key={product.id}>
-                        <td className="p-3 font-mono font-bold text-orange-300">{product.sku}</td>
-                        <td className="p-3 text-neutral-300">{product.name_en}</td>
-                        <td className="p-3 text-center font-black text-red-400">0</td>
-                        <td className="p-3 text-center font-bold text-white">{pendingOrders}</td>
-                        <td className="p-3 text-center font-bold text-amber-300">{neededQty}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <>
+              {/* Mobile: show every field without horizontal scrolling. */}
+              <div className="space-y-3 sm:hidden">
+                {outOfStockNeeds.map(({product,pendingOrders,neededQty}) => (
+                  <div key={product.id} className="overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-900">
+                    <div className="border-b border-neutral-800 bg-neutral-950 px-4 py-3">
+                      <div className="font-mono text-xs font-black text-orange-300">{product.sku}</div>
+                      <div className="mt-1 break-words text-sm font-bold leading-5 text-white">{product.name_en}</div>
+                    </div>
+                    <div className="grid grid-cols-3 divide-x divide-neutral-800">
+                      <div className="px-2 py-3 text-center">
+                        <div className="text-[9px] font-bold uppercase leading-3 text-neutral-500">Current<br/>Stock</div>
+                        <div className="mt-1 text-sm font-black text-red-400">0</div>
+                      </div>
+                      <div className="px-2 py-3 text-center">
+                        <div className="text-[9px] font-bold uppercase leading-3 text-neutral-500">Pending<br/>Orders</div>
+                        <div className="mt-1 text-sm font-black text-white">{pendingOrders}</div>
+                      </div>
+                      <div className="px-2 py-3 text-center">
+                        <div className="text-[9px] font-bold uppercase leading-3 text-neutral-500">Needed<br/>Qty</div>
+                        <div className="mt-1 text-sm font-black text-amber-300">{neededQty}</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
-            </div>
+
+              {/* Tablet/Desktop: keep the existing table layout. */}
+              <div className="hidden overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-900 sm:block">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[650px] text-left text-sm">
+                    <thead className="bg-neutral-950 text-[10px] uppercase text-neutral-500">
+                      <tr>
+                        <th className="p-3">Item Code</th>
+                        <th className="p-3">Item</th>
+                        <th className="p-3 text-center">Current Stock</th>
+                        <th className="p-3 text-center">Pending Orders</th>
+                        <th className="p-3 text-center">Needed Qty</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-neutral-800">
+                      {outOfStockNeeds.map(({product,pendingOrders,neededQty}) => (
+                        <tr key={product.id}>
+                          <td className="p-3 font-mono font-bold text-orange-300">{product.sku}</td>
+                          <td className="p-3 text-neutral-300">{product.name_en}</td>
+                          <td className="p-3 text-center font-black text-red-400">0</td>
+                          <td className="p-3 text-center font-bold text-white">{pendingOrders}</td>
+                          <td className="p-3 text-center font-bold text-amber-300">{neededQty}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
           )}
 
           <p className="text-[11px] text-neutral-500">
