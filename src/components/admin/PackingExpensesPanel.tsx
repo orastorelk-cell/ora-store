@@ -22,7 +22,14 @@ interface PackingExpensesPanelProps {
   performedBy: string;
 }
 
-const todayKey = () => new Date().toISOString().slice(0, 10);
+const todayKey = () => {
+  const date = new Date();
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+};
 
 const blankForm = () => ({
   expense_date: todayKey(),
