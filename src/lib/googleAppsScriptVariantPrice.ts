@@ -47,12 +47,17 @@ function oraSetVariantDropdownForRow_(ss, sh, row) {
   if (!hm['Variant / Color']) return;
   var main = hm['Main Code'] ? oraStr_(sh.getRange(row, hm['Main Code']).getDisplayValue()).trim() : '';
   var cell = sh.getRange(row, hm['Variant / Color']);
+  var currentValue = oraStr_(cell.getDisplayValue()).trim();
   var variants = oraVariantCatalogRows_(ss, main);
-  if (!variants.length) {
-    try { cell.clearDataValidations(); } catch (e) {}
-    return;
-  }
   var labels = [], seen = {};
+
+  // Keep the color already saved on an old order valid even if the live catalog
+  // has changed. Refreshing the dropdown must never alter the order by itself.
+  if (currentValue) {
+    seen[oraKey_(currentValue)] = true;
+    labels.push(currentValue);
+  }
+
   for (var i = 0; i < variants.length; i++) {
     var label = variants[i].variant;
     var key = oraKey_(label);
@@ -60,15 +65,17 @@ function oraSetVariantDropdownForRow_(ss, sh, row) {
     seen[key] = true;
     labels.push(label);
   }
+
   if (!labels.length) {
     try { cell.clearDataValidations(); } catch (e) {}
     return;
   }
+
   cell.setDataValidation(
     SpreadsheetApp.newDataValidation()
       .requireValueInList(labels, true)
       .setAllowInvalid(false)
-      .setHelpText('Me item eke color / variant ekak thoranna. Price auto update wenawa.')
+      .setHelpText('Current order color stays unchanged. Select a different color only when the customer requests it.')
       .build()
   );
 }
@@ -116,6 +123,24 @@ var oraApplyItemChangeVariantBase_ = oraApplyItemChange_;
 oraApplyItemChange_ = function(ss, sh, row) {
   oraApplyItemChangeVariantBase_(ss, sh, row);
   oraSetVariantDropdownForRow_(ss, sh, row);
+};
+
+// When Website/Admin product variants are synced to PRODUCT CATALOG, refresh only
+// the Variant / Color dropdown validations on existing order rows. Existing cell
+// values, item codes, prices, quantities and totals are intentionally untouched.
+var oraSyncCatalogVariantRefreshBase_ = oraSyncCatalog_;
+oraSyncCatalog_ = function(body) {
+  var result = oraSyncCatalogVariantRefreshBase_(body);
+  var ss = oraTarget_();
+  for (var s = 0; s < ORA_ORDER_SHEETS.length; s++) {
+    var sh = ss.getSheetByName(ORA_ORDER_SHEETS[s]);
+    if (!sh || sh.getLastRow() < 2) continue;
+    for (var row = 2; row <= sh.getLastRow(); row++) {
+      oraSetVariantDropdownForRow_(ss, sh, row);
+    }
+  }
+  SpreadsheetApp.flush();
+  return result;
 };
 
 // Make both edits immediate:
