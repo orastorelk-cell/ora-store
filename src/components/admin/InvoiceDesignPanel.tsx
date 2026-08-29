@@ -265,6 +265,23 @@ export const InvoiceDesignPanel:React.FC<Props>=({settings,updateSettings})=>{
     });
   };
 
+  // Cross-device font lock is intentionally opt-in and affects invoice design only.
+  // It keeps every saved size/weight/spacing/content value unchanged and swaps only
+  // the font family after the exact font file has been uploaded by the admin.
+  const applyCustomFontToAllInvoiceText=(name:string)=>{
+    const groups:FontGroup[]=['company','heading','labels','values','table','totals','notice','footer'];
+    const patch:Record<string,unknown>={};
+    groups.forEach((group)=>{ patch[`invoice_font_${group}_family`]=name; });
+
+    const nextStyles:Record<string,TextStyle>={};
+    (Object.entries(textStyles) as Array<[string,TextStyle]>).forEach(([id,style])=>{
+      nextStyles[id]={...style,family:name};
+    });
+    patch.invoice_text_styles_json=JSON.stringify(nextStyles);
+    set(patch as Partial<StoreSettings>);
+    setSaved(false);
+  };
+
   const save=()=>{
     updateSettings(draft);
     setSaved(true);
@@ -577,12 +594,24 @@ export const InvoiceDesignPanel:React.FC<Props>=({settings,updateSettings})=>{
             <RotateCcw className="inline h-4 w-4 mr-1"/>Reset Selected Text
           </button>
 
-          {fonts.length>0 && <div className="space-y-1 pt-2">
+          {fonts.length>0 && <div className="space-y-2 pt-2">
             <p className="text-[10px] font-bold text-neutral-500">UPLOADED FONTS</p>
-            {fonts.map(f=><div key={f.name} className="flex items-center justify-between rounded-lg bg-neutral-950 px-2 py-1.5 text-[10px] text-neutral-300">
-              <span className="truncate">{f.name}</span>
-              <button onClick={()=>removeCustomFont(f.name)} className="text-red-400">Remove</button>
+            {fonts.map(f=><div key={f.name} className="rounded-lg bg-neutral-950 px-2 py-2 text-[10px] text-neutral-300">
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate">{f.name}</span>
+                <button onClick={()=>removeCustomFont(f.name)} className="text-red-400">Remove</button>
+              </div>
+              <button
+                type="button"
+                onClick={()=>applyCustomFontToAllInvoiceText(f.name)}
+                className="mt-2 w-full rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2 py-1.5 font-black text-emerald-300"
+              >
+                Use This Font For All Invoice Text
+              </button>
             </div>)}
+            <p className="text-[9px] leading-4 text-neutral-500">
+              Safe font lock: only font family changes in the Invoice Design draft. Text, sizes, weights, spacing, layout, orders, stock and Sheet data stay unchanged until you press Save Invoice Design.
+            </p>
           </div>}
         </div>
 
