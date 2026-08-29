@@ -172,6 +172,7 @@ export const AdminDashboard: React.FC = () => {
     updateCategory,
     deleteCategory,
     updateOrderStatus,
+    updateOrderDeliveryDetails,
     updatePaymentStatus,
     confirmAdvancePayment,
     syncOrderToSheet,
@@ -233,6 +234,9 @@ export const AdminDashboard: React.FC = () => {
 
   const [orderFilter, setOrderFilter] = useState<OrderStatus | 'All'>('All');
   const [orderSearch, setOrderSearch] = useState('');
+  const [editingOrderAddressId, setEditingOrderAddressId] = useState('');
+  const [orderAddressDraft, setOrderAddressDraft] = useState({ address:'', city:'', district:'' });
+  const [orderAddressBusy, setOrderAddressBusy] = useState(false);
   const [selectedDeleteOrderId, setSelectedDeleteOrderId] = useState('');
   const [isDeleteOrderOpen, setIsDeleteOrderOpen] = useState(false);
   const [deleteOrderReason, setDeleteOrderReason] = useState('');
@@ -3289,7 +3293,59 @@ Suitable For:
                   <div className="space-y-1 text-neutral-300">
                     <p className="font-bold text-white">{order.customer_name}</p>
                     <p>Phone: {order.phone} | WhatsApp: {order.whatsapp}</p>
-                    <p>Address: {order.address}, {order.city}</p>
+                    <div className="flex flex-wrap items-start gap-2">
+                      <p className="flex-1">Address: {order.address}, {order.city}{order.district ? `, ${order.district}` : ''}</p>
+                      {order.order_status!=='Shipped' && order.order_status!=='Delivered' && order.dispatch_status!=='Handed Over' && (
+                        <button
+                          type="button"
+                          onClick={()=>{
+                            setEditingOrderAddressId(order.id);
+                            setOrderAddressDraft({address:order.address || '',city:order.city || '',district:order.district || ''});
+                          }}
+                          className="inline-flex items-center gap-1 rounded-lg border border-blue-500/30 bg-blue-500/10 px-2 py-1 text-[10px] font-black text-blue-300"
+                        >
+                          <Edit className="h-3 w-3"/>Edit Address
+                        </button>
+                      )}
+                    </div>
+                    {editingOrderAddressId===order.id && (
+                      <div className="mt-2 rounded-xl border border-blue-500/20 bg-blue-500/5 p-3 space-y-2">
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                          <label className="text-[10px] text-neutral-400 sm:col-span-3">Address
+                            <input value={orderAddressDraft.address} onChange={(e)=>setOrderAddressDraft(prev=>({...prev,address:e.target.value}))} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-white"/>
+                          </label>
+                          <label className="text-[10px] text-neutral-400">City
+                            <input value={orderAddressDraft.city} onChange={(e)=>setOrderAddressDraft(prev=>({...prev,city:e.target.value}))} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-white"/>
+                          </label>
+                          <label className="text-[10px] text-neutral-400">District
+                            <input value={orderAddressDraft.district} onChange={(e)=>setOrderAddressDraft(prev=>({...prev,district:e.target.value}))} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-2 text-white"/>
+                          </label>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            disabled={orderAddressBusy}
+                            onClick={async()=>{
+                              setOrderAddressBusy(true);
+                              try{
+                                const result=await updateOrderDeliveryDetails(order.id,orderAddressDraft);
+                                setEditingOrderAddressId('');
+                                alert(`${result.message}${order.invoice_locked?'\n\nInvoice already exists: re-download it so the printed address matches.':''}${order.waybill_number?'\nWaybill assigned: review the courier/Fardar export before dispatch.':''}`);
+                              }catch(error:any){
+                                alert(error?.message || 'Address could not be updated.');
+                              }finally{
+                                setOrderAddressBusy(false);
+                              }
+                            }}
+                            className="rounded-lg bg-blue-500 px-3 py-2 text-[10px] font-black text-white disabled:opacity-40"
+                          >
+                            {orderAddressBusy?'Saving...':'Save Address'}
+                          </button>
+                          <button type="button" disabled={orderAddressBusy} onClick={()=>setEditingOrderAddressId('')} className="rounded-lg bg-neutral-800 px-3 py-2 text-[10px] font-black text-neutral-300 disabled:opacity-40">Cancel</button>
+                        </div>
+                        <p className="text-[9px] text-neutral-500">This updates the O-RA order first, then syncs the same address back to Google Sheet. It does not change items, prices, stock or order status.</p>
+                      </div>
+                    )}
                     <p className="text-neutral-400">Payment: {order.payment_method} ({order.payment_status})</p>
                     <p className={`font-bold ${order.stock_allocated ? 'text-emerald-400' : 'text-orange-400'}`}>Stock: {order.stock_allocated ? 'Allocated' : 'Waiting for Stock'}</p>
                     {order.is_duplicate_order && <p className="font-bold text-red-400">Duplicate Order • Invoice Blocked</p>}

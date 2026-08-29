@@ -179,6 +179,7 @@ interface StoreContextType {
     ignoredCount: number;
   }>;
   updateOrderStatus: (orderId: string, status: OrderStatus) => void;
+  updateOrderDeliveryDetails: (orderId: string, details: { address: string; city: string; district?: string }) => Promise<{ success: boolean; sheetSynced: boolean; message: string }>;
   updatePaymentStatus: (orderId: string, status: 'Pending' | 'Paid' | 'Refunded') => void;
   confirmAdvancePayment: (orderId: string) => void;
   reviewPayment: (orderId: string, decision: 'approve' | 'reject', reviewer?: string, receivedAmount?: number) => void;
@@ -1796,6 +1797,81 @@ useEffect(() => {
     logActivity({ action: 'Order Status Changed', module: 'Orders', target_id: orderId, target_label: order?.order_number || orderId, details: `Status: ${status}` });
   };
 
+  const updateOrderDeliveryDetails = async (
+    orderId: string,
+    details: { address: string; city: string; district?: string },
+  ): Promise<{ success: boolean; sheetSynced: boolean; message: string }> => {
+    const order=orders.find((o)=>o.id===orderId);
+    if(!order)throw new Error('Order not found.');
+    if(order.order_status==='Shipped' || order.order_status==='Delivered' || order.dispatch_status==='Handed Over'){
+      throw new Error('Shipped / delivered orders cannot have their delivery address changed from Orders.');
+    }
+
+    const address=String(details.address || '').trim();
+    const city=String(details.city || '').trim();
+    const district=String(details.district || '').trim();
+    if(!address)throw new Error('Address is required.');
+    if(!city)throw new Error('City is required.');
+
+    const normalizeDeliveryPlace=(value:string)=>String(value || '').trim().toLowerCase().replace(/\s+/g,' ');
+    const cityChanged=normalizeDeliveryPlace(city)!==normalizeDeliveryPlace(order.city || '');
+    const updated:Order={
+      ...order,
+      address,
+      city,
+      district:district || undefined,
+      ...(cityChanged ? { fardar_city:undefined, city_verified:false, city_mapping_source:undefined } : {}),
+    };
+
+    await sharedStaffRequest(`/api/orders/${encodeURIComponent(order.id)}`,{
+      method:'PUT',
+      body:JSON.stringify({order:updated}),
+    });
+
+    let finalOrder:Order=updated;
+    let sheetSynced=false;
+    let sheetMessage='Address saved in O-RA.';
+    const canSyncSheet=Boolean(
+      settings.google_sheet_webhook_url &&
+      updated.order_source!=='Manual Admin' &&
+      !(updated.order_source==='Website' && updated.payment_method==='Bank Payment' && updated.payment_verification_status!=='Approved')
+    );
+
+    if(canSyncSheet){
+      try{
+        const result=await syncOrderToGoogleSheets(updated,settings.google_sheet_webhook_url,settings,products);
+        if(result.success){
+          sheetSynced=true;
+          finalOrder={...updated,is_synced_google_sheets:true,synced_at:new Date().toISOString()};
+          sheetMessage='Address saved in O-RA and updated in Google Sheet.';
+        }else{
+          finalOrder={...updated,is_synced_google_sheets:false};
+          sheetMessage=`Address saved in O-RA, but Google Sheet sync needs retry: ${result.message}`;
+        }
+      }catch(error:any){
+        finalOrder={...updated,is_synced_google_sheets:false};
+        sheetMessage=`Address saved in O-RA, but Google Sheet sync needs retry: ${error?.message || 'sync failed'}`;
+      }
+    }
+
+    if(finalOrder!==updated){
+      await sharedStaffRequest(`/api/orders/${encodeURIComponent(order.id)}`,{
+        method:'PUT',
+        body:JSON.stringify({order:finalOrder}),
+      }).catch(()=>undefined);
+    }
+
+    setOrders((prev)=>prev.map((o)=>o.id===orderId?finalOrder:o));
+    logActivity({
+      action:'Delivery Address Updated',
+      module:'Orders',
+      target_id:order.id,
+      target_label:order.order_number,
+      details:`${order.address}, ${order.city}${order.district?`, ${order.district}`:''} → ${address}, ${city}${district?`, ${district}`:''}`,
+    });
+    return{success:true,sheetSynced,message:sheetMessage};
+  };
+
   const updatePaymentStatus = (orderId: string, status: 'Pending' | 'Paid' | 'Refunded') => {
     const order = orders.find((o) => o.id === orderId);
     if (!order) return;
@@ -1910,6 +1986,9 @@ useEffect(() => {
     const cancelledByI=idx(['cancelled_by','updated_by','call_center_by']);
     const giftWrapI=idx(['gift_wrap','gift_wrapping','wrap']);
     const wrappingCostI=idx(['wrapping_cost_rs','wrapping_cost','gift_wrap_fee','wrapping_fee_rs','wrapping_fee']);
+    const addressI=idx(['address','customer_address','delivery_address']);
+    const cityI=idx(['city','town','delivery_city']);
+    const districtI=idx(['district','delivery_district']);
     if(idI<0||codeI<0||(decisionI<0&&callResultI<0))return{confirmedCount:0,notFoundCount:0,ignoredCount:0,orderNumbers:[],errors:['Required columns: Order ID, Item Code, and Order Action (CONFIRM ORDER / CANCEL ENTIRE ORDER). Older Decision/Call Result CSV files are still supported.']};
 
     const wantedPrefix=source==='Facebook Ads'?'FB':source==='TikTok Ads'?'TK':source==='Website'?'WEB':'';
@@ -1971,10 +2050,14 @@ useEffect(() => {
         ? Math.max(0,Number(sheetWrappingCost || order.gift_wrap_fee || settings.gift_wrap_fee || 0))
         : 0;
       const totalQty=nextItems.reduce((n,it)=>n+it.quantity,0),subtotal=nextItems.reduce((n,it)=>n+it.subtotal,0),rate=getMultiBuyDiscountRate(totalQty),special_offer_discount=Math.round(subtotal*(rate/100)*100)/100,total_amount=Math.round(Math.max(0,subtotal-special_offer_discount+order.delivery_fee+gift_wrap_fee)),threshold=Math.max(0,Number(settings.advance_qty_threshold??4)),adv=totalQty>threshold,pct=Math.min(100,Math.max(1,Number(settings.advance_percentage??50)));
+      const confirmedAddress=addressI>=0?String(rows.map(c=>c[addressI]).find(v=>String(v||'').trim())||'').trim():'';
+      const confirmedCity=cityI>=0?String(rows.map(c=>c[cityI]).find(v=>String(v||'').trim())||'').trim():'';
+      const confirmedDistrict=districtI>=0?String(rows.map(c=>c[districtI]).find(v=>String(v||'').trim())||'').trim():'';
+      const cityChanged=Boolean(confirmedCity && confirmedCity.trim().toLowerCase()!==String(order.city||'').trim().toLowerCase());
       const oldShape=(order.items||[]).map(it=>({sku:it.sku,product_name:it.product_name,variant_name:it.variant_name,quantity:it.quantity,unit_price:it.unit_price}));
       const newShape=nextItems.map(it=>({sku:it.sku,product_name:it.product_name,variant_name:it.variant_name,quantity:it.quantity,unit_price:it.unit_price}));
       const changed=JSON.stringify(oldShape)!==JSON.stringify(newShape);
-      updates.set(id,{items:nextItems,subtotal,special_offer_discount,gift_wrap_selected,gift_wrap_fee,total_amount,is_advance_required:adv,advance_amount:adv?Math.round(total_amount*pct/100):0,call_center_status:'Confirmed',order_status:'Processing',call_center_updated_at:now,stock_allocated:false,stock_status:'Waiting for Stock',product_change_history:changed?[...(order.product_change_history||[]),{changed_at:now,changed_by:'Call Center Confirm Upload',old_items:oldShape,new_items:newShape,reason:reason||undefined}]:(order.product_change_history||[]),notes:[order.notes,cancelled.length?`Call Center cancelled ${cancelled.length} item row(s).`:'',reason?`Call Center: ${reason}`:''].filter(Boolean).join(' | ')});
+      updates.set(id,{items:nextItems,subtotal,special_offer_discount,gift_wrap_selected,gift_wrap_fee,total_amount,is_advance_required:adv,advance_amount:adv?Math.round(total_amount*pct/100):0,call_center_status:'Confirmed',order_status:'Processing',call_center_updated_at:now,stock_allocated:false,stock_status:'Waiting for Stock',...(confirmedAddress?{address:confirmedAddress}:{}),...(confirmedCity?{city:confirmedCity}:{}),...(confirmedDistrict?{district:confirmedDistrict}:{}),...(cityChanged?{fardar_city:undefined,city_verified:false,city_mapping_source:undefined}:{}),product_change_history:changed?[...(order.product_change_history||[]),{changed_at:now,changed_by:'Call Center Confirm Upload',old_items:oldShape,new_items:newShape,reason:reason||undefined}]:(order.product_change_history||[]),notes:[order.notes,cancelled.length?`Call Center cancelled ${cancelled.length} item row(s).`:'',reason?`Call Center: ${reason}`:''].filter(Boolean).join(' | ')});
       orderNumbers.push(id);
     });
 
@@ -2826,6 +2909,7 @@ useEffect(() => {
         placeOrder,
         importBulkOrders,
         updateOrderStatus,
+        updateOrderDeliveryDetails,
         updatePaymentStatus,
         confirmAdvancePayment,
         reviewPayment,
