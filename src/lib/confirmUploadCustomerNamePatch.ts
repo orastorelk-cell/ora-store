@@ -20,12 +20,14 @@ export const confirmUploadCustomerNamePatch = () => ({
     if (!id.endsWith('/src/context/StoreContext.tsx')) return null;
     let text = code;
 
-    text = replaceRequired(
-      text,
-      `    const districtI=idx(['district']);`,
-      `    const districtI=idx(['district']);\n    const customerNameI=idx(['customer_name','customer','name']);`,
-      'Customer Name CSV column',
-    );
+    if (!text.includes("const customerNameI=idx(['customer_name','customer','name']);")) {
+      const districtIndexMatch = text.match(/^(\s*)const districtI=idx\([^\n]+\);$/m);
+      if (!districtIndexMatch) throw new Error('[O-RA confirm customer name] Customer Name CSV column marker not found');
+      text = text.replace(
+        districtIndexMatch[0],
+        districtIndexMatch[0] + "\n" + districtIndexMatch[1] + "const customerNameI=idx(['customer_name','customer','name']);",
+      );
+    }
 
     text = replaceRequired(
       text,
@@ -34,12 +36,14 @@ export const confirmUploadCustomerNamePatch = () => ({
       'confirmed customer name value',
     );
 
-    text = replaceRequired(
-      text,
-      `city:sheetCity,district:sheetDistrict,confirm_upload_batch_id:uploadPackingBatchId`,
-      `customer_name:sheetCustomerName,city:sheetCity,district:sheetDistrict,confirm_upload_batch_id:uploadPackingBatchId`,
-      'confirmed order customer name update',
-    );
+    if (!text.includes('customer_name:sheetCustomerName,city:sheetCity,district:sheetDistrict,')) {
+      const orderUpdateMarker='city:sheetCity,district:sheetDistrict,';
+      if (!text.includes(orderUpdateMarker)) throw new Error('[O-RA confirm customer name] confirmed order customer name update marker not found');
+      text = text.replace(
+        orderUpdateMarker,
+        'customer_name:sheetCustomerName,city:sheetCity,district:sheetDistrict,',
+      );
+    }
 
     return { code: text, map: null };
   },
