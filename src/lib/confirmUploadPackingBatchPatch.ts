@@ -66,6 +66,8 @@ export const confirmUploadPackingBatchPatch = () => ({
       const indexMarker = "    const wrappingCostI=idx(['wrapping_cost_rs','wrapping_cost','gift_wrap_fee','wrapping_fee_rs','wrapping_fee']);";
       if (!text.includes('const applyItemChangeI=idx(')) {
         if (!text.includes(indexMarker)) throw new Error('[O-RA confirm invoice safety] CSV index marker not found');
+        const alreadyHasCity = text.includes("    const cityI=idx(");
+        const alreadyHasDistrict = text.includes("    const districtI=idx(");
         text = text.replace(indexMarker, indexMarker + String.raw`
     const applyItemChangeI=idx(['apply_item_change','apply_change']);
     const itemNameI=idx(['item_name','product_name']);
@@ -75,9 +77,10 @@ export const confirmUploadPackingBatchPatch = () => ({
     const offerI=idx(['offer']);
     const discountI=idx(['discount_rs','discount']);
     const deliveryFeeI=idx(['delivery_fee_rs','delivery_fee']);
-    const finalTotalI=idx(['final_total_rs','final_total']);
-    const cityI=idx(['city']);
-    const districtI=idx(['district']);`);
+    const finalTotalI=idx(['final_total_rs','final_total']);` +
+          (alreadyHasCity ? '' : "\n    const cityI=idx(['city']);") +
+          (alreadyHasDistrict ? '' : "\n    const districtI=idx(['district']);")
+        );
       }
 
       const nowMarker = "    const now=new Date().toISOString(); const updates=new Map<string,Partial<Order>>();";
@@ -139,8 +142,10 @@ export const confirmUploadPackingBatchPatch = () => ({
       }
 
       const oldUpdate = "      updates.set(id,{items:nextItems,subtotal,special_offer_discount,gift_wrap_selected,gift_wrap_fee,total_amount,is_advance_required:adv,advance_amount:adv?Math.round(total_amount*pct/100):0,call_center_status:'Confirmed',order_status:'Processing',call_center_updated_at:now,stock_allocated:false,stock_status:'Waiting for Stock',product_change_history:changed?[...(order.product_change_history||[]),{changed_at:now,changed_by:'Call Center Confirm Upload',old_items:oldShape,new_items:newShape,reason:reason||undefined}]:(order.product_change_history||[]),notes:[order.notes,cancelled.length?`Call Center cancelled ${cancelled.length} item row(s).`:'',reason?`Call Center: ${reason}`:''].filter(Boolean).join(' | ')});";
-      const newUpdate = "      updates.set(id,{items:nextItems,subtotal,special_offer_discount:stableQtyOfferDiscount,gift_wrap_selected,gift_wrap_fee,total_amount:stableTotalAmount,is_advance_required:adv,advance_amount:adv?Math.round(stableTotalAmount*pct/100):0,city:sheetCity,district:sheetDistrict,confirm_upload_batch_id:uploadPackingBatchId,invoice_confirm_snapshot:invoiceConfirmSnapshot,call_center_status:'Confirmed',order_status:'Processing',call_center_updated_at:now,stock_allocated:false,stock_status:'Waiting for Stock',product_change_history:changed?[...(order.product_change_history||[]),{changed_at:now,changed_by:'Call Center Confirm Upload',old_items:oldShape,new_items:newShape,reason:reason||undefined}]:(order.product_change_history||[]),notes:[order.notes,cancelled.length?`Call Center cancelled ${cancelled.length} item row(s).`:'',reason?`Call Center: ${reason}`:''].filter(Boolean).join(' | ')});";
+      const addressAwareUpdate = "      updates.set(id,{items:nextItems,subtotal,special_offer_discount,gift_wrap_selected,gift_wrap_fee,total_amount,is_advance_required:adv,advance_amount:adv?Math.round(total_amount*pct/100):0,call_center_status:'Confirmed',order_status:'Processing',call_center_updated_at:now,stock_allocated:false,stock_status:'Waiting for Stock',...(confirmedAddress?{address:confirmedAddress}:{}),...(confirmedCity?{city:confirmedCity}:{}),...(confirmedDistrict?{district:confirmedDistrict}:{}),...(cityChanged?{fardar_city:undefined,city_verified:false,city_mapping_source:undefined}:{}),product_change_history:changed?[...(order.product_change_history||[]),{changed_at:now,changed_by:'Call Center Confirm Upload',old_items:oldShape,new_items:newShape,reason:reason||undefined}]:(order.product_change_history||[]),notes:[order.notes,cancelled.length?`Call Center cancelled ${cancelled.length} item row(s).`:'',reason?`Call Center: ${reason}`:''].filter(Boolean).join(' | ')});";
+      const newUpdate = "      updates.set(id,{items:nextItems,subtotal,special_offer_discount:stableQtyOfferDiscount,gift_wrap_selected,gift_wrap_fee,total_amount:stableTotalAmount,is_advance_required:adv,advance_amount:adv?Math.round(stableTotalAmount*pct/100):0,...(confirmedAddress?{address:confirmedAddress}:{}),city:sheetCity,district:sheetDistrict,...(cityChanged?{fardar_city:undefined,city_verified:false,city_mapping_source:undefined}:{}),confirm_upload_batch_id:uploadPackingBatchId,invoice_confirm_snapshot:invoiceConfirmSnapshot,call_center_status:'Confirmed',order_status:'Processing',call_center_updated_at:now,stock_allocated:false,stock_status:'Waiting for Stock',product_change_history:changed?[...(order.product_change_history||[]),{changed_at:now,changed_by:'Call Center Confirm Upload',old_items:oldShape,new_items:newShape,reason:reason||undefined}]:(order.product_change_history||[]),notes:[order.notes,cancelled.length?`Call Center cancelled ${cancelled.length} item row(s).`:'',reason?`Call Center: ${reason}`:''].filter(Boolean).join(' | ')});";
       if (text.includes(oldUpdate)) text = text.replace(oldUpdate, newUpdate);
+      else if (text.includes(addressAwareUpdate)) text = text.replace(addressAwareUpdate, newUpdate);
       else if (!text.includes(newUpdate)) throw new Error('[O-RA confirm invoice safety] confirmed order update marker not found');
 
       text = text.replace("    const batch = unseen.slice(0,50);", "    const batch = unseen.slice(0,100);");
