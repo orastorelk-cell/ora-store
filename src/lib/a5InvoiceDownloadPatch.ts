@@ -29,7 +29,7 @@ export async function generateA5SingleInvoicesPDF(orders: Order[], settings: Sto
   if(!singles.length) throw new Error('No single-page invoices are available for A5 printing.');
 
   const invalid=singles.filter(o=>validateInvoiceOrder(o).length>0);
-  if(invalid.length) throw new Error(`${invalid.length} invoice(s) failed validation.`);
+  if(invalid.length) throw new Error(`\${invalid.length} invoice(s) failed validation.`);
   assertInvoiceConfirmSnapshot(singles);
 
   // Preserve the current A6 invoice artwork exactly: same SVG, same proportions.
@@ -47,11 +47,11 @@ export async function generateA5SingleInvoicesPDF(orders: Order[], settings: Sto
       const pngBytes=await svgToBrowserPngBytes(svg);
       doc.addImage(pngBytes,'PNG',x,0,invoiceWidth,invoiceHeight,undefined,'FAST');
     } catch (e:any) {
-      throw new Error(`${order.order_number}: ${e?.message || 'Invoice render failed'}`);
+      throw new Error(`\${order.order_number}: \${e?.message || 'Invoice render failed'}`);
     }
   }
 
-  downloadPdfBlob(doc, fileName || `O-RA_A5_Single_Invoices_${singles.length}_${Date.now()}.pdf`);
+  downloadPdfBlob(doc, fileName || `O-RA_A5_Single_Invoices_\${singles.length}_\${Date.now()}.pdf`);
 }
 
 export async function generateA4TwoUpA5InvoicesPDF(orders: Order[], settings: StoreSettings = {} as StoreSettings, fileName?: string) {
@@ -59,7 +59,7 @@ export async function generateA4TwoUpA5InvoicesPDF(orders: Order[], settings: St
   if(!singles.length) throw new Error('No single-page invoices are available for A4 2 x A5 printing.');
 
   const invalid=singles.filter(o=>validateInvoiceOrder(o).length>0);
-  if(invalid.length) throw new Error(`${invalid.length} invoice(s) failed validation.`);
+  if(invalid.length) throw new Error(`\${invalid.length} invoice(s) failed validation.`);
   assertInvoiceConfirmSnapshot(singles);
 
   // A4 portrait = 210 x 297 mm. Two A5 landscape slots stack vertically.
@@ -94,12 +94,12 @@ export async function generateA4TwoUpA5InvoicesPDF(orders: Order[], settings: St
       const pngBytes=await svgToBrowserPngBytes(svg);
       doc.addImage(pngBytes,'PNG',x,y,invoiceWidth,invoiceHeight,undefined,'FAST');
     } catch (e:any) {
-      throw new Error(`${order.order_number}: ${e?.message || 'Invoice render failed'}`);
+      throw new Error(`\${order.order_number}: \${e?.message || 'Invoice render failed'}`);
     }
   }
 
   addCutGuides();
-  downloadPdfBlob(doc, fileName || `O-RA_A4_2xA5_Invoices_${singles.length}_${Date.now()}.pdf`);
+  downloadPdfBlob(doc, fileName || `O-RA_A4_2xA5_Invoices_\${singles.length}_\${Date.now()}.pdf`);
 }
 
 `;
@@ -120,7 +120,7 @@ export async function generateA4TwoUpA5InvoicesPDF(orders: Order[], settings: St
                 const {setDate,setNumber,stem}=resolveDownloadSet();
                 setPackingDownloadBusy('a5');
                 try {
-                  await generateA5SingleInvoicesPDF(singlePageOrders,settings,`${stem}_A5-Singles.pdf`);
+                  await generateA5SingleInvoicesPDF(singlePageOrders,settings,`\${stem}_A5-Singles.pdf`);
                   await savePackingDownloaded(singlePageOrders,setDate,setNumber);
                 } catch(e:any){ alert(e.message || 'A5 invoice download failed.'); }
                 finally { setPackingDownloadBusy(''); }
@@ -131,7 +131,7 @@ export async function generateA4TwoUpA5InvoicesPDF(orders: Order[], settings: St
                 const {setDate,setNumber,stem}=resolveDownloadSet();
                 setPackingDownloadBusy('a4-a5x2');
                 try {
-                  await generateA4TwoUpA5InvoicesPDF(singlePageOrders,settings,`${stem}_A4-2xA5.pdf`);
+                  await generateA4TwoUpA5InvoicesPDF(singlePageOrders,settings,`\${stem}_A4-2xA5.pdf`);
                   await savePackingDownloaded(singlePageOrders,setDate,setNumber);
                 } catch(e:any){ alert(e.message || 'A4 2 x A5 invoice download failed.'); }
                 finally { setPackingDownloadBusy(''); }
@@ -142,20 +142,20 @@ export async function generateA4TwoUpA5InvoicesPDF(orders: Order[], settings: St
       }
 
       if (!text.includes('A4 • 2 × A5')) {
-        const buttonMarker = String.raw`                          {singleDownloaded?'A4 4-Up Again':`A4 • 4 per Page (${singlePageOrders.length})`}
+        const buttonMarker = String.raw`                          {singleDownloaded?'A4 4-Up Again':`A4 • 4 per Page (\${singlePageOrders.length})`}
                         </button>
                       </>}`;
-        const buttons = String.raw`                          {singleDownloaded?'A4 4-Up Again':`A4 • 4 per Page (${singlePageOrders.length})`}
+        const buttons = String.raw`                          {singleDownloaded?'A4 4-Up Again':`A4 • 4 per Page (\${singlePageOrders.length})`}
                         </button>
                         <button data-ora-action="packing_download" type="button" disabled={Boolean(packingDownloadBusy)} onClick={downloadSingleA5}
-                          className={`rounded-xl px-3.5 py-2.5 text-xs font-black flex items-center gap-2 ${singleDownloaded?'bg-neutral-800 text-neutral-300':'bg-teal-500 text-black'}`}>
+                          className={`rounded-xl px-3.5 py-2.5 text-xs font-black flex items-center gap-2 \${singleDownloaded?'bg-neutral-800 text-neutral-300':'bg-teal-500 text-black'}`}>
                           <Download className="w-4 h-4"/>
-                          {packingDownloadBusy==='a5'?'Preparing A5…':singleDownloaded?'A5 Singles Again':`A5 Singles (${singlePageOrders.length})`}
+                          {packingDownloadBusy==='a5'?'Preparing A5…':singleDownloaded?'A5 Singles Again':`A5 Singles (\${singlePageOrders.length})`}
                         </button>
                         <button data-ora-action="packing_download" type="button" disabled={Boolean(packingDownloadBusy)} onClick={downloadSingleA4TwoUp}
-                          className={`rounded-xl px-3.5 py-2.5 text-xs font-black flex items-center gap-2 ${singleDownloaded?'bg-neutral-800 text-neutral-300':'bg-cyan-500 text-black'}`}>
+                          className={`rounded-xl px-3.5 py-2.5 text-xs font-black flex items-center gap-2 \${singleDownloaded?'bg-neutral-800 text-neutral-300':'bg-cyan-500 text-black'}`}>
                           <Printer className="w-4 h-4"/>
-                          {packingDownloadBusy==='a4-a5x2'?'Preparing A4 2×A5…':singleDownloaded?'A4 2×A5 Again':`A4 • 2 × A5 (${singlePageOrders.length})`}
+                          {packingDownloadBusy==='a4-a5x2'?'Preparing A4 2×A5…':singleDownloaded?'A4 2×A5 Again':`A4 • 2 × A5 (\${singlePageOrders.length})`}
                         </button>
                       </>}`;
         text = replaceRequired(text, buttonMarker, buttons, 'Packing A5 buttons');
