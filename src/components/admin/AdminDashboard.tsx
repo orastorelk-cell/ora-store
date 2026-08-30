@@ -404,18 +404,21 @@ export const AdminDashboard: React.FC = () => {
   const [stockChangeQty, setStockChangeQty] = useState(10);
   const [stockReason, setStockReason] = useState('Stock Refill');
   const [isPurchaseOpen, setIsPurchaseOpen] = useState(false);
-  const [purchaseItemCode, setPurchaseItemCode] = useState('');
   const [purchaseBillFile, setPurchaseBillFile] = useState<File | null>(null);
   const [purchaseSaving, setPurchaseSaving] = useState(false);
   const [purchaseForm, setPurchaseForm] = useState({
     supplier_name: '',
-    product_id: products[0]?.id || '',
-    variant_id: '',
-    quantity_added: 1,
-    unit_buying_price: products[0]?.buying_price || 0,
     invoice_ref: '',
     notes: '',
   });
+  const [purchaseLines, setPurchaseLines] = useState<Array<{
+    id: string;
+    item_code: string;
+    product_id: string;
+    variant_id: string;
+    quantity_added: number;
+    unit_buying_price: number;
+  }>>([]);
 
   // Change Password & Staff Accounts Modals
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
@@ -3094,9 +3097,16 @@ Suitable For:
             <button
               onClick={() => {
                 const first = products.find((p)=>normalizedProductType(p)!=='bundle');
-                setPurchaseForm({ supplier_name: '', product_id: first?.id || '', variant_id: '', quantity_added: 1, unit_buying_price: first?.buying_price || 0, invoice_ref: '', notes: '' });
+                setPurchaseForm({ supplier_name: '', invoice_ref: '', notes: '' });
+                setPurchaseLines([{
+                  id:`purchase-line-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+                  item_code:first?.sku || '',
+                  product_id:first?.id || '',
+                  variant_id:'',
+                  quantity_added:1,
+                  unit_buying_price:Number(first?.buying_price || 0),
+                }]);
                 setPurchaseBillFile(null);
-                setPurchaseItemCode(first?.sku || '');
                 setIsPurchaseOpen(true);
               }}
               className="px-4 py-2 rounded-xl bg-amber-500 text-neutral-950 font-bold text-xs flex items-center gap-2 hover:bg-amber-400"
@@ -6509,9 +6519,48 @@ Suitable For:
               if (purchaseSaving) return;
               setPurchaseSaving(true);
               try {
+                if (!purchaseLines.length) throw new Error('Add at least one purchase item.');
+
+                const selectedKeys = new Set<string>();
+                const validated = purchaseLines.map((line,index) => {
+                  const product=products.find((p)=>p.id===line.product_id && normalizedProductType(p)!=='bundle');
+                  if(!product) throw new Error(`Line ${index+1}: enter a valid Item Code.`);
+                  const variant=normalizedProductType(product)==='variant' ? variantById(product,line.variant_id) : undefined;
+                  if(normalizedProductType(product)==='variant' && !variant) throw new Error(`Line ${index+1}: select the exact Color / Variant.`);
+                  if(Number(line.quantity_added)<=0) throw new Error(`Line ${index+1}: quantity must be greater than zero.`);
+                  if(Number(line.unit_buying_price)<0) throw new Error(`Line ${index+1}: buying price cannot be negative.`);
+
+                  const exactKey=`${product.id}::${variant?.id || 'base'}`;
+                  if(selectedKeys.has(exactKey)) throw new Error(`Line ${index+1}: the same item / variant is already added. Combine its quantity into one line.`);
+                  selectedKeys.add(exactKey);
+
+                  return {
+                    product,
+                    variant,
+                    quantity_added:Number(line.quantity_added),
+                    unit_buying_price:Number(line.unit_buying_price),
+                  };
+                });
+
                 const billImageUrl = purchaseBillFile ? await uploadPublicImage(purchaseBillFile, 'purchase-bill') : '';
-                addPurchaseOrder({ ...purchaseForm, bill_image_url: billImageUrl || undefined, performed_by: adminUser?.name || 'Admin' });
+                const firstPoNumber=purchaseOrders.length+1;
+                validated.forEach((line,index)=>{
+                  addPurchaseOrder({
+                    supplier_name:purchaseForm.supplier_name,
+                    product_id:line.product.id,
+                    variant_id:line.variant?.id,
+                    quantity_added:line.quantity_added,
+                    unit_buying_price:line.unit_buying_price,
+                    invoice_ref:purchaseForm.invoice_ref,
+                    bill_image_url:billImageUrl || undefined,
+                    notes:purchaseForm.notes,
+                    performed_by:adminUser?.name || 'Admin',
+                    po_number:`PO-${new Date().getFullYear()}-${String(firstPoNumber+index).padStart(4,'0')}`,
+                  });
+                });
+
                 setPurchaseBillFile(null);
+                setPurchaseLines([]);
                 setIsPurchaseOpen(false);
               } catch (error) {
                 alert(error instanceof Error ? error.message : 'Unable to save purchase.');
@@ -6519,59 +6568,174 @@ Suitable For:
                 setPurchaseSaving(false);
               }
             }}
-            className="w-full max-w-xl max-h-[92vh] overflow-y-auto bg-neutral-950 border border-neutral-800 rounded-3xl p-5 space-y-4 shadow-2xl"
+            className="w-full max-w-3xl max-h-[92vh] overflow-y-auto bg-neutral-950 border border-neutral-800 rounded-3xl p-5 space-y-4 shadow-2xl"
           >
-            <div className="flex items-center justify-between"><div><h3 className="font-bold text-white">Add Purchase / Stock In</h3><p className="text-xs text-neutral-500">Saving this purchase automatically increases stock.</p></div><button type="button" onClick={() => { setPurchaseBillFile(null); setIsPurchaseOpen(false); }} className="p-2 rounded-lg bg-neutral-900 text-neutral-400"><X className="w-4 h-4" /></button></div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <label className="text-xs text-neutral-400 sm:col-span-2">Supplier Name<input required value={purchaseForm.supplier_name} onChange={(e) => setPurchaseForm({ ...purchaseForm, supplier_name: e.target.value })} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white" /></label>
-              <label className="text-xs text-neutral-400 sm:col-span-2">Product<div className="space-y-2">
-              <label className="block text-xs font-bold text-neutral-300">Item Code</label>
-              <input
-                type="text"
-                value={purchaseItemCode}
-                onChange={(e)=>{
-                  const code=e.target.value.toUpperCase().trim();
-                  setPurchaseItemCode(code);
-                  const product=products.find(p=>normalizedProductType(p)!=='bundle' && String(p.sku||'').toUpperCase()===code);
-                  if(product){
-                    setPurchaseForm(prev=>({
-                      ...prev,
-                      product_id:product.id,
-                      variant_id:'',
-                      unit_buying_price:Number(product.buying_price || prev.unit_buying_price || 0)
-                    }));
-                  }
-                }}
-                placeholder="S0001"
-                className="w-full rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2.5 text-white"
-              />
-              <div className="rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2.5 text-xs">
-                {(()=>{
-                  const p=products.find(x=>x.id===purchaseForm.product_id);
-                  return p
-                    ? <><span className="font-bold text-white">{p.name_en}</span><span className="ml-2 text-neutral-500">({p.sku})</span></>
-                    : <span className="text-red-400">Enter a valid Item Code</span>;
-                })()}
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="font-bold text-white">Add Purchase / Stock In</h3>
+                <p className="text-xs text-neutral-500">One supplier bill can include multiple item codes and separate variants. Saving increases each exact stock line.</p>
               </div>
-            </div></label>
-              {(()=>{ const p=products.find(x=>x.id===purchaseForm.product_id); return p && normalizedProductType(p)==='variant' ? (
-                <label className="text-xs text-neutral-400 sm:col-span-2">Color / Variant *
-                  <select required value={purchaseForm.variant_id} onChange={(e)=>{const v=variantById(p,e.target.value);setPurchaseForm(prev=>({...prev,variant_id:e.target.value,unit_buying_price:Number(v?.buying_price ?? prev.unit_buying_price)}));}} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white">
-                    <option value="">Select exact variant...</option>{(p.variants||[]).map(v=><option key={v.id} value={v.id}>{v.option_value} — {v.sku} — Stock {v.stock_quantity}</option>)}
-                  </select>
-                </label>
-              ) : null; })()}
-              <label className="text-xs text-neutral-400">Quantity<input required min="1" type="number" value={purchaseForm.quantity_added} onChange={(e) => setPurchaseForm({ ...purchaseForm, quantity_added: Number(e.target.value) })} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white" /></label>
-              <label className="text-xs text-neutral-400">Unit Buying Price<input required min="0" type="number" value={purchaseForm.unit_buying_price} onChange={(e) => setPurchaseForm({ ...purchaseForm, unit_buying_price: Number(e.target.value) })} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white" /></label>
-              <label className="text-xs text-neutral-400">Supplier Invoice Ref<input value={purchaseForm.invoice_ref} onChange={(e) => setPurchaseForm({ ...purchaseForm, invoice_ref: e.target.value })} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white" /></label>
-              <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-3"><p className="text-[10px] text-neutral-500">TOTAL PURCHASE COST</p><p className="font-bold text-amber-400">Rs. {(purchaseForm.quantity_added * purchaseForm.unit_buying_price).toLocaleString()}</p></div>
-              <label className="text-xs text-neutral-400 sm:col-span-2">Bill Image <span className="text-neutral-600">(Optional)</span>
+              <button type="button" onClick={() => { setPurchaseBillFile(null); setPurchaseLines([]); setIsPurchaseOpen(false); }} className="p-2 rounded-lg bg-neutral-900 text-neutral-400"><X className="w-4 h-4" /></button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className="text-xs text-neutral-400 sm:col-span-2">Supplier Name
+                <input required value={purchaseForm.supplier_name} onChange={(e) => setPurchaseForm({ ...purchaseForm, supplier_name: e.target.value })} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white" />
+              </label>
+              <label className="text-xs text-neutral-400">Supplier Invoice Ref
+                <input value={purchaseForm.invoice_ref} onChange={(e) => setPurchaseForm({ ...purchaseForm, invoice_ref: e.target.value })} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white" />
+              </label>
+              <label className="text-xs text-neutral-400">Bill Image <span className="text-neutral-600">(Optional • shared by all lines)</span>
                 <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e)=>setPurchaseBillFile(e.target.files?.[0] || null)} className="mt-1 block w-full rounded-xl border border-neutral-700 bg-neutral-900 px-3 py-2 text-xs text-neutral-300 file:mr-3 file:rounded-lg file:border-0 file:bg-amber-500 file:px-3 file:py-1.5 file:font-bold file:text-neutral-950" />
                 {purchaseBillFile && <span className="mt-1 block break-all text-[10px] text-emerald-400">Selected: {purchaseBillFile.name}</span>}
               </label>
-              <label className="text-xs text-neutral-400 sm:col-span-2">Notes<textarea value={purchaseForm.notes} onChange={(e) => setPurchaseForm({ ...purchaseForm, notes: e.target.value })} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white min-h-20" /></label>
             </div>
-            <button type="submit" disabled={purchaseSaving} className="w-full py-3 rounded-xl bg-amber-500 text-neutral-950 font-bold disabled:cursor-not-allowed disabled:opacity-50">{purchaseSaving ? 'Saving Purchase...' : 'Save Purchase & Increase Stock'}</button>
+
+            <div className="space-y-3">
+              {purchaseLines.map((line,index)=>{
+                const product=products.find((p)=>p.id===line.product_id);
+                const lineTotal=Math.max(0,Number(line.quantity_added||0))*Math.max(0,Number(line.unit_buying_price||0));
+                return (
+                  <div key={line.id} className="rounded-2xl border border-neutral-800 bg-neutral-900/70 p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-black text-white">Purchase Item {index+1}</p>
+                        <p className="text-[10px] text-neutral-500">{product ? `${product.name_en} • ${product.sku}` : 'Enter an Item Code'}</p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={purchaseLines.length===1}
+                        onClick={()=>setPurchaseLines((prev)=>prev.filter((row)=>row.id!==line.id))}
+                        className="rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-red-300 disabled:cursor-not-allowed disabled:opacity-30"
+                        title="Remove this purchase line"
+                      >
+                        <Trash2 className="h-3.5 w-3.5"/>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <label className="text-xs text-neutral-400 sm:col-span-2">Item Code
+                        <input
+                          type="text"
+                          required
+                          value={line.item_code}
+                          onChange={(e)=>{
+                            const code=e.target.value.toUpperCase().trim();
+                            setPurchaseLines((prev)=>prev.map((row)=>{
+                              if(row.id!==line.id) return row;
+
+                              let matchedProduct=products.find((p)=>normalizedProductType(p)!=='bundle' && String(p.sku||'').toUpperCase()===code);
+                              let matchedVariantId='';
+                              let matchedVariant:ProductVariant | undefined;
+
+                              if(!matchedProduct){
+                                for(const candidate of products){
+                                  if(normalizedProductType(candidate)!=='variant') continue;
+                                  const found=(candidate.variants||[]).find((v)=>String(v.sku||'').toUpperCase()===code);
+                                  if(found){
+                                    matchedProduct=candidate;
+                                    matchedVariantId=found.id;
+                                    matchedVariant=found;
+                                    break;
+                                  }
+                                }
+                              }
+
+                              if(!matchedProduct) return {...row,item_code:code,product_id:'',variant_id:'',unit_buying_price:0};
+                              return {
+                                ...row,
+                                item_code:code,
+                                product_id:matchedProduct.id,
+                                variant_id:matchedVariantId,
+                                unit_buying_price:Number(matchedVariant?.buying_price ?? matchedProduct.buying_price ?? 0),
+                              };
+                            }));
+                          }}
+                          placeholder="S0001 / variant SKU"
+                          className="mt-1 w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2.5 text-white"
+                        />
+                      </label>
+
+                      {product && normalizedProductType(product)==='variant' && (
+                        <label className="text-xs text-neutral-400 sm:col-span-2">Color / Variant *
+                          <select
+                            required
+                            value={line.variant_id}
+                            onChange={(e)=>{
+                              const variant=variantById(product,e.target.value);
+                              setPurchaseLines((prev)=>prev.map((row)=>row.id===line.id ? {
+                                ...row,
+                                variant_id:e.target.value,
+                                unit_buying_price:Number(variant?.buying_price ?? row.unit_buying_price),
+                              } : row));
+                            }}
+                            className="mt-1 w-full bg-neutral-950 border border-neutral-700 rounded-xl px-3 py-2 text-white"
+                          >
+                            <option value="">Select exact variant...</option>
+                            {(product.variants||[]).map((variant)=><option key={variant.id} value={variant.id}>{variant.option_value} — {variant.sku} — Stock {variant.stock_quantity}</option>)}
+                          </select>
+                        </label>
+                      )}
+
+                      <label className="text-xs text-neutral-400">Quantity
+                        <input
+                          required
+                          min="1"
+                          type="number"
+                          value={line.quantity_added}
+                          onChange={(e)=>setPurchaseLines((prev)=>prev.map((row)=>row.id===line.id ? {...row,quantity_added:Number(e.target.value)} : row))}
+                          className="mt-1 w-full bg-neutral-950 border border-neutral-700 rounded-xl px-3 py-2 text-white"
+                        />
+                      </label>
+                      <label className="text-xs text-neutral-400">Unit Buying Price
+                        <input
+                          required
+                          min="0"
+                          type="number"
+                          value={line.unit_buying_price}
+                          onChange={(e)=>setPurchaseLines((prev)=>prev.map((row)=>row.id===line.id ? {...row,unit_buying_price:Number(e.target.value)} : row))}
+                          className="mt-1 w-full bg-neutral-950 border border-neutral-700 rounded-xl px-3 py-2 text-white"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-xs">
+                      <span className="text-neutral-500">Line Total</span>
+                      <span className="float-right font-black text-amber-400">Rs. {lineTotal.toLocaleString()}</span>
+                    </div>
+                  </div>
+                );
+              })}
+
+              <button
+                type="button"
+                onClick={()=>setPurchaseLines((prev)=>[...prev,{
+                  id:`purchase-line-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+                  item_code:'',
+                  product_id:'',
+                  variant_id:'',
+                  quantity_added:1,
+                  unit_buying_price:0,
+                }])}
+                className="w-full rounded-xl border border-dashed border-amber-500/40 bg-amber-500/5 px-4 py-3 text-xs font-black text-amber-300 hover:bg-amber-500/10"
+              >
+                <PlusCircle className="mr-1.5 inline h-4 w-4"/> Add Another Item / Variant
+              </button>
+            </div>
+
+            <label className="block text-xs text-neutral-400">Notes
+              <textarea value={purchaseForm.notes} onChange={(e) => setPurchaseForm({ ...purchaseForm, notes: e.target.value })} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white min-h-20" />
+            </label>
+
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3">
+              <p className="text-[10px] text-neutral-500">TOTAL BILL PURCHASE COST</p>
+              <p className="text-lg font-black text-amber-400">Rs. {purchaseLines.reduce((sum,line)=>sum+(Math.max(0,Number(line.quantity_added||0))*Math.max(0,Number(line.unit_buying_price||0))),0).toLocaleString()}</p>
+              <p className="mt-1 text-[9px] text-neutral-500">Each item / variant is recorded separately in Purchase History, but the same Supplier Invoice Ref and Bill Image are attached to every line from this bill.</p>
+            </div>
+
+            <button type="submit" disabled={purchaseSaving || !purchaseLines.length} className="w-full py-3 rounded-xl bg-amber-500 text-neutral-950 font-bold disabled:cursor-not-allowed disabled:opacity-50">
+              {purchaseSaving ? 'Saving Purchase Bill...' : `Save Bill & Increase Stock (${purchaseLines.length} line${purchaseLines.length===1?'':'s'})`}
+            </button>
           </form>
         </div>
       )}
