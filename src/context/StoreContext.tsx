@@ -2824,25 +2824,20 @@ useEffect(() => {
     const now=new Date().toISOString(),before=variant?Number(variant.stock_quantity||0):Number(product.stock_quantity||0),after=before+poData.quantity_added,poNumber=poData.po_number?.trim()||`PO-${new Date().getFullYear()}-${String(purchaseOrders.length+1).padStart(4,'0')}`;
     const purchase:PurchaseOrder={id:`po-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,po_number:poNumber,supplier_name:poData.supplier_name.trim(),product_id:product.id,product_name:product.name_en,sku:variant?.sku||product.sku,variant_id:variant?.id,variant_name:variant?.option_value,variant_sku:variant?.sku,quantity_added:poData.quantity_added,unit_buying_price:poData.unit_buying_price,total_cost:poData.quantity_added*poData.unit_buying_price,invoice_ref:poData.invoice_ref?.trim(),bill_image_url:poData.bill_image_url?.trim(),notes:poData.notes?.trim(),performed_by:poData.performed_by||adminUser?.name||'Admin',created_at:now};
     setPurchaseOrders(prev=>[purchase,...prev]);
-    setProducts(prev=>repriceAutoBundles(prev.map(p=>{
+    // A Purchase / Stock In records the bill cost and increases physical stock only.
+    // It must never change the saved product/variant buying price, selling price,
+    // discount/offer state, or auto-priced bundle prices. Price changes stay an
+    // explicit manual action in Supplier Price / Special Offer or Product Edit.
+    setProducts(prev=>prev.map(p=>{
       if(p.id!==product.id)return p;
       if(variant){
-        const variants=(p.variants||[]).map(v=>{
-          if(v.id!==variant.id)return v;
-          const repriced=repriceAfterBuyingCostChange({
-            ...v,
-            auto_price_enabled:p.auto_price_enabled !== false,
-            auto_discount_on_cost_drop:p.auto_discount_on_cost_drop !== false,
-          },poData.unit_buying_price);
-          const history=repriced.changed ? [...(v.price_history||[]),{changed_at:now,reason:`Buying price updated by ${poNumber}`,buying_price:repriced.buying_price,selling_price:repriced.selling_price,discount_price:repriced.discount_price,discount_enabled:repriced.discount_enabled}].slice(-50) : (v.price_history||[]);
-          return {...v,...repriced,price_history:history,stock_quantity:after,status:'Active' as const};
-        });
+        const variants=(p.variants||[]).map(v=>
+          v.id===variant.id ? {...v,stock_quantity:after,status:'Active' as const} : v
+        );
         return{...p,variants,stock_quantity:variants.reduce((n,v)=>n+Number(v.stock_quantity||0),0),status:'Active'};
       }
-      const repriced=repriceAfterBuyingCostChange(p,poData.unit_buying_price);
-      const history=repriced.changed ? [...(p.price_history||[]),{changed_at:now,reason:`Buying price updated by ${poNumber}`,buying_price:repriced.buying_price,selling_price:repriced.selling_price,discount_price:repriced.discount_price,discount_enabled:repriced.discount_enabled}].slice(-50) : (p.price_history||[]);
-      return{...p,...repriced,price_history:history,stock_quantity:after,status:'Active'};
-    })));
+      return{...p,stock_quantity:after,status:'Active'};
+    }));
     setStockHistory(prev=>[{id:`stk-purchase-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,product_id:product.id,product_name:`${product.name_en}${variant?` - ${variant.option_value}`:''}`,change_type:'Purchase Inflow',quantity:poData.quantity_added,previous_stock:before,new_stock:after,reason:`${poNumber} • ${poData.supplier_name}`,performed_by:poData.performed_by||adminUser?.name||'Admin',created_at:now},...prev]);
   };
 
