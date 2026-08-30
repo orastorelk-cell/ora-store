@@ -215,6 +215,7 @@ export const AdminDashboard: React.FC = () => {
   >('overview');
   const [comboEditProductId, setComboEditProductId] = useState<string | undefined>(undefined);
   const [packingSearch, setPackingSearch] = useState('');
+  const [stockItemSearch, setStockItemSearch] = useState('');
   const [packingFilter, setPackingFilter] = useState<'pending'|'today'|'downloaded'|'all'>('pending');
   const [newOrderToast, setNewOrderToast] = useState<string>('');
   const [assistantNeedsCount, setAssistantNeedsCount] = useState(0);
@@ -1731,6 +1732,17 @@ Suitable For:
     return rows.sort((a, b) => a.sku.localeCompare(b.sku, undefined, { numeric:true, sensitivity:'base' }));
   }, [products, orders]);
 
+  const filteredStockByItemCodeRows = useMemo(() => {
+    const q = stockItemSearch.trim().toLowerCase();
+    if (!q) return stockByItemCodeRows;
+    return stockByItemCodeRows.filter((row) =>
+      row.sku.toLowerCase().includes(q) ||
+      row.name.toLowerCase().includes(q) ||
+      row.variant.toLowerCase().includes(q) ||
+      row.type.toLowerCase().includes(q)
+    );
+  }, [stockByItemCodeRows, stockItemSearch]);
+
   const lowStockProducts = products.filter((p) => normalizedProductType(p) !== 'bundle' && p.stock_quantity <= 5);
   const unsyncedOrders = orders.filter((o) => o.order_source !== 'Manual Admin' && !o.is_synced_google_sheets);
   const localOnlyCatalogImages = products.filter((p) => String(p.images?.[0] || '').startsWith('/uploads/')).length;
@@ -3225,6 +3237,25 @@ Suitable For:
             <div className="p-4 border-b border-neutral-800">
               <h3 className="font-bold text-white text-sm">Stock by Item Code</h3>
               <p className="mt-1 text-[10px] text-neutral-500">Available = current stock after allocation • Packing = allocated to active orders and not yet handed to courier.</p>
+              <div className="relative mt-3 max-w-xl">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
+                <input
+                  type="text"
+                  value={stockItemSearch}
+                  onChange={(e)=>setStockItemSearch(e.target.value)}
+                  placeholder="Type Item Code or Item Name..."
+                  className="w-full rounded-xl border border-neutral-700 bg-neutral-950 py-2.5 pl-10 pr-16 text-sm text-white outline-none focus:border-amber-500"
+                />
+                {stockItemSearch && (
+                  <button type="button" onClick={()=>setStockItemSearch('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-neutral-400 hover:text-white">
+                    Clear
+                  </button>
+                )}
+              </div>
+              <p className="mt-2 text-[10px] text-neutral-500">
+                Showing {filteredStockByItemCodeRows.length} of {stockByItemCodeRows.length} item code{stockByItemCodeRows.length===1?'':'s'}
+              </p>
             </div>
             <div className="overflow-x-auto max-h-[520px]">
               <table className="w-full min-w-[720px] text-left text-xs text-neutral-300">
@@ -3238,7 +3269,7 @@ Suitable For:
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-800">
-                  {stockByItemCodeRows.map((row) => (
+                  {filteredStockByItemCodeRows.map((row) => (
                     <tr key={row.sku} className="hover:bg-neutral-800/50">
                       <td className="p-3 font-mono font-black text-amber-400">{row.sku}</td>
                       <td className="p-3 font-semibold text-white">{row.name}</td>
@@ -3258,8 +3289,8 @@ Suitable For:
                       </td>
                     </tr>
                   ))}
-                  {stockByItemCodeRows.length === 0 && (
-                    <tr><td colSpan={5} className="p-6 text-center text-neutral-500">No stock item codes available.</td></tr>
+                  {filteredStockByItemCodeRows.length === 0 && (
+                    <tr><td colSpan={5} className="p-6 text-center text-neutral-500">{stockItemSearch.trim() ? 'No matching Item Code / Item Name.' : 'No stock item codes available.'}</td></tr>
                   )}
                 </tbody>
               </table>
