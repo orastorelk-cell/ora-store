@@ -1743,6 +1743,46 @@ Suitable For:
     );
   }, [stockByItemCodeRows, stockItemSearch]);
 
+  const stockItemReportRows = useMemo(() => {
+    return filteredStockByItemCodeRows.map((row) => {
+      const purchases = purchaseOrders
+        .filter((po) => String(po.variant_sku || po.sku || '').trim().toUpperCase() === row.sku)
+        .sort((a,b)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime());
+
+      const latestPurchase = purchases[0];
+      const totalPurchased = purchases.reduce((sum,po)=>sum+Math.max(0,Number(po.quantity_added||0)),0);
+
+      let beforeLatestPurchase: number | null = null;
+      let afterLatestPurchase: number | null = null;
+      if (latestPurchase) {
+        const latestAt = new Date(latestPurchase.created_at).getTime();
+        const matchingLog = stockHistory
+          .filter((log) =>
+            log.change_type === 'Purchase Inflow' &&
+            log.product_id === latestPurchase.product_id &&
+            Math.abs(new Date(log.created_at).getTime()-latestAt) < 5000 &&
+            Number(log.quantity||0) === Number(latestPurchase.quantity_added||0)
+          )
+          .sort((a,b)=>Math.abs(new Date(a.created_at).getTime()-latestAt)-Math.abs(new Date(b.created_at).getTime()-latestAt))[0];
+        if (matchingLog) {
+          beforeLatestPurchase = Math.max(0, Number(matchingLog.previous_stock||0));
+          afterLatestPurchase = Math.max(0, Number(matchingLog.new_stock||0));
+        }
+      }
+
+      return {
+        ...row,
+        totalPurchased,
+        latestPurchaseQty: latestPurchase ? Math.max(0,Number(latestPurchase.quantity_added||0)) : 0,
+        latestPurchaseAt: latestPurchase?.created_at || '',
+        latestPoNumber: latestPurchase?.po_number || '',
+        beforeLatestPurchase,
+        afterLatestPurchase,
+        currentPhysical: Math.max(0,row.available + row.packing),
+      };
+    });
+  }, [filteredStockByItemCodeRows, purchaseOrders, stockHistory]);
+
   const lowStockProducts = products.filter((p) => normalizedProductType(p) !== 'bundle' && p.stock_quantity <= 5);
   const unsyncedOrders = orders.filter((o) => o.order_source !== 'Manual Admin' && !o.is_synced_google_sheets);
   const localOnlyCatalogImages = products.filter((p) => String(p.images?.[0] || '').startsWith('/uploads/')).length;
@@ -3235,8 +3275,8 @@ Suitable For:
 
           <div className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden">
             <div className="p-4 border-b border-neutral-800">
-              <h3 className="font-bold text-white text-sm">Stock by Item Code</h3>
-              <p className="mt-1 text-[10px] text-neutral-500">Available = current stock after allocation • Packing = allocated to active orders and not yet handed to courier.</p>
+              <h3 className="font-bold text-white text-sm">Stock Report by Item Code</h3>
+              <p className="mt-1 text-[10px] text-neutral-500">Search one Item Code / name and see purchase history summary, current packing, available stock and physical stock in one place.</p>
               <div className="relative mt-3 max-w-xl">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
                 <input
@@ -3254,46 +3294,67 @@ Suitable For:
                 )}
               </div>
               <p className="mt-2 text-[10px] text-neutral-500">
-                Showing {filteredStockByItemCodeRows.length} of {stockByItemCodeRows.length} item code{stockByItemCodeRows.length===1?'':'s'}
+                Showing {stockItemReportRows.length} of {stockByItemCodeRows.length} item code{stockByItemCodeRows.length===1?'':'s'}
               </p>
             </div>
-            <div className="overflow-x-auto max-h-[520px]">
-              <table className="w-full min-w-[720px] text-left text-xs text-neutral-300">
+
+            <div className="overflow-x-auto max-h-[560px]">
+              <table className="w-full min-w-[1180px] text-left text-xs text-neutral-300">
                 <thead className="bg-neutral-950 sticky top-0 z-10 text-[10px] uppercase text-neutral-500">
                   <tr>
                     <th className="p-3">Item Code</th>
-                    <th className="p-3">Item</th>
-                    <th className="p-3">Variant / Type</th>
-                    <th className="p-3 text-center">Available</th>
-                    <th className="p-3 text-center">Packing</th>
+                    <th className="p-3">Item / Variant</th>
+                    <th className="p-3">Last Purchase</th>
+                    <th className="p-3 text-center">Purchased Qty</th>
+                    <th className="p-3 text-center">Before Purchase</th>
+                    <th className="p-3 text-center">After Purchase</th>
+                    <th className="p-3 text-center">Packing Now</th>
+                    <th className="p-3 text-center">Available Now</th>
+                    <th className="p-3 text-center">Physical Now</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-800">
-                  {filteredStockByItemCodeRows.map((row) => (
+                  {stockItemReportRows.map((row) => (
                     <tr key={row.sku} className="hover:bg-neutral-800/50">
                       <td className="p-3 font-mono font-black text-amber-400">{row.sku}</td>
-                      <td className="p-3 font-semibold text-white">{row.name}</td>
                       <td className="p-3">
-                        <span className="text-neutral-300">{row.variant || row.type}</span>
-                        {row.type === 'Combo Pack' && <span className="ml-2 rounded bg-violet-500/10 px-2 py-0.5 text-[9px] font-bold text-violet-300">COMBO</span>}
+                        <div className="font-semibold text-white">{row.name}</div>
+                        <div className="mt-0.5 text-[10px] text-neutral-500">{row.variant || row.type}</div>
+                      </td>
+                      <td className="p-3">
+                        {row.latestPurchaseAt ? <>
+                          <div className="font-semibold text-white">{new Date(row.latestPurchaseAt).toLocaleDateString()}</div>
+                          <div className="mt-0.5 text-[10px] text-neutral-500">{row.latestPoNumber}</div>
+                        </> : <span className="text-neutral-600">No purchase record</span>}
                       </td>
                       <td className="p-3 text-center">
-                        <span className={`inline-flex min-w-12 justify-center rounded-lg px-2.5 py-1.5 font-black ${row.available > 0 ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>
-                          {row.available}
-                        </span>
+                        <div className="font-black text-sky-300">{row.totalPurchased}</div>
+                        {row.latestPurchaseQty>0 && <div className="text-[9px] text-neutral-500">Latest +{row.latestPurchaseQty}</div>}
+                      </td>
+                      <td className="p-3 text-center font-bold text-neutral-300">{row.beforeLatestPurchase===null?'—':row.beforeLatestPurchase}</td>
+                      <td className="p-3 text-center font-bold text-blue-300">{row.afterLatestPurchase===null?'—':row.afterLatestPurchase}</td>
+                      <td className="p-3 text-center">
+                        <span className={`inline-flex min-w-12 justify-center rounded-lg px-2.5 py-1.5 font-black ${row.packing>0?'bg-orange-500/10 text-orange-300':'bg-neutral-800 text-neutral-500'}`}>{row.packing}</span>
                       </td>
                       <td className="p-3 text-center">
-                        <span className={`inline-flex min-w-12 justify-center rounded-lg px-2.5 py-1.5 font-black ${row.packing > 0 ? 'bg-orange-500/10 text-orange-300' : 'bg-neutral-800 text-neutral-500'}`}>
-                          {row.packing}
-                        </span>
+                        <span className={`inline-flex min-w-12 justify-center rounded-lg px-2.5 py-1.5 font-black ${row.available>0?'bg-emerald-500/10 text-emerald-300':'bg-red-500/10 text-red-300'}`}>{row.available}</span>
+                      </td>
+                      <td className="p-3 text-center">
+                        <span className="inline-flex min-w-12 justify-center rounded-lg bg-violet-500/10 px-2.5 py-1.5 font-black text-violet-300">{row.currentPhysical}</span>
                       </td>
                     </tr>
                   ))}
-                  {filteredStockByItemCodeRows.length === 0 && (
-                    <tr><td colSpan={5} className="p-6 text-center text-neutral-500">{stockItemSearch.trim() ? 'No matching Item Code / Item Name.' : 'No stock item codes available.'}</td></tr>
+                  {stockItemReportRows.length===0 && (
+                    <tr><td colSpan={9} className="p-6 text-center text-neutral-500">{stockItemSearch.trim()?'No matching Item Code / Item Name.':'No stock item codes available.'}</td></tr>
                   )}
                 </tbody>
               </table>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2 border-t border-neutral-800 bg-neutral-950/50 p-3 text-[10px] text-neutral-500 sm:grid-cols-3">
+              <div><b className="text-orange-300">Packing Now</b> = allocated to confirmed active orders, not handed to courier yet.</div>
+              <div><b className="text-emerald-300">Available Now</b> = sellable stock remaining after allocation.</div>
+              <div><b className="text-violet-300">Physical Now</b> = Available + Packing currently still physically with you.</div>
             </div>
           </div>
 
