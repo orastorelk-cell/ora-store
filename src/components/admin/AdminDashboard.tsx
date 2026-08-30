@@ -1648,6 +1648,89 @@ Suitable For:
   const totalPurchasedCost = purchaseOrders.reduce((sum, purchase) => sum + purchase.total_cost, 0);
   const chartData = productPerformance.slice(0, 8);
 
+  // Read-only stock view by exact Item Code.
+  // Available = current sellable stock after FIFO allocation.
+  // Packing = stock already allocated to active orders but not yet handed to courier.
+  // Bundle rows show the number of combo packs in packing; their physical component
+  // quantities are also counted against the exact component Item Codes.
+  const stockByItemCodeRows = useMemo(() => {
+    const packingBySku = new Map<string, number>();
+    const addPacking = (sku: unknown, qty: unknown) => {
+      const key = String(sku || '').trim().toUpperCase();
+      const amount = Math.max(0, Number(qty || 0));
+      if (!key || amount <= 0) return;
+      packingBySku.set(key, (packingBySku.get(key) || 0) + amount);
+    };
+
+    orders
+      .filter((order) =>
+        order.stock_allocated &&
+        order.stock_status === 'Allocated' &&
+        order.order_status !== 'Cancelled' &&
+        order.order_status !== 'Shipped' &&
+        order.order_status !== 'Delivered' &&
+        order.dispatch_status !== 'Handed Over' &&
+        !order.is_duplicate_order &&
+        !order.is_test_order
+      )
+      .forEach((order) => {
+        (order.items || []).forEach((item) => {
+          const orderQty = Math.max(1, Number(item.quantity || 1));
+          addPacking(item.sku || item.main_sku, orderQty);
+
+          if (item.product_type === 'bundle' && Array.isArray(item.bundle_components)) {
+            item.bundle_components.forEach((component) => {
+              addPacking(
+                component.sku,
+                orderQty * Math.max(1, Number(component.quantity_per_bundle || 1))
+              );
+            });
+          }
+        });
+      });
+
+    const rows: Array<{
+      sku: string;
+      name: string;
+      variant: string;
+      type: 'Normal' | 'Variant' | 'Combo Pack';
+      available: number;
+      packing: number;
+    }> = [];
+
+    products.forEach((product) => {
+      const type = normalizedProductType(product);
+      if (type === 'variant' && (product.variants || []).length) {
+        (product.variants || []).forEach((variant) => {
+          const sku = String(variant.sku || '').trim().toUpperCase();
+          if (!sku) return;
+          rows.push({
+            sku,
+            name: product.name_en,
+            variant: variant.option_value || '',
+            type: 'Variant',
+            available: Math.max(0, Number(variant.stock_quantity || 0)),
+            packing: Math.max(0, packingBySku.get(sku) || 0),
+          });
+        });
+        return;
+      }
+
+      const sku = String(product.sku || '').trim().toUpperCase();
+      if (!sku) return;
+      rows.push({
+        sku,
+        name: product.name_en,
+        variant: type === 'bundle' ? 'Combo Pack' : '',
+        type: type === 'bundle' ? 'Combo Pack' : 'Normal',
+        available: Math.max(0, Number(type === 'bundle' ? productDisplayStock(product, products) : product.stock_quantity || 0)),
+        packing: Math.max(0, packingBySku.get(sku) || 0),
+      });
+    });
+
+    return rows.sort((a, b) => a.sku.localeCompare(b.sku, undefined, { numeric:true, sensitivity:'base' }));
+  }, [products, orders]);
+
   const lowStockProducts = products.filter((p) => normalizedProductType(p) !== 'bundle' && p.stock_quantity <= 5);
   const unsyncedOrders = orders.filter((o) => o.order_source !== 'Manual Admin' && !o.is_synced_google_sheets);
   const localOnlyCatalogImages = products.filter((p) => String(p.images?.[0] || '').startsWith('/uploads/')).length;
@@ -3135,6 +3218,51 @@ Suitable For:
               <div className="flex justify-between text-xs text-neutral-400"><span>Low Stock Alerts</span><AlertTriangle className="w-4 h-4 text-red-400" /></div>
               <p className="text-xl font-bold text-red-400 mt-2">{lowStockProducts.length}</p>
               <p className="text-[10px] text-neutral-500">Products with 5 units or less</p>
+            </div>
+          </div>
+
+          <div className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden">
+            <div className="p-4 border-b border-neutral-800">
+              <h3 className="font-bold text-white text-sm">Stock by Item Code</h3>
+              <p className="mt-1 text-[10px] text-neutral-500">Available = current stock after allocation • Packing = allocated to active orders and not yet handed to courier.</p>
+            </div>
+            <div className="overflow-x-auto max-h-[520px]">
+              <table className="w-full min-w-[720px] text-left text-xs text-neutral-300">
+                <thead className="bg-neutral-950 sticky top-0 z-10 text-[10px] uppercase text-neutral-500">
+                  <tr>
+                    <th className="p-3">Item Code</th>
+                    <th className="p-3">Item</th>
+                    <th className="p-3">Variant / Type</th>
+                    <th className="p-3 text-center">Available</th>
+                    <th className="p-3 text-center">Packing</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-800">
+                  {stockByItemCodeRows.map((row) => (
+                    <tr key={row.sku} className="hover:bg-neutral-800/50">
+                      <td className="p-3 font-mono font-black text-amber-400">{row.sku}</td>
+                      <td className="p-3 font-semibold text-white">{row.name}</td>
+                      <td className="p-3">
+                        <span className="text-neutral-300">{row.variant || row.type}</span>
+                        {row.type === 'Combo Pack' && <span className="ml-2 rounded bg-violet-500/10 px-2 py-0.5 text-[9px] font-bold text-violet-300">COMBO</span>}
+                      </td>
+                      <td className="p-3 text-center">
+                        <span className={`inline-flex min-w-12 justify-center rounded-lg px-2.5 py-1.5 font-black ${row.available > 0 ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>
+                          {row.available}
+                        </span>
+                      </td>
+                      <td className="p-3 text-center">
+                        <span className={`inline-flex min-w-12 justify-center rounded-lg px-2.5 py-1.5 font-black ${row.packing > 0 ? 'bg-orange-500/10 text-orange-300' : 'bg-neutral-800 text-neutral-500'}`}>
+                          {row.packing}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                  {stockByItemCodeRows.length === 0 && (
+                    <tr><td colSpan={5} className="p-6 text-center text-neutral-500">No stock item codes available.</td></tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
 
