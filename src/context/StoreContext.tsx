@@ -525,7 +525,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Load shared settings from the server so ALL visitors see admin changes
 useEffect(() => {
-  fetch('/api/storefront/state')
+  fetch(`/api/storefront/state?fresh=${Date.now()}`, { cache:'no-store' })
     .then((r) => r.json())
     .then((data) => {
       const serverSettings = data && data.state && data.state.settings;
@@ -735,7 +735,7 @@ useEffect(() => {
         if (hasStaffSession) {
           data = await sharedStaffRequest('/api/admin/storefront/state');
         } else {
-          const response = await fetch('/api/storefront/state', { cache:'no-store' });
+          const response = await fetch(`/api/storefront/state?fresh=${Date.now()}`, { cache:'no-store' });
           data = await response.json().catch(() => ({}));
           if (!response.ok) throw new Error(data?.error || `Shared storefront load failed (${response.status})`);
         }
@@ -828,14 +828,16 @@ useEffect(() => {
     return () => window.clearTimeout(timer);
   }, [products, categories, settings, sharedStoreReady, adminUser?.id]);
 
-  // Public storefronts refresh on focus and periodically so an Admin price/offer
-  // edit appears everywhere without stale localStorage data or a hard browser reset.
+  // Public storefront freshness:
+  // Facebook/Instagram in-app browsers can restore an old page from memory/BFCache
+  // without remounting React. Re-read the authoritative shared catalog whenever
+  // the page is shown again or becomes visible, as well as on focus/interval.
   useEffect(() => {
     if (adminUser && getStaffSessionToken()) return;
     let cancelled = false;
     const refreshPublicStore = async () => {
       try {
-        const response = await fetch('/api/storefront/state', { cache:'no-store' });
+        const response = await fetch(`/api/storefront/state?fresh=${Date.now()}`, { cache:'no-store' });
         const data = await response.json().catch(() => ({}));
         if (!response.ok || cancelled || !data?.initialized || !data?.state) return;
         const version = Number(data.state.version || 0);
@@ -843,12 +845,18 @@ useEffect(() => {
         applySharedStorefrontState(data.state, false);
       } catch {}
     };
+    const onPageShow = () => { void refreshPublicStore(); };
+    const onVisibility = () => { if (document.visibilityState === 'visible') void refreshPublicStore(); };
     const timer = window.setInterval(refreshPublicStore, isLocalStorefrontHost() ? 5_000 : 30_000);
     window.addEventListener('focus', refreshPublicStore);
+    window.addEventListener('pageshow', onPageShow);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
       window.removeEventListener('focus', refreshPublicStore);
+      window.removeEventListener('pageshow', onPageShow);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adminUser?.id]);

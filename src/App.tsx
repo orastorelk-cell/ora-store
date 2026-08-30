@@ -35,6 +35,7 @@ const CustomerStorefront: React.FC = () => {
     loginAdmin,
     staffUsers,
     settings,
+    sharedStoreReady,
     setSelectedProduct,
   } = useStore();
   const [storePath, setStorePath] = React.useState(() => window.location.pathname.replace(/\/+$/,'') || '/');
@@ -268,6 +269,19 @@ const CustomerStorefront: React.FC = () => {
       );
     }
     return <AdminDashboard />;
+  }
+
+  // Never flash old localStorage products while the first authoritative catalog
+  // request is still loading. This is a short data refresh, not a page reload.
+  if (!sharedStoreReady) {
+    return (
+      <div className="ora-storefront min-h-screen bg-gray-50 text-gray-900 flex items-center justify-center p-6 font-sans">
+        <div className="text-center">
+          <div className="mx-auto h-9 w-9 animate-spin rounded-full border-4 border-gray-200 border-t-orange-500" />
+          <p className="mt-3 text-sm font-bold text-gray-700">Loading latest products…</p>
+        </div>
+      </div>
+    );
   }
 
   if (settings.maintenance_mode) {

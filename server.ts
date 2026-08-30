@@ -888,6 +888,12 @@ const publicStorefrontSettings = (raw: Record<string, any>) => {
 };
 
 app.get('/api/storefront/state', async (_req,res) => {
+  res.set({
+    'Cache-Control':'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma':'no-cache',
+    'Expires':'0',
+    'Surrogate-Control':'no-store',
+  });
   try {
     const state = await readSharedStorefrontState();
     if (!state) return res.json({ initialized:false, state:null });
