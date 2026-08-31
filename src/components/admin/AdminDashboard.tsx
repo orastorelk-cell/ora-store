@@ -236,6 +236,8 @@ export const AdminDashboard: React.FC = () => {
 
   const [orderFilter, setOrderFilter] = useState<OrderStatus | 'All'>('All');
   const [orderSearch, setOrderSearch] = useState('');
+  const [orderDateFrom, setOrderDateFrom] = useState('');
+  const [orderDateTo, setOrderDateTo] = useState('');
   const [editingOrderAddressId, setEditingOrderAddressId] = useState('');
   const [orderAddressDraft, setOrderAddressDraft] = useState({ address:'', city:'', district:'' });
   const [orderAddressBusy, setOrderAddressBusy] = useState(false);
@@ -2209,8 +2211,31 @@ Suitable For:
     }
   };
 
+  const orderLocalDateKey = (value: string) => {
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return '';
+    return [
+      d.getFullYear(),
+      String(d.getMonth() + 1).padStart(2, '0'),
+      String(d.getDate()).padStart(2, '0'),
+    ].join('-');
+  };
+
+  const orderDateStart = orderDateFrom || orderDateTo;
+  const orderDateEnd = orderDateTo || orderDateFrom;
+  const normalizedOrderDateStart = orderDateStart && orderDateEnd && orderDateStart > orderDateEnd ? orderDateEnd : orderDateStart;
+  const normalizedOrderDateEnd = orderDateStart && orderDateEnd && orderDateStart > orderDateEnd ? orderDateStart : orderDateEnd;
+
   const filteredOrders = orders.filter((o) => {
     if (orderFilter !== 'All' && o.order_status !== orderFilter) return false;
+
+    if (normalizedOrderDateStart || normalizedOrderDateEnd) {
+      const orderDate = orderLocalDateKey(o.created_at);
+      if (!orderDate) return false;
+      if (normalizedOrderDateStart && orderDate < normalizedOrderDateStart) return false;
+      if (normalizedOrderDateEnd && orderDate > normalizedOrderDateEnd) return false;
+    }
+
     const q = orderSearch.trim().toLowerCase();
     if (!q) return true;
 
@@ -2221,13 +2246,77 @@ Suitable For:
 
     const haystack = [
       o.order_number, o.customer_name, o.phone, o.whatsapp, o.address, o.city,
-      o.order_source, o.order_status, o.call_center_status, o.payment_method,
+      o.district, o.order_source, o.order_status, o.call_center_status, o.payment_method,
       o.payment_status, o.waybill_number, o.courier_name, o.delivery_status,
-      o.tracking_status, o.invoice_number, o.notes, itemText
+      o.tracking_status, o.dispatch_status, o.dispatch_scanned_at, o.invoice_number,
+      o.notes, itemText
     ].map(v => String(v ?? '')).join(' ').toLowerCase();
 
     return haystack.includes(q);
   }).sort((a,b)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime());
+
+  const downloadOrdersReportCsv = () => {
+    if (!filteredOrders.length) {
+      alert('No orders match the current status / search / date filter.');
+      return;
+    }
+
+    const headers = [
+      'Order ID','Source','Order Date','Order Status','Call Center Status',
+      'Customer Name','Phone','WhatsApp','Address','City','District',
+      'Item Codes','Items','Total Qty','Payment Method','Payment Status',
+      'Total Payable (Rs)','Stock Status','Waybill','Courier','Dispatch Status',
+      'Handed Over Time','Handed Over By','Invoice Number'
+    ];
+
+    const rows = filteredOrders.map((order) => {
+      const items = order.items || [];
+      return [
+        order.order_number,
+        order.order_source || 'Website',
+        new Date(order.created_at).toLocaleString(),
+        order.order_status,
+        order.call_center_status || '',
+        order.customer_name,
+        order.phone,
+        order.whatsapp,
+        order.address,
+        order.city,
+        order.district || '',
+        items.map((it) => it.sku).join(' | '),
+        items.map((it) => `${it.product_name}${it.variant_name ? ` - ${it.variant_name}` : ''} x${it.quantity}`).join(' | '),
+        items.reduce((sum, it) => sum + Math.max(0, Number(it.quantity || 0)), 0),
+        order.payment_method,
+        order.payment_status,
+        Number(order.total_amount || 0),
+        order.stock_allocated ? 'Allocated' : 'Waiting for Stock',
+        order.waybill_number || '',
+        order.courier_name || '',
+        order.dispatch_status || 'Not Scanned',
+        order.dispatch_scanned_at ? new Date(order.dispatch_scanned_at).toLocaleString() : '',
+        order.dispatch_scanned_by || '',
+        order.invoice_number || '',
+      ];
+    });
+
+    const escapeCsv = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const csv = '\uFEFF' + [headers, ...rows].map((row) => row.map(escapeCsv).join(',')).join('\r\n');
+    const blob = new Blob([csv], { type:'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const statusName = String(orderFilter || 'All').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'all';
+    const dateName = normalizedOrderDateStart
+      ? (normalizedOrderDateEnd && normalizedOrderDateEnd !== normalizedOrderDateStart
+        ? `${normalizedOrderDateStart}_to_${normalizedOrderDateEnd}`
+        : normalizedOrderDateStart)
+      : 'all-dates';
+    a.href = url;
+    a.download = `O-RA_Orders_${statusName}_${dateName}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
 
   // ONLY zero-stock products that are currently blocking at least one Confirmed waiting order.
   const outOfStockNeeds = (() => {
@@ -3441,6 +3530,54 @@ Suitable For:
             </div>
           </div>
 
+          <div className="rounded-2xl border border-neutral-800 bg-neutral-900 p-3">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+              <div className="flex flex-wrap items-end gap-2">
+                <label className="text-[10px] font-bold text-neutral-400">
+                  Date / From
+                  <input
+                    type="date"
+                    value={orderDateFrom}
+                    onChange={(e)=>setOrderDateFrom(e.target.value)}
+                    className="mt-1 block rounded-lg border border-neutral-700 bg-neutral-950 px-2.5 py-2 text-xs text-white outline-none focus:border-orange-500"
+                  />
+                </label>
+                <label className="text-[10px] font-bold text-neutral-400">
+                  To (Optional)
+                  <input
+                    type="date"
+                    value={orderDateTo}
+                    onChange={(e)=>setOrderDateTo(e.target.value)}
+                    className="mt-1 block rounded-lg border border-neutral-700 bg-neutral-950 px-2.5 py-2 text-xs text-white outline-none focus:border-orange-500"
+                  />
+                </label>
+                {(orderDateFrom || orderDateTo) && (
+                  <button
+                    type="button"
+                    onClick={()=>{setOrderDateFrom('');setOrderDateTo('');}}
+                    className="rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-2 text-[10px] font-black text-neutral-300 hover:text-white"
+                  >
+                    Clear Date
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-col items-start gap-1 lg:items-end">
+                <button
+                  type="button"
+                  onClick={downloadOrdersReportCsv}
+                  disabled={!filteredOrders.length}
+                  className="inline-flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-4 py-2.5 text-xs font-black text-emerald-300 hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Download className="h-4 w-4"/>
+                  Download Current CSV ({filteredOrders.length})
+                </button>
+                <p className="text-[9px] text-neutral-500">
+                  From only = one day. From + To = date range. CSV follows the selected status, search and date filter.
+                </p>
+              </div>
+            </div>
+          </div>
+
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-500" />
             <input
@@ -3582,11 +3719,22 @@ Suitable For:
                           </button>
                           <button type="button" disabled={orderAddressBusy} onClick={()=>setEditingOrderAddressId('')} className="rounded-lg bg-neutral-800 px-3 py-2 text-[10px] font-black text-neutral-300 disabled:opacity-40">Cancel</button>
                         </div>
-                        <p className="text-[9px] text-neutral-500">This updates the O-RA order first, then syncs the same address back to Google Sheet. It does not change items, prices, stock or order status.</p>
+                        <p className="text-[9px] text-neutral-500">This updates the O-RA order only. Google Sheet Address / City / District stay unchanged after the first sync. It does not change items, prices, stock or order status.</p>
                       </div>
                     )}
                     <p className="text-neutral-400">Payment: {order.payment_method} ({order.payment_status})</p>
                     <p className={`font-bold ${order.stock_allocated ? 'text-emerald-400' : 'text-orange-400'}`}>Stock: {order.stock_allocated ? 'Allocated' : 'Waiting for Stock'}</p>
+                    {order.waybill_number && (
+                      <div className="mt-1 rounded-lg border border-blue-500/20 bg-blue-500/5 px-2.5 py-2 text-[10px]">
+                        <p className="font-bold text-blue-300">Waybill: <span className="font-mono text-white">{order.waybill_number}</span></p>
+                        <p className="mt-0.5 text-neutral-400">
+                          Handover: {order.dispatch_status === 'Handed Over'
+                            ? (order.dispatch_scanned_at ? new Date(order.dispatch_scanned_at).toLocaleString() : 'Handed Over')
+                            : 'Not Handed Over Yet'}
+                          {order.dispatch_scanned_by ? ` • ${order.dispatch_scanned_by}` : ''}
+                        </p>
+                      </div>
+                    )}
                     {order.is_duplicate_order && <p className="font-bold text-red-400">Duplicate Order • Invoice Blocked</p>}
                   </div>
 
