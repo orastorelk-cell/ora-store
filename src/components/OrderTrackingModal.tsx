@@ -3,9 +3,6 @@ import {
   X,
   Package,
   Search,
-  CheckCircle2,
-  Clock,
-  Truck,
   AlertCircle,
 } from 'lucide-react';
 import { useStore } from '../context/StoreContext';
