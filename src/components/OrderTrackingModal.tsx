@@ -22,6 +22,7 @@ export const OrderTrackingModal: React.FC = () => {
   const { orders, isTrackingOpen, setIsTrackingOpen } = useStore();
   const [query, setQuery] = useState('');
   const [searchTriggered, setSearchTriggered] = useState(false);
+  const [fardarNotice, setFardarNotice] = useState('');
 
   if (!isTrackingOpen) return null;
 
@@ -34,6 +35,20 @@ export const OrderTrackingModal: React.FC = () => {
           String(o.waybill_number || '').toLowerCase().includes(normalizedQuery)
       )
     : [];
+
+  const trackWithFardar = (waybill: string) => {
+    const value = String(waybill || '').trim();
+    if (!value) return;
+
+    // Open Fardar immediately from the user click so mobile browsers do not block it.
+    window.open('https://www.fdedomestic.com/index.php', '_blank', 'noopener,noreferrer');
+
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(value).catch(() => undefined);
+    }
+
+    setFardarNotice(`Waybill ${value} copied. On the Fardar page, tap “Tracking” and paste the number.`);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/40 backdrop-blur-xs overflow-y-auto">
@@ -145,6 +160,22 @@ export const OrderTrackingModal: React.FC = () => {
                         })}
                       </div>
                     </div>
+
+                    {order.waybill_number && (
+                      <div className="space-y-2 pt-1">
+                        <button
+                          onClick={() => trackWithFardar(String(order.waybill_number || ''))}
+                          className="w-full py-2.5 rounded-full bg-black text-white hover:bg-orange-600 text-xs font-bold transition-colors shadow-sm"
+                        >
+                          Track with Fardar
+                        </button>
+                        {fardarNotice.includes(String(order.waybill_number)) && (
+                          <div className="rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-[10px] leading-relaxed text-orange-800">
+                            {fardarNotice}
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     {/* Items & Total */}
                     <div className="text-xs space-y-1 text-gray-600 pt-2 border-t border-gray-200">
