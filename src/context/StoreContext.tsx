@@ -1892,53 +1892,23 @@ useEffect(() => {
       ...(cityChanged ? { fardar_city:undefined, city_verified:false, city_mapping_source:undefined } : {}),
     };
 
+    // After an order's FIRST Sheet sync, the Google Sheet delivery location is
+    // authoritative. Editing the System order must never overwrite a Call Center
+    // correction in Sheet. This save is intentionally O-RA-only.
     await sharedStaffRequest(`/api/orders/${encodeURIComponent(order.id)}`,{
       method:'PUT',
       body:JSON.stringify({order:updated}),
     });
 
-    let finalOrder:Order=updated;
-    let sheetSynced=false;
-    let sheetMessage='Address saved in O-RA.';
-    const canSyncSheet=Boolean(
-      settings.google_sheet_webhook_url &&
-      updated.order_source!=='Manual Admin' &&
-      !(updated.order_source==='Website' && updated.payment_method==='Bank Payment' && updated.payment_verification_status!=='Approved')
-    );
-
-    if(canSyncSheet){
-      try{
-        const result=await syncOrderToGoogleSheets(updated,settings.google_sheet_webhook_url,settings,products);
-        if(result.success){
-          sheetSynced=true;
-          finalOrder={...updated,is_synced_google_sheets:true,synced_at:new Date().toISOString()};
-          sheetMessage='Address saved in O-RA and updated in Google Sheet.';
-        }else{
-          finalOrder={...updated,is_synced_google_sheets:false};
-          sheetMessage=`Address saved in O-RA, but Google Sheet sync needs retry: ${result.message}`;
-        }
-      }catch(error:any){
-        finalOrder={...updated,is_synced_google_sheets:false};
-        sheetMessage=`Address saved in O-RA, but Google Sheet sync needs retry: ${error?.message || 'sync failed'}`;
-      }
-    }
-
-    if(finalOrder!==updated){
-      await sharedStaffRequest(`/api/orders/${encodeURIComponent(order.id)}`,{
-        method:'PUT',
-        body:JSON.stringify({order:finalOrder}),
-      }).catch(()=>undefined);
-    }
-
-    setOrders((prev)=>prev.map((o)=>o.id===orderId?finalOrder:o));
+    setOrders((prev)=>prev.map((o)=>o.id===orderId?updated:o));
     logActivity({
       action:'Delivery Address Updated',
       module:'Orders',
       target_id:order.id,
       target_label:order.order_number,
-      details:`${order.address}, ${order.city}${order.district?`, ${order.district}`:''} → ${address}, ${city}${district?`, ${district}`:''}`,
+      details:`${order.address}, ${order.city}${order.district?`, ${order.district}`:''} → ${address}, ${city}${district?`, ${district}`:''} • Google Sheet unchanged`,
     });
-    return{success:true,sheetSynced,message:sheetMessage};
+    return{success:true,sheetSynced:false,message:'Address saved in O-RA. Google Sheet address was not changed.'};
   };
 
   const updatePaymentStatus = (orderId: string, status: 'Pending' | 'Paid' | 'Refunded') => {
@@ -2130,7 +2100,10 @@ useEffect(() => {
       orderNumbers.push(id);
     });
 
-    const apply=(rows:Order[])=>rows.map(o=>{const patch=updates.get(o.order_number.toUpperCase());const next=patch?{...o,...patch}:o;if(patch){void mirrorOrderUpdate(next as Order);if(settings.google_sheet_webhook_url && next.order_source!=='Manual Admin')void syncOrderToGoogleSheets(next as Order,settings.google_sheet_webhook_url,settings,products).catch(()=>undefined);}return next as Order;});
+    // Confirm upload is one-way from Google Sheet -> O-RA. The Sheet may contain
+    // corrected Address / City / District, so never echo the System order back and
+    // risk overwriting those Call Center edits.
+    const apply=(rows:Order[])=>rows.map(o=>{const patch=updates.get(o.order_number.toUpperCase());const next=patch?{...o,...patch}:o;if(patch){void mirrorOrderUpdate(next as Order);}return next as Order;});
     setOrders(prev=>{const recovered=[...prev,...persisted.filter(saved=>!prev.some(cur=>cur.id===saved.id))];const next=apply(recovered);try{localStorage.setItem('ora_orders',JSON.stringify(next));}catch{}return next;});
     return{confirmedCount:orderNumbers.length,notFoundCount,ignoredCount,orderNumbers,errors};
   };
