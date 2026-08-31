@@ -723,7 +723,12 @@ useEffect(() => {
     if (state.settings && typeof state.settings === 'object' && !Array.isArray(state.settings)) {
       setSettings((prev) => ({ ...prev, ...state.settings } as StoreSettings));
     }
-    sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, Number(state.version || 0));
+    const verifiedVersion = Number(state.version || 0);
+    sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, verifiedVersion);
+    try {
+      if (state.updated_at) localStorage.setItem('ora_storefront_updated_at', String(state.updated_at));
+      if (verifiedVersion) localStorage.setItem('ora_storefront_version', String(verifiedVersion));
+    } catch {}
   };
 
   useEffect(() => {
@@ -735,13 +740,31 @@ useEffect(() => {
         if (hasStaffSession) {
           data = await sharedStaffRequest('/api/admin/storefront/state');
         } else {
-          const response = await fetch(`/api/storefront/state?fresh=${Date.now()}`, { cache:'no-store' });
-          data = await response.json().catch(() => ({}));
-          if (!response.ok) throw new Error(data?.error || `Shared storefront load failed (${response.status})`);
+          const cachedUpdatedAt = String(localStorage.getItem('ora_storefront_updated_at') || '');
+          const cachedVersion = Math.max(0, Number(localStorage.getItem('ora_storefront_version') || 0));
+          const hasUsableCache = cachedUpdatedAt && products.length > 0;
+
+          if (hasUsableCache) {
+            const versionResponse = await fetch(`/api/storefront/version?fresh=${Date.now()}`, { cache:'no-store' });
+            const versionData = await versionResponse.json().catch(() => ({}));
+            if (versionResponse.ok && versionData?.initialized && String(versionData.updated_at || '') === cachedUpdatedAt) {
+              sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, cachedVersion);
+              data = { initialized:true, cache_verified:true };
+            }
+          }
+
+          if (!data?.cache_verified) {
+            const response = await fetch(`/api/storefront/state?fresh=${Date.now()}`, { cache:'no-store' });
+            data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data?.error || `Shared storefront load failed (${response.status})`);
+          }
         }
         if (cancelled) return;
 
-        if (data?.initialized && data?.state) {
+        if (data?.cache_verified) {
+          // The tiny server version check proved this browser cache is exactly the
+          // current live catalog, so the customer can see it without a full JSON wait.
+        } else if (data?.initialized && data?.state) {
           applySharedStorefrontState(data.state, hasStaffSession);
         } else if (adminUser?.role === 'admin') {
           // One-time migration: the current Super Admin browser owns the existing
@@ -837,11 +860,19 @@ useEffect(() => {
     let cancelled = false;
     const refreshPublicStore = async () => {
       try {
+        const cachedUpdatedAt = String(localStorage.getItem('ora_storefront_updated_at') || '');
+        if (cachedUpdatedAt) {
+          const versionResponse = await fetch(`/api/storefront/version?fresh=${Date.now()}`, { cache:'no-store' });
+          const versionData = await versionResponse.json().catch(() => ({}));
+          if (!versionResponse.ok || cancelled || !versionData?.initialized) return;
+          if (String(versionData.updated_at || '') === cachedUpdatedAt) return;
+        }
+
         const response = await fetch(`/api/storefront/state?fresh=${Date.now()}`, { cache:'no-store' });
         const data = await response.json().catch(() => ({}));
         if (!response.ok || cancelled || !data?.initialized || !data?.state) return;
         const version = Number(data.state.version || 0);
-        if (version && version <= sharedStoreVersionRef.current) return;
+        if (version && version <= sharedStoreVersionRef.current && String(data.state.updated_at || '') === cachedUpdatedAt) return;
         applySharedStorefrontState(data.state, false);
       } catch {}
     };

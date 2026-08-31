@@ -846,6 +846,21 @@ const readSharedStorefrontState = async (): Promise<SharedStorefrontState | null
   return null;
 };
 
+const readSharedStorefrontStamp = async (): Promise<{initialized:boolean;updated_at:string}> => {
+  const sb = getSupabaseAdmin();
+  if (sb) {
+    try {
+      const { data, error } = await sb.from('admin_data_store').select('updated_at').eq('key', storefrontStateKey).maybeSingle();
+      if (error) throw error;
+      const updatedAt = String(data?.updated_at || '');
+      if (updatedAt) return { initialized:true, updated_at:updatedAt };
+    } catch (e) { console.warn('Supabase storefront stamp read failed; using local fallback:', (e as any)?.message || e); }
+  }
+  const payload = readAdminDataLocal()[storefrontStateKey];
+  const updatedAt = payload && typeof payload === 'object' ? String(payload.updated_at || '') : '';
+  return { initialized:Boolean(updatedAt), updated_at:updatedAt };
+};
+
 const writeSharedStorefrontState = async (input: {products:any[];categories:any[];settings:Record<string,any>}): Promise<SharedStorefrontState> => {
   const current = await readSharedStorefrontState();
   const next: SharedStorefrontState = {
@@ -886,6 +901,21 @@ const publicStorefrontSettings = (raw: Record<string, any>) => {
   }
   return out;
 };
+
+app.get('/api/storefront/version', async (_req,res) => {
+  res.set({
+    'Cache-Control':'no-store, no-cache, must-revalidate, proxy-revalidate',
+    'Pragma':'no-cache',
+    'Expires':'0',
+    'Surrogate-Control':'no-store',
+  });
+  try {
+    const stamp = await readSharedStorefrontStamp();
+    return res.json(stamp);
+  } catch (e:any) {
+    return res.status(500).json({ error:e?.message || 'Storefront version could not be loaded.' });
+  }
+});
 
 app.get('/api/storefront/state', async (_req,res) => {
   res.set({
