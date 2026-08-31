@@ -6,11 +6,9 @@ import {
   CheckCircle2,
   Clock,
   Truck,
-  Download,
   AlertCircle,
 } from 'lucide-react';
 import { useStore } from '../context/StoreContext';
-import { generateOrderInvoicePDF } from '../lib/pdfGenerator';
 import { formatLkr } from '../lib/currency';
 
 const trackingSteps = [
@@ -24,17 +22,19 @@ const trackingSteps = [
 ];
 
 export const OrderTrackingModal: React.FC = () => {
-  const { orders, isTrackingOpen, setIsTrackingOpen, settings } = useStore();
+  const { orders, isTrackingOpen, setIsTrackingOpen } = useStore();
   const [query, setQuery] = useState('');
   const [searchTriggered, setSearchTriggered] = useState(false);
 
   if (!isTrackingOpen) return null;
 
-  const foundOrders = searchTriggered && query.trim()
+  const normalizedQuery = query.trim().toLowerCase();
+  const foundOrders = searchTriggered && normalizedQuery
     ? orders.filter(
         (o) =>
-          o.order_number.toLowerCase().includes(query.trim().toLowerCase()) ||
-          o.phone.includes(query.trim())
+          o.order_number.toLowerCase().includes(normalizedQuery) ||
+          o.phone.includes(query.trim()) ||
+          String(o.waybill_number || '').toLowerCase().includes(normalizedQuery)
       )
     : [];
 
@@ -65,7 +65,7 @@ export const OrderTrackingModal: React.FC = () => {
                 setQuery(e.target.value);
                 setSearchTriggered(false);
               }}
-              placeholder="Enter Order ID (e.g. ORA-00001) or Phone Number"
+              placeholder="Enter Order ID, Phone Number or Waybill Number"
               className="w-full bg-gray-50 border border-gray-200 rounded-xl pl-9 pr-3 py-2.5 text-xs text-gray-900 placeholder-gray-400 focus:outline-none focus:border-orange-500"
             />
             <Search className="w-4 h-4 text-gray-400 absolute left-3 top-3" />
@@ -84,7 +84,7 @@ export const OrderTrackingModal: React.FC = () => {
             {foundOrders.length === 0 ? (
               <div className="text-center py-8 text-gray-400 text-xs space-y-1">
                 <AlertCircle className="w-8 h-8 text-gray-300 mx-auto" />
-                <p>No orders found matching "{query}". Please check your Order ID or phone number.</p>
+                <p>No orders found matching "{query}". Please check your Order ID, phone number or waybill number.</p>
               </div>
             ) : (
               foundOrders.map((order) => {
@@ -110,6 +110,11 @@ export const OrderTrackingModal: React.FC = () => {
                         <span className="text-[10px] text-gray-400 block">
                           Date: {new Date(order.created_at).toLocaleDateString()}
                         </span>
+                        {order.waybill_number && (
+                          <span className="text-[10px] text-gray-500 block mt-1">
+                            Waybill: <span className="font-mono font-bold text-gray-700">{order.waybill_number}</span>
+                          </span>
+                        )}
                       </div>
                       <span className="px-3 py-1 rounded-full bg-orange-100 text-orange-900 font-bold border border-orange-200">
                         {currentTrackingLabel}
@@ -157,19 +162,6 @@ export const OrderTrackingModal: React.FC = () => {
                         <span>Rs. {formatLkr(order.total_amount)}</span>
                       </div>
                     </div>
-
-                    {/* Download Invoice Button */}
-                    {order.invoice_locked ? (
-                      <button
-                        onClick={() => generateOrderInvoicePDF(order, settings)}
-                        className="w-full py-2.5 rounded-full bg-white border border-gray-200 text-gray-700 hover:text-orange-600 hover:border-orange-200 text-xs font-bold flex items-center justify-center space-x-2 transition-colors shadow-xs"
-                      >
-                        <Download className="w-3.5 h-3.5 text-orange-600" />
-                        <span>Download PDF Invoice</span>
-                      </button>
-                    ) : (
-                      <div className="w-full py-2.5 rounded-full bg-orange-50 border border-orange-100 text-orange-700 text-xs font-bold text-center">Invoice pending stock allocation / admin processing</div>
-                    )}
                   </div>
                 );
               })
