@@ -27,7 +27,7 @@ export const StoreFooter: React.FC = () => {
 
   return <footer className="mt-16 border-t border-slate-200 bg-slate-50 text-slate-600">
     <div className="border-b border-slate-200 bg-white">
-      <div className="mx-auto grid max-w-[1600px] grid-cols-1 gap-3 px-4 py-5 sm:grid-cols-3 sm:px-6 lg:px-8">
+      <div className="mx-auto grid max-w-none grid-cols-1 gap-3 px-4 py-5 sm:grid-cols-3 sm:px-6 lg:px-8">
         <div className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-orange-100 text-orange-600"><Truck className="h-5 w-5"/></div>
           <div><p className="text-xs font-black text-slate-900">{si?'දිවයින පුරා බෙදාහැරීම':'Islandwide Delivery'}</p><p className="mt-0.5 text-[10px] text-slate-500">{settings.free_delivery_enabled ? (si?'දැනට Delivery FREE':'Free delivery currently available') : (si?'විශ්වාසදායක courier delivery':'Reliable courier delivery')}</p></div>
@@ -43,7 +43,7 @@ export const StoreFooter: React.FC = () => {
       </div>
     </div>
 
-    <div className="mx-auto max-w-[1600px] px-4 py-10 sm:px-6 lg:px-8 lg:py-12">
+    <div className="mx-auto max-w-none px-4 py-10 sm:px-6 lg:px-8 lg:py-12">
       <div className="grid grid-cols-1 gap-9 sm:grid-cols-2 lg:grid-cols-5 lg:gap-8">
         <div className="space-y-4 lg:pr-5">
           {settings.website_logo
