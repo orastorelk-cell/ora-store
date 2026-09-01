@@ -157,3 +157,18 @@
   .ora-storefront [class~="text-base"] { font-size: 16.5px !important; }
   .ora-storefront [class~="text-lg"] { font-size: 19px !important; }
 }
+
+
+/* Fluid desktop storefront: use the available screen width at 100% browser zoom
+   and let product columns adapt naturally to the viewport. Mobile rules above
+   remain unchanged. */
+@media (min-width: 1024px) {
+  .ora-store-main {
+    width: 100%;
+    max-width: none;
+  }
+
+  .ora-product-grid {
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  }
+}
