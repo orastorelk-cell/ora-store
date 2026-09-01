@@ -54,14 +54,20 @@ export const confirmUploadPackingBatchPatch = () => ({
       }
 
       const oldType = "  importConfirmedOrdersCsv: (csvText: string, source?: OrderSource) => { confirmedCount: number; notFoundCount: number; ignoredCount: number; orderNumbers: string[]; errors: string[] };";
+      const oldAsyncType = "  importConfirmedOrdersCsv: (csvText: string, source?: OrderSource) => Promise<{ confirmedCount: number; notFoundCount: number; ignoredCount: number; orderNumbers: string[]; errors: string[] }>;";
       const newType = "  importConfirmedOrdersCsv: (csvText: string, source?: OrderSource, packingBatchId?: string) => { confirmedCount: number; notFoundCount: number; ignoredCount: number; orderNumbers: string[]; errors: string[] };";
-      if (text.includes(oldType)) text = text.replace(oldType, newType);
-      else if (!text.includes(newType)) throw new Error('[O-RA confirm invoice safety] StoreContext method type marker not found');
+      const newAsyncType = "  importConfirmedOrdersCsv: (csvText: string, source?: OrderSource, packingBatchId?: string) => Promise<{ confirmedCount: number; notFoundCount: number; ignoredCount: number; orderNumbers: string[]; errors: string[] }>;";
+      if (text.includes(oldAsyncType)) text = text.replace(oldAsyncType, newAsyncType);
+      else if (text.includes(oldType)) text = text.replace(oldType, newType);
+      else if (!text.includes(newAsyncType) && !text.includes(newType)) throw new Error('[O-RA confirm invoice safety] StoreContext method type marker not found');
 
       const oldSignature = "  const importConfirmedOrdersCsv = (csvText: string, source?: OrderSource) => {";
+      const oldAsyncSignature = "  const importConfirmedOrdersCsv = async (csvText: string, source?: OrderSource) => {";
       const newSignature = "  const importConfirmedOrdersCsv = (csvText: string, source?: OrderSource, packingBatchId?: string) => {";
-      if (text.includes(oldSignature)) text = text.replace(oldSignature, newSignature);
-      else if (!text.includes(newSignature)) throw new Error('[O-RA confirm invoice safety] importConfirmedOrdersCsv signature marker not found');
+      const newAsyncSignature = "  const importConfirmedOrdersCsv = async (csvText: string, source?: OrderSource, packingBatchId?: string) => {";
+      if (text.includes(oldAsyncSignature)) text = text.replace(oldAsyncSignature, newAsyncSignature);
+      else if (text.includes(oldSignature)) text = text.replace(oldSignature, newSignature);
+      else if (!text.includes(newAsyncSignature) && !text.includes(newSignature)) throw new Error('[O-RA confirm invoice safety] importConfirmedOrdersCsv signature marker not found');
 
       const indexMarker = "    const wrappingCostI=idx(['wrapping_cost_rs','wrapping_cost','gift_wrap_fee','wrapping_fee_rs','wrapping_fee']);";
       if (!text.includes('const applyItemChangeI=idx(')) {
@@ -183,8 +189,10 @@ export const confirmUploadPackingBatchPatch = () => ({
       }
 
       const oldImport = "        const result = importConfirmedOrdersCsv(await file.text());";
-      const newImport = "        const result = importConfirmedOrdersCsv(await file.text(), undefined, unifiedPackingBatchId);";
-      if (text.includes(oldImport)) text = text.replace(oldImport, newImport);
+      const oldAwaitImport = "        const result = await importConfirmedOrdersCsv(await file.text());";
+      const newImport = "        const result = await importConfirmedOrdersCsv(await file.text(), undefined, unifiedPackingBatchId);";
+      if (text.includes(oldAwaitImport)) text = text.replace(oldAwaitImport, newImport);
+      else if (text.includes(oldImport)) text = text.replace(oldImport, newImport);
       else if (!text.includes(newImport)) throw new Error('[O-RA confirm invoice safety] unified confirm import call marker not found');
     }
 
