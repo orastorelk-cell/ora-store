@@ -148,7 +148,7 @@ export const Header: React.FC = () => {
       )}
 
       {/* Main Header Container */}
-      <div className="w-full max-w-[1600px] mx-auto px-2.5 sm:px-6 lg:px-8 2xl:px-10 py-3">
+      <div className="w-full max-w-none mx-auto px-2.5 sm:px-6 lg:px-8 2xl:px-10 py-3">
         <div className="ora-mobile-header-row flex min-w-0 items-center justify-between gap-1 sm:gap-4">
           {/* Brand Logo & Name */}
           <div className="flex min-w-0 items-center space-x-3 shrink-0">
