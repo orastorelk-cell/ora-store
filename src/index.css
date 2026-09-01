@@ -169,7 +169,15 @@
   }
 
   .ora-product-grid {
-    grid-template-columns: repeat(auto-fill, minmax(260px, 300px));
-    justify-content: start;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: flex-start;
+  }
+
+  .ora-product-grid > * {
+    flex: 1 1 280px;
+    min-width: 0;
+    max-width: 310px;
   }
 }
