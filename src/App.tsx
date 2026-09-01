@@ -388,7 +388,11 @@ const CustomerStorefront: React.FC = () => {
           )}
 
           {filteredProducts.length > PAGE_SIZE && (
-            <div className="flex flex-wrap items-center justify-center gap-2 pt-4">
+            <div className="pt-4 space-y-2">
+              <div className="text-center text-[11px] font-medium text-gray-400">
+                Page {safeCurrentPage} of {totalPages}
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-2">
               <button
                 type="button"
                 onClick={() => {
@@ -433,6 +437,7 @@ const CustomerStorefront: React.FC = () => {
               >
                 ›
               </button>
+              </div>
             </div>
           )}
         </section>
