@@ -943,6 +943,8 @@ Suitable For:
   const [dispatchScanMessage, setDispatchScanMessage] = useState('');
   const [dispatchScanOk, setDispatchScanOk] = useState<boolean | null>(null);
   const [dispatchScanBusy, setDispatchScanBusy] = useState(false);
+  const [dispatchHistoryDateInput, setDispatchHistoryDateInput] = useState('');
+  const [dispatchHistoryDateFilter, setDispatchHistoryDateFilter] = useState('');
 
   const dispatchLocalDayKey = (value?: string) => {
     if (!value) return '';
@@ -990,6 +992,44 @@ Suitable For:
       dispatchLocalDayKey(o.dispatch_scanned_at) < dispatchTodayKey
     )
     .sort((a,b) => new Date(b.dispatch_scanned_at || 0).getTime() - new Date(a.dispatch_scanned_at || 0).getTime());
+  const dispatchFilteredHistory = dispatchHistoryDateFilter
+    ? dispatchPreviousHistory.filter((o) => dispatchLocalDayKey(o.dispatch_scanned_at) === dispatchHistoryDateFilter)
+    : [];
+
+  const downloadDispatchHistoryCsv = () => {
+    if (!dispatchHistoryDateFilter) {
+      alert('Select a date and press Search first.');
+      return;
+    }
+    if (!dispatchFilteredHistory.length) {
+      alert('No handover records found for the selected date.');
+      return;
+    }
+    const escapeCsv = (value: unknown) => {
+      const text = String(value ?? '');
+      return /[",\n]/.test(text) ? `"${text.replace(/"/g,'""')}"` : text;
+    };
+    const header = ['Date','Order ID','Waybill','Customer','Phone','Status','Scanned At','Scanned By'];
+    const rows = dispatchFilteredHistory.map((o) => [
+      dispatchLocalDayKey(o.dispatch_scanned_at),
+      o.order_number,
+      o.waybill_number || '',
+      o.customer_name,
+      o.phone,
+      'Handed Over',
+      o.dispatch_scanned_at ? new Date(o.dispatch_scanned_at).toLocaleString() : '',
+      o.dispatch_scanned_by || '',
+    ].map(escapeCsv).join(','));
+    const blob = new Blob([[header.join(','), ...rows].join('\n')], { type:'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `ora_dispatch_history_${dispatchHistoryDateFilter}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   const [cameraScannerMode,setCameraScannerMode]=useState<'dispatch'|'return'|null>(null);
   const scanAudioContextRef = useRef<AudioContext | null>(null);
@@ -4875,18 +4915,62 @@ Suitable For:
             </div>
           )}
 
-          <details className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden">
-            <summary className="cursor-pointer select-none p-4 font-bold text-white">
-              Previous Days Handover History ({dispatchPreviousHistory.length})
-              <span className="ml-2 text-[10px] font-normal text-neutral-500">Click to view</span>
-            </summary>
-            <div className="border-t border-neutral-800 overflow-x-auto">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden">
+            <div className="p-4 border-b border-neutral-800 space-y-3">
+              <div>
+                <h3 className="font-bold text-white">Previous Days Handover History</h3>
+                <p className="text-[10px] text-neutral-500">Choose a date to show only that day's scanned handovers.</p>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
+                <label className="text-[10px] font-bold text-neutral-400">
+                  DATE
+                  <input
+                    type="date"
+                    max={dispatchTodayKey}
+                    value={dispatchHistoryDateInput}
+                    onChange={(e) => setDispatchHistoryDateInput(e.target.value)}
+                    className="mt-1 block rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2.5 text-xs text-white"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setDispatchHistoryDateFilter(dispatchHistoryDateInput)}
+                  disabled={!dispatchHistoryDateInput}
+                  className="rounded-xl bg-orange-500 px-4 py-2.5 text-xs font-black text-black disabled:opacity-40"
+                >
+                  Search
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setDispatchHistoryDateInput(''); setDispatchHistoryDateFilter(''); }}
+                  className="rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-2.5 text-xs font-bold text-neutral-300"
+                >
+                  Clear
+                </button>
+                <button
+                  type="button"
+                  onClick={downloadDispatchHistoryCsv}
+                  disabled={!dispatchHistoryDateFilter || dispatchFilteredHistory.length === 0}
+                  className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2.5 text-xs font-black text-emerald-300 disabled:opacity-40"
+                >
+                  <Download className="mr-1 inline h-4 w-4"/> Download CSV
+                </button>
+                {dispatchHistoryDateFilter && (
+                  <span className="text-[10px] font-bold text-neutral-400 sm:ml-auto">
+                    {dispatchFilteredHistory.length} record{dispatchFilteredHistory.length === 1 ? '' : 's'}
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="overflow-x-auto">
               <table className="w-full text-xs text-left text-neutral-300">
                 <thead className="bg-neutral-950 text-[10px] uppercase text-neutral-500"><tr><th className="p-3">Order</th><th className="p-3">Waybill</th><th className="p-3">Customer</th><th className="p-3">Status</th><th className="p-3">Scanned At</th><th className="p-3">By</th></tr></thead>
                 <tbody className="divide-y divide-neutral-800">
-                  {dispatchPreviousHistory.length === 0 ? (
-                    <tr><td colSpan={6} className="p-6 text-center text-neutral-500">No previous handover records.</td></tr>
-                  ) : dispatchPreviousHistory.map((o) => (
+                  {!dispatchHistoryDateFilter ? (
+                    <tr><td colSpan={6} className="p-6 text-center text-neutral-500">Select a date and press Search.</td></tr>
+                  ) : dispatchFilteredHistory.length === 0 ? (
+                    <tr><td colSpan={6} className="p-6 text-center text-neutral-500">No handover records for {dispatchHistoryDateFilter}.</td></tr>
+                  ) : dispatchFilteredHistory.map((o) => (
                     <tr key={o.id}>
                       <td className="p-3 font-mono text-orange-400">{o.order_number}</td>
                       <td className="p-3 font-mono">{o.waybill_number || '—'}</td>
@@ -4899,7 +4983,7 @@ Suitable For:
                 </tbody>
               </table>
             </div>
-          </details>
+          </div>
         </div>
       )}
 
