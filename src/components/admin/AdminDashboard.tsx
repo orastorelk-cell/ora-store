@@ -943,6 +943,54 @@ Suitable For:
   const [dispatchScanMessage, setDispatchScanMessage] = useState('');
   const [dispatchScanOk, setDispatchScanOk] = useState<boolean | null>(null);
   const [dispatchScanBusy, setDispatchScanBusy] = useState(false);
+
+  const dispatchLocalDayKey = (value?: string) => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+  };
+  const dispatchTodayKey = dispatchLocalDayKey(new Date().toISOString());
+  const dispatchReadyDate = (order: Order) =>
+    order.invoice_pack_downloaded_at || order.invoice_generated_at || order.created_at;
+  const dispatchReadyToday = orders.filter((o) =>
+    o.invoice_locked &&
+    o.stock_allocated &&
+    Boolean(o.waybill_number) &&
+    o.dispatch_status !== 'Handed Over' &&
+    o.order_status !== 'Cancelled' &&
+    dispatchLocalDayKey(dispatchReadyDate(o)) === dispatchTodayKey
+  );
+  const dispatchScannedToday = orders.filter((o) =>
+    o.dispatch_status === 'Handed Over' &&
+    dispatchLocalDayKey(o.dispatch_scanned_at) === dispatchTodayKey
+  );
+  const dispatchTodayOrderIds = new Set([
+    ...dispatchReadyToday.map((o) => o.id),
+    ...dispatchScannedToday.map((o) => o.id),
+  ]);
+  const dispatchTodayRows = orders
+    .filter((o) => dispatchTodayOrderIds.has(o.id))
+    .sort((a,b) => new Date(b.dispatch_scanned_at || dispatchReadyDate(b)).getTime() - new Date(a.dispatch_scanned_at || dispatchReadyDate(a)).getTime());
+  const dispatchMissedPrevious = orders
+    .filter((o) =>
+      o.invoice_locked &&
+      o.stock_allocated &&
+      Boolean(o.waybill_number) &&
+      o.dispatch_status !== 'Handed Over' &&
+      o.order_status !== 'Cancelled' &&
+      Boolean(dispatchLocalDayKey(dispatchReadyDate(o))) &&
+      dispatchLocalDayKey(dispatchReadyDate(o)) < dispatchTodayKey
+    )
+    .sort((a,b) => new Date(dispatchReadyDate(a)).getTime() - new Date(dispatchReadyDate(b)).getTime());
+  const dispatchPreviousHistory = orders
+    .filter((o) =>
+      o.dispatch_status === 'Handed Over' &&
+      Boolean(o.dispatch_scanned_at) &&
+      dispatchLocalDayKey(o.dispatch_scanned_at) < dispatchTodayKey
+    )
+    .sort((a,b) => new Date(b.dispatch_scanned_at || 0).getTime() - new Date(a.dispatch_scanned_at || 0).getTime());
+
   const [cameraScannerMode,setCameraScannerMode]=useState<'dispatch'|'return'|null>(null);
   const scanAudioContextRef = useRef<AudioContext | null>(null);
   const dispatchScanBusyRef = useRef(false);
@@ -4770,15 +4818,88 @@ Suitable For:
             {dispatchScanMessage && <div className={`rounded-xl p-3 text-xs font-bold ${dispatchScanOk === true ? 'bg-emerald-950/40 border border-emerald-700 text-emerald-300' : dispatchScanOk === false ? 'bg-red-950/40 border border-red-800 text-red-300' : 'bg-blue-950/40 border border-blue-700 text-blue-300'}`}>{dispatchScanMessage}</div>}
             <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 px-3 py-2 text-[10px] text-blue-200">Successful Waybill scan = short beep + phone vibration. The same Waybill can be recorded only once; a second scan shows <b>Already Scanned</b> and is not recorded again.</div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-3"><p className="text-[10px] text-neutral-500">READY TO SCAN</p><p className="text-xl font-bold text-orange-400">{orders.filter((o) => o.invoice_locked && o.stock_allocated && o.waybill_number && o.dispatch_status !== 'Handed Over').length}</p></div>
-              <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-3"><p className="text-[10px] text-neutral-500">HANDOVER RECORDED</p><p className="text-xl font-bold text-emerald-400">{orders.filter((o) => o.dispatch_status === 'Handed Over').length}</p></div>
-              <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-3"><p className="text-[10px] text-neutral-500">TODAY</p><p className="text-xl font-bold text-blue-400">{orders.filter((o) => o.dispatch_scanned_at && new Date(o.dispatch_scanned_at).toDateString() === new Date().toDateString()).length}</p></div>
+              <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-3"><p className="text-[10px] text-neutral-500">READY TO SCAN TODAY</p><p className="text-xl font-bold text-orange-400">{dispatchReadyToday.length}</p></div>
+              <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-3"><p className="text-[10px] text-neutral-500">HANDOVER TODAY</p><p className="text-xl font-bold text-emerald-400">{dispatchScannedToday.length}</p></div>
+              <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-3"><p className="text-[10px] text-neutral-500">MISSED PREVIOUS</p><p className="text-xl font-bold text-amber-400">{dispatchMissedPrevious.length}</p></div>
             </div>
           </div>
+
           <div className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden">
-            <div className="p-4 border-b border-neutral-800"><h3 className="font-bold text-white">Dispatch Evidence Log</h3><p className="text-[10px] text-neutral-500">Internal handover evidence. Fardar tracking can later continue from the same saved waybill.</p></div>
-            <div className="overflow-x-auto"><table className="w-full text-xs text-left text-neutral-300"><thead className="bg-neutral-950 text-[10px] uppercase text-neutral-500"><tr><th className="p-3">Order</th><th className="p-3">Waybill</th><th className="p-3">Customer</th><th className="p-3">Status</th><th className="p-3">Scanned At</th><th className="p-3">By</th></tr></thead><tbody className="divide-y divide-neutral-800">{orders.filter((o) => o.invoice_locked).map((o) => <tr key={o.id}><td className="p-3 font-mono text-orange-400">{o.order_number}</td><td className="p-3 font-mono">{o.waybill_number || '—'}</td><td className="p-3">{o.customer_name}</td><td className={`p-3 font-bold ${o.dispatch_status === 'Handed Over' ? 'text-emerald-400':'text-orange-400'}`}>{o.dispatch_status || 'Not Scanned'}</td><td className="p-3">{o.dispatch_scanned_at ? new Date(o.dispatch_scanned_at).toLocaleString() : '—'}</td><td className="p-3">{o.dispatch_scanned_by || '—'}</td></tr>)}</tbody></table></div>
+            <div className="p-4 border-b border-neutral-800">
+              <h3 className="font-bold text-white">Today's Dispatch</h3>
+              <p className="text-[10px] text-neutral-500">Only today's ready / scanned waybills are shown here.</p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left text-neutral-300">
+                <thead className="bg-neutral-950 text-[10px] uppercase text-neutral-500"><tr><th className="p-3">Order</th><th className="p-3">Waybill</th><th className="p-3">Customer</th><th className="p-3">Status</th><th className="p-3">Scanned At</th><th className="p-3">By</th></tr></thead>
+                <tbody className="divide-y divide-neutral-800">
+                  {dispatchTodayRows.length === 0 ? (
+                    <tr><td colSpan={6} className="p-6 text-center text-neutral-500">No waybills for today's dispatch yet.</td></tr>
+                  ) : dispatchTodayRows.map((o) => (
+                    <tr key={o.id}>
+                      <td className="p-3 font-mono text-orange-400">{o.order_number}</td>
+                      <td className="p-3 font-mono">{o.waybill_number || '—'}</td>
+                      <td className="p-3">{o.customer_name}</td>
+                      <td className={`p-3 font-bold ${o.dispatch_status === 'Handed Over' ? 'text-emerald-400':'text-orange-400'}`}>{o.dispatch_status || 'Not Scanned'}</td>
+                      <td className="p-3">{o.dispatch_scanned_at ? new Date(o.dispatch_scanned_at).toLocaleString() : '—'}</td>
+                      <td className="p-3">{o.dispatch_scanned_by || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
+
+          {dispatchMissedPrevious.length > 0 && (
+            <div className="bg-neutral-900 border border-amber-500/30 rounded-2xl overflow-hidden">
+              <div className="p-4 border-b border-amber-500/20">
+                <h3 className="font-bold text-amber-300">Missed from Previous Days ({dispatchMissedPrevious.length})</h3>
+                <p className="text-[10px] text-neutral-500">Only older ready waybills that were not scanned are shown here.</p>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left text-neutral-300">
+                  <thead className="bg-neutral-950 text-[10px] uppercase text-neutral-500"><tr><th className="p-3">Order</th><th className="p-3">Waybill</th><th className="p-3">Customer</th><th className="p-3">Ready Date</th><th className="p-3">Status</th></tr></thead>
+                  <tbody className="divide-y divide-neutral-800">
+                    {dispatchMissedPrevious.map((o) => (
+                      <tr key={o.id}>
+                        <td className="p-3 font-mono text-amber-300">{o.order_number}</td>
+                        <td className="p-3 font-mono">{o.waybill_number || '—'}</td>
+                        <td className="p-3">{o.customer_name}</td>
+                        <td className="p-3">{new Date(dispatchReadyDate(o)).toLocaleDateString()}</td>
+                        <td className="p-3 font-bold text-amber-300">Not Scanned</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          <details className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden">
+            <summary className="cursor-pointer select-none p-4 font-bold text-white">
+              Previous Days Handover History ({dispatchPreviousHistory.length})
+              <span className="ml-2 text-[10px] font-normal text-neutral-500">Click to view</span>
+            </summary>
+            <div className="border-t border-neutral-800 overflow-x-auto">
+              <table className="w-full text-xs text-left text-neutral-300">
+                <thead className="bg-neutral-950 text-[10px] uppercase text-neutral-500"><tr><th className="p-3">Order</th><th className="p-3">Waybill</th><th className="p-3">Customer</th><th className="p-3">Status</th><th className="p-3">Scanned At</th><th className="p-3">By</th></tr></thead>
+                <tbody className="divide-y divide-neutral-800">
+                  {dispatchPreviousHistory.length === 0 ? (
+                    <tr><td colSpan={6} className="p-6 text-center text-neutral-500">No previous handover records.</td></tr>
+                  ) : dispatchPreviousHistory.map((o) => (
+                    <tr key={o.id}>
+                      <td className="p-3 font-mono text-orange-400">{o.order_number}</td>
+                      <td className="p-3 font-mono">{o.waybill_number || '—'}</td>
+                      <td className="p-3">{o.customer_name}</td>
+                      <td className="p-3 font-bold text-emerald-400">Handed Over</td>
+                      <td className="p-3">{o.dispatch_scanned_at ? new Date(o.dispatch_scanned_at).toLocaleString() : '—'}</td>
+                      <td className="p-3">{o.dispatch_scanned_by || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
         </div>
       )}
 
