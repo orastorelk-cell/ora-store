@@ -1358,8 +1358,8 @@ Suitable For:
 
   const handleWebsiteConfirmedCsvUpload = (file: File) => {
     const r = new FileReader();
-    r.onload = () => {
-      const result = importWebsiteConfirmedCsv(String(r.result || ''));
+    r.onload = async () => {
+      const result = await importWebsiteConfirmedCsv(String(r.result || ''));
       setUploadBatches(prev => ({
         ...prev,
         Website: {
@@ -1378,8 +1378,8 @@ Suitable For:
 
   const handleSourceConfirmedCsvUpload = (file:File,source:'Facebook Ads'|'TikTok Ads') => {
     const r=new FileReader();
-    r.onload=()=>{
-      const result=importConfirmedOrdersCsv(String(r.result||''),source);
+    r.onload=async ()=>{
+      const result=await importConfirmedOrdersCsv(String(r.result||''),source);
       const key=source==='Facebook Ads'?'Facebook':'TikTok';
       setUploadBatches(prev=>({...prev,[key]:{orderNumbers:result.orderNumbers,uploaded:result.confirmedCount,failed:result.notFoundCount,ignored:result.ignoredCount,errors:result.errors,at:new Date().toISOString()}}));
       alert(`${key} Confirm + Cancel Upload\nProcessed: ${result.confirmedCount}\nNot Found: ${result.notFoundCount}\nIgnored: ${result.ignoredCount}${result.errors.length?`\n\n${result.errors.join('\n')}`:''}`);
