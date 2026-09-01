@@ -373,6 +373,12 @@ const CustomerStorefront: React.FC = () => {
             onClearAll={() => resetCatalogFilters(false)}
           />
 
+          {filteredProducts.length > PAGE_SIZE && (
+            <div className="text-[11px] font-medium text-gray-400">
+              Page {safeCurrentPage} of {totalPages}
+            </div>
+          )}
+
           {filteredProducts.length === 0 ? (
             <div className="py-16 text-center bg-white rounded-3xl border border-gray-100 space-y-2">
               <p className="text-sm text-gray-500 font-medium">
@@ -388,11 +394,7 @@ const CustomerStorefront: React.FC = () => {
           )}
 
           {filteredProducts.length > PAGE_SIZE && (
-            <div className="pt-4 space-y-2">
-              <div className="text-center text-[11px] font-medium text-gray-400">
-                Page {safeCurrentPage} of {totalPages}
-              </div>
-              <div className="flex flex-wrap items-center justify-center gap-2">
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-4">
               <button
                 type="button"
                 onClick={() => {
@@ -437,7 +439,6 @@ const CustomerStorefront: React.FC = () => {
               >
                 ›
               </button>
-              </div>
             </div>
           )}
         </section>
