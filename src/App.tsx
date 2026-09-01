@@ -323,7 +323,7 @@ const CustomerStorefront: React.FC = () => {
       <Header />
 
       {/* Main Container */}
-      <main className="ora-store-main max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 pt-6 space-y-10">
+      <main className="ora-store-main w-full max-w-none mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 pt-6 space-y-10">
         {/* Hero Section */}
         <HeroBanner onBrowseAll={() => resetCatalogFilters(true)} />
 
