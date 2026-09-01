@@ -61,6 +61,7 @@ import {
   Award,
   Bell,
   ChevronDown,
+  CalendarDays,
 } from 'lucide-react';
 import { useStore } from '../../context/StoreContext';
 import {
@@ -4924,13 +4925,40 @@ Suitable For:
               <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
                 <label className="text-[10px] font-bold text-neutral-400">
                   DATE
-                  <input
-                    type="date"
-                    max={dispatchTodayKey}
-                    value={dispatchHistoryDateInput}
-                    onChange={(e) => setDispatchHistoryDateInput(e.target.value)}
-                    className="mt-1 block rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2.5 text-xs text-white"
-                  />
+                  <div className="relative mt-1">
+                    <input
+                      id="dispatch-history-date"
+                      type="date"
+                      max={dispatchTodayKey}
+                      value={dispatchHistoryDateInput}
+                      onChange={(e) => setDispatchHistoryDateInput(e.target.value)}
+                      onClick={(e) => {
+                        const input=e.currentTarget;
+                        if (typeof input.showPicker === 'function') {
+                          try { input.showPicker(); } catch {}
+                        }
+                      }}
+                      onKeyDown={(e) => e.preventDefault()}
+                      onPaste={(e) => e.preventDefault()}
+                      inputMode="none"
+                      className="block min-w-[170px] cursor-pointer rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2.5 pr-10 text-xs text-white [color-scheme:dark]"
+                    />
+                    <button
+                      type="button"
+                      aria-label="Open date calendar"
+                      onClick={() => {
+                        const input=document.getElementById('dispatch-history-date') as HTMLInputElement | null;
+                        if (!input) return;
+                        input.focus();
+                        if (typeof input.showPicker === 'function') {
+                          try { input.showPicker(); } catch {}
+                        }
+                      }}
+                      className="absolute inset-y-0 right-1 flex w-9 items-center justify-center text-orange-400 hover:text-orange-300"
+                    >
+                      <CalendarDays className="h-4 w-4"/>
+                    </button>
+                  </div>
                 </label>
                 <button
                   type="button"
