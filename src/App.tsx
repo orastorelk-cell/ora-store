@@ -124,7 +124,7 @@ const CustomerStorefront: React.FC = () => {
 
 
   const PAGE_SIZE = 24;
-  const [visibleCount, setVisibleCount] = React.useState(PAGE_SIZE);
+  const [currentPage, setCurrentPage] = React.useState(1);
   const [sortMode, setSortMode] = React.useState<CatalogSortMode>('relevance');
   const [priceRange, setPriceRange] = React.useState<CatalogPriceRange>('all');
 
@@ -133,7 +133,7 @@ const CustomerStorefront: React.FC = () => {
     setSearchQuery('');
     setPriceRange('all');
     setSortMode('relevance');
-    setVisibleCount(PAGE_SIZE);
+    setCurrentPage(1);
     if (scrollToProducts) {
       window.setTimeout(() => document.getElementById('products-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
     }
@@ -219,11 +219,13 @@ const CustomerStorefront: React.FC = () => {
   }, [products, categories, selectedCategorySlug, searchQuery, sortMode, priceRange, customerPrice, customerPrices, matchesPriceRange]);
 
   React.useEffect(() => {
-    setVisibleCount(PAGE_SIZE);
+    setCurrentPage(1);
   }, [selectedCategorySlug, searchQuery, sortMode, priceRange]);
 
-  const visibleProducts = filteredProducts.slice(0, visibleCount);
-  const hasMoreProducts = visibleCount < filteredProducts.length;
+  const totalPages = Math.max(1, Math.ceil(filteredProducts.length / PAGE_SIZE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const pageStart = (safeCurrentPage - 1) * PAGE_SIZE;
+  const visibleProducts = filteredProducts.slice(pageStart, pageStart + PAGE_SIZE);
 
   const categoryFilterOptions = React.useMemo(() => {
     const rows = categories
@@ -362,7 +364,7 @@ const CustomerStorefront: React.FC = () => {
             selectedCategorySlug={selectedCategorySlug}
             priceRange={priceRange}
             sortMode={sortMode}
-            visibleCount={Math.min(visibleCount, filteredProducts.length)}
+            visibleCount={visibleProducts.length}
             totalCount={filteredProducts.length}
             hasActiveFilters={hasActiveCatalogFilters}
             onCategoryChange={setSelectedCategorySlug}
@@ -385,14 +387,51 @@ const CustomerStorefront: React.FC = () => {
             </div>
           )}
 
-          {hasMoreProducts && (
-            <div className="flex justify-center pt-4">
+          {filteredProducts.length > PAGE_SIZE && (
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-4">
               <button
                 type="button"
-                onClick={() => setVisibleCount((count) => count + PAGE_SIZE)}
-                className="px-6 py-2.5 rounded-xl bg-gray-900 text-white text-sm font-bold hover:bg-orange-600 transition-colors"
+                onClick={() => {
+                  setCurrentPage((page) => Math.max(1, page - 1));
+                  window.setTimeout(() => document.getElementById('products-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+                }}
+                disabled={safeCurrentPage === 1}
+                className="min-w-10 h-10 px-3 rounded-xl border border-gray-200 bg-white text-gray-700 text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed hover:border-orange-300 hover:text-orange-600 transition-colors"
+                aria-label="Previous page"
               >
-                Load 24 More
+                ‹
+              </button>
+
+              {Array.from({ length: totalPages }, (_, index) => index + 1).map((page) => (
+                <button
+                  key={page}
+                  type="button"
+                  onClick={() => {
+                    setCurrentPage(page);
+                    window.setTimeout(() => document.getElementById('products-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+                  }}
+                  className={`min-w-10 h-10 px-3 rounded-xl text-sm font-bold transition-colors ${
+                    page === safeCurrentPage
+                      ? 'bg-gray-900 text-white'
+                      : 'border border-gray-200 bg-white text-gray-700 hover:border-orange-300 hover:text-orange-600'
+                  }`}
+                  aria-current={page === safeCurrentPage ? 'page' : undefined}
+                >
+                  {page}
+                </button>
+              ))}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setCurrentPage((page) => Math.min(totalPages, page + 1));
+                  window.setTimeout(() => document.getElementById('products-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+                }}
+                disabled={safeCurrentPage === totalPages}
+                className="min-w-10 h-10 px-3 rounded-xl border border-gray-200 bg-white text-gray-700 text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed hover:border-orange-300 hover:text-orange-600 transition-colors"
+                aria-label="Next page"
+              >
+                ›
               </button>
             </div>
           )}
