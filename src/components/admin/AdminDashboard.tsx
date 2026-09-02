@@ -7492,6 +7492,52 @@ Suitable For:
             <div className="space-y-3">
               {purchaseLines.map((line,index)=>{
                 const product=products.find((p)=>p.id===line.product_id);
+                const selectedPurchaseVariant=product && line.variant_id ? variantById(product,line.variant_id) : undefined;
+                const selectedPurchaseCode=String(selectedPurchaseVariant?.sku || product?.sku || '').trim().toUpperCase();
+                const purchaseSearchQuery=String(line.item_code || '').trim().toLowerCase();
+                const hasExactPurchaseSelection=Boolean(product && selectedPurchaseCode && selectedPurchaseCode===String(line.item_code || '').trim().toUpperCase());
+                const purchaseSearchResults = !purchaseSearchQuery || hasExactPurchaseSelection ? [] : products.flatMap((candidate)=>{
+                  const type=normalizedProductType(candidate);
+                  if(type==='bundle') return [];
+                  const productHaystack=[
+                    candidate.sku,
+                    candidate.name_en,
+                    candidate.name_si,
+                    candidate.search_keywords,
+                  ].map((value)=>String(value || '').toLowerCase());
+                  const productMatches=productHaystack.some((value)=>value.includes(purchaseSearchQuery));
+
+                  if(type==='variant'){
+                    return (candidate.variants || [])
+                      .filter((variant)=>variant.status!=='Draft')
+                      .filter((variant)=>{
+                        if(productMatches) return true;
+                        const variantHaystack=[
+                          variant.sku,
+                          variant.option_value,
+                          ...(variant.options || []).flatMap((option)=>[option.name,option.value]),
+                        ].map((value)=>String(value || '').toLowerCase());
+                        return variantHaystack.some((value)=>value.includes(purchaseSearchQuery));
+                      })
+                      .map((variant)=>({
+                        product:candidate,
+                        variant,
+                        sku:String(variant.sku || '').trim().toUpperCase(),
+                        label:`${candidate.name_en} • ${variant.option_value || variant.sku}`,
+                        stock:Number(variant.stock_quantity || 0),
+                        buying:Number(variant.buying_price || 0),
+                      }));
+                  }
+
+                  return productMatches ? [{
+                    product:candidate,
+                    variant:undefined as ProductVariant | undefined,
+                    sku:String(candidate.sku || '').trim().toUpperCase(),
+                    label:candidate.name_en,
+                    stock:Number(candidate.stock_quantity || 0),
+                    buying:Number(candidate.buying_price || 0),
+                  }] : [];
+                }).slice(0,10);
                 const lineTotal=Math.max(0,Number(line.quantity_added||0))*Math.max(0,Number(line.unit_buying_price||0));
                 return (
                   <div key={line.id} className="rounded-2xl border border-neutral-800 bg-neutral-900/70 p-4 space-y-3">
@@ -7512,47 +7558,86 @@ Suitable For:
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <label className="text-xs text-neutral-400 sm:col-span-2">Item Code
-                        <input
-                          type="text"
-                          required
-                          value={line.item_code}
-                          onChange={(e)=>{
-                            const code=e.target.value.toUpperCase().trim();
-                            setPurchaseLines((prev)=>prev.map((row)=>{
-                              if(row.id!==line.id) return row;
+                      <div className="sm:col-span-2">
+                        <label className="text-xs text-neutral-400">Item Code or Item Name
+                          <input
+                            type="text"
+                            required
+                            value={line.item_code}
+                            onChange={(e)=>{
+                              const raw=e.target.value;
+                              const code=raw.trim().toUpperCase();
+                              setPurchaseLines((prev)=>prev.map((row)=>{
+                                if(row.id!==line.id) return row;
 
-                              let matchedProduct=products.find((p)=>normalizedProductType(p)!=='bundle' && String(p.sku||'').toUpperCase()===code);
-                              let matchedVariantId='';
-                              let matchedVariant:ProductVariant | undefined;
+                                let matchedProduct=products.find((p)=>normalizedProductType(p)!=='bundle' && String(p.sku||'').trim().toUpperCase()===code);
+                                let matchedVariantId='';
+                                let matchedVariant:ProductVariant | undefined;
 
-                              if(!matchedProduct){
-                                for(const candidate of products){
-                                  if(normalizedProductType(candidate)!=='variant') continue;
-                                  const found=(candidate.variants||[]).find((v)=>String(v.sku||'').toUpperCase()===code);
-                                  if(found){
-                                    matchedProduct=candidate;
-                                    matchedVariantId=found.id;
-                                    matchedVariant=found;
-                                    break;
+                                if(!matchedProduct && code){
+                                  for(const candidate of products){
+                                    if(normalizedProductType(candidate)!=='variant') continue;
+                                    const found=(candidate.variants||[]).find((v)=>String(v.sku||'').trim().toUpperCase()===code);
+                                    if(found){
+                                      matchedProduct=candidate;
+                                      matchedVariantId=found.id;
+                                      matchedVariant=found;
+                                      break;
+                                    }
                                   }
                                 }
-                              }
 
-                              if(!matchedProduct) return {...row,item_code:code,product_id:'',variant_id:'',unit_buying_price:0};
-                              return {
-                                ...row,
-                                item_code:code,
-                                product_id:matchedProduct.id,
-                                variant_id:matchedVariantId,
-                                unit_buying_price:Number(matchedVariant?.buying_price ?? matchedProduct.buying_price ?? 0),
-                              };
-                            }));
-                          }}
-                          placeholder="S0001 / variant SKU"
-                          className="mt-1 w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2.5 text-white"
-                        />
-                      </label>
+                                if(!matchedProduct) return {...row,item_code:raw,product_id:'',variant_id:'',unit_buying_price:0};
+                                return {
+                                  ...row,
+                                  item_code:code,
+                                  product_id:matchedProduct.id,
+                                  variant_id:matchedVariantId,
+                                  unit_buying_price:Number(matchedVariant?.buying_price ?? matchedProduct.buying_price ?? 0),
+                                };
+                              }));
+                            }}
+                            placeholder="Type Item Code or part of Item Name..."
+                            autoComplete="off"
+                            className="mt-1 w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2.5 text-white"
+                          />
+                        </label>
+
+                        {purchaseSearchQuery && !hasExactPurchaseSelection && (
+                          <div className="mt-1 overflow-hidden rounded-xl border border-amber-500/30 bg-neutral-950 shadow-xl">
+                            {purchaseSearchResults.length ? (
+                              <div className="max-h-64 overflow-y-auto divide-y divide-neutral-800">
+                                {purchaseSearchResults.map((result)=>(
+                                  <button
+                                    key={`${line.id}-${result.sku}`}
+                                    type="button"
+                                    onClick={()=>setPurchaseLines((prev)=>prev.map((row)=>row.id===line.id ? {
+                                      ...row,
+                                      item_code:result.sku,
+                                      product_id:result.product.id,
+                                      variant_id:result.variant?.id || '',
+                                      unit_buying_price:result.buying,
+                                    } : row))}
+                                    className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-amber-500/10"
+                                  >
+                                    <div className="min-w-0">
+                                      <p className="truncate text-xs font-black text-white">{result.label}</p>
+                                      <p className="mt-0.5 font-mono text-[10px] font-bold text-amber-400">{result.sku}</p>
+                                    </div>
+                                    <div className="shrink-0 text-right">
+                                      <p className="text-[10px] font-bold text-neutral-400">Stock {result.stock}</p>
+                                      <p className="text-[9px] text-neutral-600">Buy Rs. {result.buying.toLocaleString()}</p>
+                                    </div>
+                                  </button>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="px-3 py-3 text-[10px] text-neutral-500">No matching Item Code / Item Name.</div>
+                            )}
+                          </div>
+                        )}
+                        <p className="mt-1 text-[9px] text-neutral-600">You can still type the exact Item Code, or search by any word from the product name.</p>
+                      </div>
 
                       {product && normalizedProductType(product)==='variant' && (
                         <label className="text-xs text-neutral-400 sm:col-span-2">Color / Variant *
