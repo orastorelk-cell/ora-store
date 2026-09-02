@@ -104,6 +104,14 @@ export const adminDashboardFardarHistoryPatch = () => ({
           Boolean(order.waybill_number) &&
           order.order_status !== 'Cancelled'
         );
+        const selectedDateNewReadyOrders = selectedDateReadyOrders.filter(order =>
+          order.dispatch_status !== 'Handed Over' &&
+          !(
+            order.fardar_csv_exported_at &&
+            order.fardar_csv_exported_waybill &&
+            String(order.fardar_csv_exported_waybill) === String(order.waybill_number || '')
+          )
+        );
 `;
       text = text.replace(countsMarker, countsMarker + historyDerived);
     }
@@ -118,7 +126,7 @@ export const adminDashboardFardarHistoryPatch = () => ({
                 <div>
                   <p className="text-xs font-black uppercase tracking-wider text-violet-700">Fardar CSV History</p>
                   <h3 className="mt-1 text-base font-black text-gray-900">Download any previous Confirm upload again</h3>
-                  <p className="mt-1 text-[11px] leading-5 text-gray-500">New uploads are added to history instead of replacing older batches. Choose a date, then download the whole date or one specific batch.</p>
+                  <p className="mt-1 text-[11px] leading-5 text-gray-500">New Fardar CSV excludes orders already exported before. Use Re-download Full only when you intentionally need the complete old batch again.</p>
                 </div>
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
                   <label className="text-[10px] font-black uppercase tracking-wide text-gray-600">
@@ -132,10 +140,16 @@ export const adminDashboardFardarHistoryPatch = () => ({
                   </label>
                   <button
                     type="button"
-                    disabled={selectedDateReadyOrders.length === 0}
-                    onClick={()=>void downloadFardarUploadCsv(selectedDateOrders, selectedFardarHistoryDate || 'selected-date', true)}
+                    disabled={selectedDateNewReadyOrders.length === 0}
+                    onClick={()=>void downloadFardarUploadCsv(selectedDateOrders, selectedFardarHistoryDate || 'selected-date')}
                     className="rounded-xl border border-violet-300 bg-violet-50 px-4 py-2.5 text-xs font-black text-violet-800 disabled:opacity-40"
-                  ><Download className="mr-1 inline h-4 w-4"/> Download Date CSV ({selectedDateReadyOrders.length})</button>
+                  ><Download className="mr-1 inline h-4 w-4"/> New Fardar CSV ({selectedDateNewReadyOrders.length})</button>
+                  <button
+                    type="button"
+                    disabled={selectedDateReadyOrders.length === 0}
+                    onClick={()=>void downloadFardarUploadCsv(selectedDateOrders, (selectedFardarHistoryDate || 'selected-date') + '_FULL', true)}
+                    className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-xs font-black text-gray-700 disabled:opacity-40"
+                  ><Download className="mr-1 inline h-4 w-4"/> Re-download Full ({selectedDateReadyOrders.length})</button>
                 </div>
               </div>
 
@@ -143,7 +157,7 @@ export const adminDashboardFardarHistoryPatch = () => ({
                 <span className="rounded-lg bg-violet-100 px-2.5 py-1.5 text-violet-800">Saved Batches {unifiedConfirmHistory.length}</span>
                 <span className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-slate-700">Selected Date {selectedFardarHistoryDate || '—'}</span>
                 <span className="rounded-lg bg-emerald-100 px-2.5 py-1.5 text-emerald-800">Date Batches {selectedDateBatches.length}</span>
-                <span className="rounded-lg bg-cyan-100 px-2.5 py-1.5 text-cyan-800">Waybill Ready {selectedDateReadyOrders.length}</span>
+                <span className="rounded-lg bg-cyan-100 px-2.5 py-1.5 text-cyan-800">New Fardar Ready {selectedDateNewReadyOrders.length}</span>
               </div>
 
               {selectedDateBatches.length === 0 ? (
@@ -158,6 +172,14 @@ export const adminDashboardFardarHistoryPatch = () => ({
                       Boolean(order.waybill_number) &&
                       order.order_status !== 'Cancelled'
                     );
+                    const historyBatchNewReady = historyBatchReady.filter(order =>
+                      order.dispatch_status !== 'Handed Over' &&
+                      !(
+                        order.fardar_csv_exported_at &&
+                        order.fardar_csv_exported_waybill &&
+                        String(order.fardar_csv_exported_waybill) === String(order.waybill_number || '')
+                      )
+                    );
                     const historyFileLabel = unifiedHistoryDateKey(historyBatch.at) + '_' + unifiedHistoryTimeKey(historyBatch.at);
                     return (
                       <div key={historyBatch.at + '-' + index} className="flex flex-col gap-3 rounded-2xl border border-gray-200 bg-gray-50 p-3 sm:flex-row sm:items-center sm:justify-between">
@@ -165,12 +187,20 @@ export const adminDashboardFardarHistoryPatch = () => ({
                           <p className="text-xs font-black text-gray-900">{new Date(historyBatch.at).toLocaleTimeString()} • {historyBatch.fileCount} file(s)</p>
                           <p className="mt-1 text-[10px] text-gray-500">Processed {historyBatch.uploaded} • Orders {historyBatch.orderNumbers.length} • Not Found {historyBatch.failed} • Ignored {historyBatch.ignored}</p>
                         </div>
-                        <button
-                          type="button"
-                          disabled={historyBatchReady.length === 0}
-                          onClick={()=>void downloadFardarUploadCsv(historyBatchOrders, historyFileLabel, true)}
-                          className="rounded-xl border border-violet-300 bg-white px-3 py-2 text-[11px] font-black text-violet-800 disabled:opacity-40"
-                        ><Download className="mr-1 inline h-3.5 w-3.5"/> Fardar CSV ({historyBatchReady.length})</button>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            disabled={historyBatchNewReady.length === 0}
+                            onClick={()=>void downloadFardarUploadCsv(historyBatchOrders, historyFileLabel)}
+                            className="rounded-xl border border-violet-300 bg-white px-3 py-2 text-[11px] font-black text-violet-800 disabled:opacity-40"
+                          ><Download className="mr-1 inline h-3.5 w-3.5"/> New Fardar CSV ({historyBatchNewReady.length})</button>
+                          <button
+                            type="button"
+                            disabled={historyBatchReady.length === 0}
+                            onClick={()=>void downloadFardarUploadCsv(historyBatchOrders, historyFileLabel + '_FULL', true)}
+                            className="rounded-xl border border-gray-300 bg-white px-3 py-2 text-[11px] font-black text-gray-600 disabled:opacity-40"
+                          ><Download className="mr-1 inline h-3.5 w-3.5"/> Re-download Full ({historyBatchReady.length})</button>
+                        </div>
                       </div>
                     );
                   })}
