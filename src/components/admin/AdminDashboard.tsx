@@ -217,6 +217,7 @@ export const AdminDashboard: React.FC = () => {
   const [comboEditProductId, setComboEditProductId] = useState<string | undefined>(undefined);
   const [packingSearch, setPackingSearch] = useState('');
   const [stockItemSearch, setStockItemSearch] = useState('');
+  const [selectedStockReportSku, setSelectedStockReportSku] = useState('');
   const [packingFilter, setPackingFilter] = useState<'pending'|'today'|'downloaded'|'all'>('pending');
   const [newOrderToast, setNewOrderToast] = useState<string>('');
   const [assistantNeedsCount, setAssistantNeedsCount] = useState(0);
@@ -1842,6 +1843,59 @@ Suitable For:
     );
   }, [stockByItemCodeRows, stockItemSearch]);
 
+  const stockLocalDayKey = (value?: string) => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+  };
+
+  const stockMovementBySku = useMemo(() => {
+    const todayKey=stockLocalDayKey(new Date().toISOString());
+    const totals=new Map<string,{totalPacked:number;todayPacked:number;todayPurchased:number}>();
+    const ensure=(sku:unknown)=>{
+      const key=String(sku||'').trim().toUpperCase();
+      if(!key) return null;
+      if(!totals.has(key)) totals.set(key,{totalPacked:0,todayPacked:0,todayPurchased:0});
+      return {key,row:totals.get(key)!};
+    };
+    const addPacked=(sku:unknown,qty:unknown,isToday:boolean)=>{
+      const entry=ensure(sku); if(!entry) return;
+      const amount=Math.max(0,Number(qty||0)); if(!amount) return;
+      entry.row.totalPacked+=amount;
+      if(isToday) entry.row.todayPacked+=amount;
+    };
+
+    orders
+      .filter((order)=>
+        order.stock_allocated &&
+        Boolean(order.stock_allocated_at) &&
+        order.order_status!=='Cancelled' &&
+        !order.is_duplicate_order &&
+        !order.is_test_order
+      )
+      .forEach((order)=>{
+        const isToday=stockLocalDayKey(order.stock_allocated_at)===todayKey;
+        (order.items||[]).forEach((item)=>{
+          const orderQty=Math.max(1,Number(item.quantity||1));
+          addPacked(item.sku||item.main_sku,orderQty,isToday);
+          if(item.product_type==='bundle' && Array.isArray(item.bundle_components)){
+            item.bundle_components.forEach((component)=>{
+              addPacked(component.sku,orderQty*Math.max(1,Number(component.quantity_per_bundle||1)),isToday);
+            });
+          }
+        });
+      });
+
+    purchaseOrders.forEach((po)=>{
+      if(stockLocalDayKey(po.created_at)!==todayKey) return;
+      const entry=ensure(po.variant_sku||po.sku); if(!entry) return;
+      entry.row.todayPurchased+=Math.max(0,Number(po.quantity_added||0));
+    });
+
+    return totals;
+  }, [orders,purchaseOrders]);
+
   const stockItemReportRows = useMemo(() => {
     return filteredStockByItemCodeRows.map((row) => {
       const purchases = purchaseOrders
@@ -1869,18 +1923,104 @@ Suitable For:
         }
       }
 
+      const movement=stockMovementBySku.get(row.sku) || {totalPacked:0,todayPacked:0,todayPurchased:0};
+      const currentPhysical=Math.max(0,row.available + row.packing);
+      const stockHealth=row.available<=0?'OUT OF STOCK':row.available<=5?'LOW STOCK':'STOCK OK';
       return {
         ...row,
         totalPurchased,
+        totalPacked:movement.totalPacked,
+        todayPurchased:movement.todayPurchased,
+        todayPacked:movement.todayPacked,
         latestPurchaseQty: latestPurchase ? Math.max(0,Number(latestPurchase.quantity_added||0)) : 0,
         latestPurchaseAt: latestPurchase?.created_at || '',
         latestPoNumber: latestPurchase?.po_number || '',
         beforeLatestPurchase,
         afterLatestPurchase,
-        currentPhysical: Math.max(0,row.available + row.packing),
+        currentPhysical,
+        stockHealth,
       };
     });
-  }, [filteredStockByItemCodeRows, purchaseOrders, stockHistory]);
+  }, [filteredStockByItemCodeRows, purchaseOrders, stockHistory, stockMovementBySku]);
+
+  const selectedStockReportRow = useMemo(
+    () => stockItemReportRows.find((row)=>row.sku===selectedStockReportSku) || stockByItemCodeRows
+      .map((row)=>{
+        const movement=stockMovementBySku.get(row.sku) || {totalPacked:0,todayPacked:0,todayPurchased:0};
+        const purchases=purchaseOrders.filter((po)=>String(po.variant_sku||po.sku||'').trim().toUpperCase()===row.sku);
+        const totalPurchased=purchases.reduce((sum,po)=>sum+Math.max(0,Number(po.quantity_added||0)),0);
+        const latestPurchase=[...purchases].sort((a,b)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime())[0];
+        return {
+          ...row,
+          totalPurchased,
+          totalPacked:movement.totalPacked,
+          todayPurchased:movement.todayPurchased,
+          todayPacked:movement.todayPacked,
+          latestPurchaseQty:latestPurchase?Math.max(0,Number(latestPurchase.quantity_added||0)):0,
+          latestPurchaseAt:latestPurchase?.created_at||'',
+          latestPoNumber:latestPurchase?.po_number||'',
+          beforeLatestPurchase:null as number|null,
+          afterLatestPurchase:null as number|null,
+          currentPhysical:Math.max(0,row.available+row.packing),
+          stockHealth:row.available<=0?'OUT OF STOCK':row.available<=5?'LOW STOCK':'STOCK OK',
+        };
+      })
+      .find((row)=>row.sku===selectedStockReportSku),
+    [stockItemReportRows,stockByItemCodeRows,selectedStockReportSku,stockMovementBySku,purchaseOrders]
+  );
+
+  const selectedStockDailyReport = useMemo(() => {
+    if(!selectedStockReportSku) return [] as Array<{date:string;label:string;purchased:number;packed:number;net:number}>;
+    const purchasedByDay=new Map<string,number>();
+    const packedByDay=new Map<string,number>();
+    const add=(map:Map<string,number>,day:string,qty:number)=>{if(day&&qty>0) map.set(day,(map.get(day)||0)+qty);};
+
+    purchaseOrders
+      .filter((po)=>String(po.variant_sku||po.sku||'').trim().toUpperCase()===selectedStockReportSku)
+      .forEach((po)=>add(purchasedByDay,stockLocalDayKey(po.created_at),Math.max(0,Number(po.quantity_added||0))));
+
+    orders
+      .filter((order)=>order.stock_allocated && Boolean(order.stock_allocated_at) && order.order_status!=='Cancelled' && !order.is_duplicate_order && !order.is_test_order)
+      .forEach((order)=>{
+        const day=stockLocalDayKey(order.stock_allocated_at);
+        (order.items||[]).forEach((item)=>{
+          const orderQty=Math.max(1,Number(item.quantity||1));
+          const directSku=String(item.sku||item.main_sku||'').trim().toUpperCase();
+          if(directSku===selectedStockReportSku) add(packedByDay,day,orderQty);
+          if(item.product_type==='bundle' && Array.isArray(item.bundle_components)){
+            item.bundle_components.forEach((component)=>{
+              if(String(component.sku||'').trim().toUpperCase()===selectedStockReportSku){
+                add(packedByDay,day,orderQty*Math.max(1,Number(component.quantity_per_bundle||1)));
+              }
+            });
+          }
+        });
+      });
+
+    const rows:Array<{date:string;label:string;purchased:number;packed:number;net:number}>=[];
+    const today=new Date();
+    today.setHours(12,0,0,0);
+    for(let offset=29;offset>=0;offset--){
+      const date=new Date(today);
+      date.setDate(today.getDate()-offset);
+      const day=`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+      const purchased=purchasedByDay.get(day)||0;
+      const packed=packedByDay.get(day)||0;
+      rows.push({
+        date:day,
+        label:date.toLocaleDateString(undefined,{day:'2-digit',month:'short'}),
+        purchased,
+        packed,
+        net:purchased-packed,
+      });
+    }
+    return rows;
+  }, [selectedStockReportSku,purchaseOrders,orders]);
+
+  const selectedStockMovementRows = useMemo(
+    () => selectedStockDailyReport.filter((row)=>row.purchased>0 || row.packed>0).slice().reverse(),
+    [selectedStockDailyReport]
+  );
 
   const lowStockProducts = products.filter((p) => normalizedProductType(p) !== 'bundle' && p.stock_quantity <= 5);
   const unsyncedOrders = orders.filter((o) => o.order_source !== 'Manual Admin' && !o.is_synced_google_sheets);
