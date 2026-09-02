@@ -1204,10 +1204,12 @@ useEffect(() => {
   const cartLineId = (product: Product, variant?: ProductVariant) => `${product.id}::${variant?.id || 'base'}`;
 
   const addToCart = (product: Product, quantity = 1, variantId?: string) => {
-    if (product.force_out_of_stock) throw new Error(`${product.name_en} is currently out of stock.`);
     const type = normalizedProductType(product);
     const variant = type === 'variant' ? variantById(product, variantId) : undefined;
     if (type === 'variant' && !variant) throw new Error(`Please select a color / option for ${product.name_en}.`);
+    if ((type === 'variant' ? Boolean(variant?.force_out_of_stock) : Boolean(product.force_out_of_stock))) {
+      throw new Error(`${product.name_en}${variant?.option_value ? ` - ${variant.option_value}` : ''} is currently out of stock.`);
+    }
     const line_id = cartLineId(product, variant);
     setCart((prev) => {
       const existing = prev.find((item) => (item.line_id || cartLineId(item.product,item.variant)) === line_id);
@@ -1240,10 +1242,12 @@ useEffect(() => {
   const clearCart = () => setCart([]);
 
   const startBuyNow = (product: Product, quantity = 1, variantId?: string) => {
-    if (product.force_out_of_stock) throw new Error(`${product.name_en} is currently out of stock.`);
     const type=normalizedProductType(product);
     const variant=type==='variant'?variantById(product,variantId):undefined;
     if(type==='variant' && !variant) throw new Error(`Please select a color / option for ${product.name_en}.`);
+    if ((type === 'variant' ? Boolean(variant?.force_out_of_stock) : Boolean(product.force_out_of_stock))) {
+      throw new Error(`${product.name_en}${variant?.option_value ? ` - ${variant.option_value}` : ''} is currently out of stock.`);
+    }
     setBuyNowCartBackup(cart);
     setCart([{ product, variant, line_id:cartLineId(product,variant), quantity: Math.min(999, Math.max(1, quantity)) }]);
     setIsCartOpen(false);
@@ -1410,8 +1414,13 @@ useEffect(() => {
       throw new Error('Cart is empty.');
     }
     const manuallyUnavailable = cart.find((item) => {
-      const currentProduct = products.find((product) => product.id === item.product.id);
-      return Boolean(currentProduct?.force_out_of_stock || item.product.force_out_of_stock);
+      const currentProduct = products.find((product) => product.id === item.product.id) || item.product;
+      const currentType = normalizedProductType(currentProduct);
+      if (currentType === 'variant') {
+        const currentVariant = variantById(currentProduct, item.variant?.id) || item.variant;
+        return Boolean(currentVariant?.force_out_of_stock);
+      }
+      return Boolean(currentProduct.force_out_of_stock);
     });
     if (manuallyUnavailable) {
       throw new Error(`${manuallyUnavailable.product.name_en} is currently out of stock. Please remove it from the cart before ordering.`);
