@@ -1400,6 +1400,14 @@ Suitable For:
     return /[",\n]/.test(text) ? `"${text.replace(/"/g,'""')}"` : text;
   };
 
+  const normalizeFardarContactNumber = (value: unknown) => {
+    let digits = String(value ?? '').replace(/\D/g, '');
+    if (digits.startsWith('0094') && digits.length >= 13) digits = `0${digits.slice(4)}`;
+    else if (digits.startsWith('94') && digits.length === 11) digits = `0${digits.slice(2)}`;
+    else if (digits.length === 9 && digits.startsWith('7')) digits = `0${digits}`;
+    return digits;
+  };
+
   const downloadFardarUploadCsv = (selectedOrders: Order[]) => {
     const ready = selectedOrders.filter(o =>
       o.call_center_status === 'Confirmed' &&
@@ -1428,8 +1436,8 @@ Suitable For:
         settings.fardar_parcel_type || '',
         desc,
         o.customer_name,
-        o.phone,
-        o.whatsapp || o.phone,
+        normalizeFardarContactNumber(o.phone),
+        normalizeFardarContactNumber(o.whatsapp || o.phone),
         o.address,
         o.fardar_city || o.city,
         cod,
