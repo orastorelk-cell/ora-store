@@ -1828,6 +1828,24 @@ app.post('/api/orders', async (req,res)=>{
     if(!order?.id || !order?.order_number || !order?.customer_name || !Array.isArray(order?.items)) {
       return res.status(400).json({error:'Invalid order payload.'});
     }
+
+    // Authoritative storefront guard: even a customer tab that has not refreshed
+    // yet cannot place a Website order for a product manually forced Out of Stock.
+    if (String(order?.order_source || 'Website') === 'Website') {
+      const storefront = await readSharedStorefrontState();
+      const catalog = Array.isArray(storefront?.products) ? storefront.products : [];
+      const blockedItem = (order.items || []).find((item:any) => {
+        const product = catalog.find((row:any) =>
+          String(row?.id || '') === String(item?.product_id || '') ||
+          String(row?.sku || '').trim().toUpperCase() === String(item?.main_sku || item?.sku || '').trim().toUpperCase()
+        );
+        return Boolean(product?.force_out_of_stock);
+      });
+      if (blockedItem) {
+        return res.status(409).json({ error:`${String(blockedItem?.product_name || 'This item')} is currently out of stock.` });
+      }
+    }
+
     const customerAuthUser = await getCustomerAuthUser(req);
     if (customerAuthUser) {
       order.customer_auth_id = customerAuthUser.id;
