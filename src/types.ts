@@ -275,6 +275,11 @@ export interface Order {
   dispatch_status?: 'Not Scanned' | 'Handed Over';
   dispatch_scanned_at?: string;
   dispatch_scanned_by?: string;
+  /** Durable marker for the exact waybill already included in a Fardar upload CSV. */
+  fardar_csv_exported_at?: string;
+  fardar_csv_exported_by?: string;
+  fardar_csv_export_batch_id?: string;
+  fardar_csv_exported_waybill?: string;
   fardar_tracking_updated_at?: string;
   fardar_tracking_history?: { status: string; at: string; note?: string }[];
   notes?: string;
