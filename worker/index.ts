@@ -1,4 +1,5 @@
 import baseWorker from './indexBase';
+import { facebookLeadAutoHandler } from './facebookLeadAuto';
 
 // Final safety net for FB/TikTok bulk imports.
 // The normal worker/server path remains the primary path. Only when that path
@@ -361,6 +362,9 @@ const repairBulkSheetSync = async (request: Request, env: unknown, response: Res
 
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
+    const facebookLeadResponse = await facebookLeadAutoHandler(request, env, ctx, baseWorker);
+    if (facebookLeadResponse) return facebookLeadResponse;
+
     const mediaResponse = await r2MediaHandler(request, env);
     if (mediaResponse) return mediaResponse;
 
