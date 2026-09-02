@@ -146,7 +146,8 @@ export const ProductDetailModal: React.FC = () => {
     moveGalleryImage(deltaX < 0 ? 1 : -1);
   };
   const exactSku = selectedVariant?.sku || selectedProduct.sku;
-  const canOrder = type !== 'variant' || Boolean(selectedVariant);
+  const forcedOutOfStock = Boolean(selectedProduct.force_out_of_stock);
+  const canOrder = !forcedOutOfStock && (type !== 'variant' || Boolean(selectedVariant));
   const specifications = (selectedProduct.specifications || []).filter((spec) => spec.label && spec.value);
   const itemDetails = [
     ...(String(selectedProduct.brand || '').trim() ? [{ id:'brand', label: language === 'si' ? 'වෙළඳ නාමය' : 'Brand', value:String(selectedProduct.brand || '').trim() }] : []),
@@ -294,6 +295,11 @@ export const ProductDetailModal: React.FC = () => {
               {hasDiscount && <div className="mb-1 text-sm font-bold text-gray-400 line-through">Rs. {formatLkr(regularUnitPrice)}</div>}
               <div className="flex flex-wrap items-center gap-2"><span className="text-3xl font-black text-orange-600">Rs. {formatLkr(unitPrice)}</span>{hasDiscount && <span className="rounded-full bg-orange-100 px-2 py-1 text-[10px] font-black text-orange-700">SPECIAL OFFER</span>}</div>
               <p className={`mt-1.5 flex items-center gap-1 text-[11px] font-black ${settings.free_delivery_enabled ? 'text-emerald-600' : 'text-gray-600'}`}><span aria-hidden="true">🚚</span><span>{deliveryLabel}</span></p>
+              {forcedOutOfStock && (
+                <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700">
+                  OUT OF STOCK • Details are available, but ordering is temporarily disabled.
+                </div>
+              )}
             </div>
 
             {type === 'variant' && optionGroups.length > 0 && (
@@ -322,7 +328,7 @@ export const ProductDetailModal: React.FC = () => {
               {type === 'variant' && selectedVariant && <div className="flex items-center gap-2 text-[10px] font-bold text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" />{variantOptionSummary(selectedVariant)} • {selectedVariant.sku}</div>}
             </div>
 
-            <div className="grid grid-cols-2 gap-2"><button disabled={!canOrder} onClick={handleAddToCart} className="rounded-full border border-orange-200 bg-orange-50 py-3 text-xs font-black text-orange-700 transition disabled:opacity-40"><ShoppingBag className="mr-1 inline h-4 w-4" />Add to Cart</button><button disabled={!canOrder} onClick={handleBuyNow} className="rounded-full bg-black py-3 text-xs font-black text-white disabled:opacity-40"><Zap className="mr-1 inline h-4 w-4" />Buy Now</button></div>
+            <div className="grid grid-cols-2 gap-2"><button disabled={!canOrder} onClick={handleAddToCart} className="rounded-full border border-orange-200 bg-orange-50 py-3 text-xs font-black text-orange-700 transition disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-100 disabled:text-gray-400 disabled:opacity-100"><ShoppingBag className="mr-1 inline h-4 w-4" />{forcedOutOfStock ? 'Out of Stock' : 'Add to Cart'}</button><button disabled={!canOrder} onClick={handleBuyNow} className="rounded-full bg-black py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:bg-gray-400 disabled:opacity-100"><Zap className="mr-1 inline h-4 w-4" />{forcedOutOfStock ? 'Unavailable' : 'Buy Now'}</button></div>
             <button onClick={openAssistantInquiry} className="w-full rounded-full border border-emerald-100 bg-emerald-50 py-2.5 text-xs font-bold text-emerald-700"><MessageSquare className="mr-2 inline h-4 w-4" />Ask O-RA Assistant • 24/7</button>
 
             {description && (
