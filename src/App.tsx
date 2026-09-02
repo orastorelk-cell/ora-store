@@ -304,7 +304,12 @@ const CustomerStorefront: React.FC = () => {
   }
 
   const infoMap: Record<string, StoreInfoPageKind> = {
-    '/return-refund': 'return', '/contact': 'contact', '/about': 'about', '/privacy': 'privacy', '/terms': 'terms'
+    '/return-refund': 'return',
+    '/contact': 'contact',
+    '/about': 'about',
+    '/privacy': 'privacy',
+    '/terms': 'terms',
+    '/data-deletion': 'dataDeletion'
   };
   const infoKind = infoMap[storePath];
   if (infoKind) {
