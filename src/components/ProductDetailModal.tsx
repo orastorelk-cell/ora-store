@@ -197,8 +197,11 @@ export const ProductDetailModal: React.FC = () => {
     const requested = { ...selectedOptions, [name]: value };
     const exactMatches = variants.filter((variant) => variantMatchesOptions(variant, requested));
     const fallbackMatches = variants.filter((variant) => variantOptions(variant).some((option) => option.name.toLowerCase() === name.toLowerCase() && option.value.toLowerCase() === value.toLowerCase()));
-    const candidates = exactMatches.length ? exactMatches : fallbackMatches;
-    const candidate = candidates.find((variant) => !variant.force_out_of_stock) || candidates[0];
+    const candidate =
+      exactMatches.find((variant) => !variant.force_out_of_stock) ||
+      fallbackMatches.find((variant) => !variant.force_out_of_stock) ||
+      exactMatches[0] ||
+      fallbackMatches[0];
     if (!candidate || candidate.force_out_of_stock) return;
     setSelectedVariantId(candidate.id);
     setSelectedOptions(Object.fromEntries(variantOptions(candidate).map((option) => [option.name, option.value])));
@@ -318,9 +321,8 @@ export const ProductDetailModal: React.FC = () => {
                         const requested = { ...selectedOptions, [group.name]: value };
                         const exactMatches = variants.filter((variant) => variantMatchesOptions(variant, requested));
                         const fallbackMatches = variants.filter((variant) => variantOptions(variant).some((option) => option.name.toLowerCase() === group.name.toLowerCase() && option.value.toLowerCase() === value.toLowerCase()));
-                        const candidates = exactMatches.length ? exactMatches : fallbackMatches;
-                        const optionUnavailable = candidates.length > 0 && candidates.every((variant) => Boolean(variant.force_out_of_stock));
-                        const imageVariant = candidates.find((variant) => variant.image) || fallbackMatches.find((variant) => variant.image);
+                        const optionUnavailable = fallbackMatches.length > 0 && fallbackMatches.every((variant) => Boolean(variant.force_out_of_stock));
+                        const imageVariant = exactMatches.find((variant) => variant.image) || fallbackMatches.find((variant) => variant.image);
                         return <button
                           key={`${group.name}-${value}`}
                           type="button"
