@@ -35,6 +35,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
   const hasDiscount = discountPercent > 0;
   const regularPrice = type !== 'variant' ? regularDisplayUnitPrice(product, settings) : 0;
   const needsSelection = type === 'variant';
+  const forcedOutOfStock = Boolean(product.force_out_of_stock);
   const images = cleanImages(product.images);
   const primaryImage = images[0] || activeVariants(product).find((v) => String(v.image || '').trim())?.image || '';
   const deliveryLabel = settings.free_delivery_enabled
@@ -43,12 +44,14 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
 
   const handleBuyNow = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (forcedOutOfStock) return;
     if (needsSelection) { setSelectedProduct(product); return; }
     startBuyNow(product, 1);
   };
 
   const handleAddToCart = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (forcedOutOfStock) return;
     if (needsSelection) { setSelectedProduct(product); return; }
     addToCart(product, 1);
   };
@@ -73,7 +76,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
           </div>
         )}
 
-        {hasDiscount && (
+        {forcedOutOfStock ? (
+          <div className="absolute top-2 left-2 rounded-xl bg-red-600 px-2.5 py-1.5 text-xs font-black text-white shadow-lg sm:text-sm">
+            OUT OF STOCK
+          </div>
+        ) : hasDiscount && (
           <div className="ora-product-card-discount absolute top-2 left-2 bg-orange-600 text-white text-xs sm:text-sm font-black px-2.5 py-1.5 rounded-xl shadow-lg">
             {type === 'variant' ? `UP TO ${discountPercent}% OFF` : `${discountPercent}% OFF`}
           </div>
@@ -117,18 +124,20 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
       <div className="ora-product-card-actions grid grid-cols-2 gap-2 mt-3">
         <button
           onClick={handleAddToCart}
-          className="ora-product-card-action min-w-0 py-2 px-1.5 rounded-xl bg-orange-50 hover:bg-orange-100 text-orange-700 text-[11px] sm:text-xs font-black flex items-center justify-center gap-1 border border-orange-200 transition-colors"
+          disabled={forcedOutOfStock}
+          className={`ora-product-card-action min-w-0 py-2 px-1.5 rounded-xl text-[11px] sm:text-xs font-black flex items-center justify-center gap-1 border transition-colors ${forcedOutOfStock ? 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400' : 'bg-orange-50 hover:bg-orange-100 text-orange-700 border-orange-200'}`}
         >
-          <ShoppingBag className="ora-product-card-action-icon w-3.5 h-3.5 text-orange-600 shrink-0" />
-          <span className="ora-product-card-action-label whitespace-nowrap">{needsSelection ? 'Choose Option' : 'Add to Cart'}</span>
+          <ShoppingBag className={`ora-product-card-action-icon w-3.5 h-3.5 shrink-0 ${forcedOutOfStock ? 'text-gray-400' : 'text-orange-600'}`} />
+          <span className="ora-product-card-action-label whitespace-nowrap">{forcedOutOfStock ? 'Out of Stock' : needsSelection ? 'Choose Option' : 'Add to Cart'}</span>
         </button>
 
         <button
           onClick={handleBuyNow}
-          className="ora-product-card-action min-w-0 py-2 px-2 rounded-xl bg-black hover:bg-orange-600 text-white text-xs font-bold flex items-center justify-center gap-1 shadow-xs transition-colors"
+          disabled={forcedOutOfStock}
+          className={`ora-product-card-action min-w-0 py-2 px-2 rounded-xl text-white text-xs font-bold flex items-center justify-center gap-1 shadow-xs transition-colors ${forcedOutOfStock ? 'cursor-not-allowed bg-gray-400' : 'bg-black hover:bg-orange-600'}`}
         >
-          <Zap className="ora-product-card-action-icon w-3.5 h-3.5 shrink-0 fill-current text-orange-400" />
-          <span className="ora-product-card-action-label whitespace-nowrap">{needsSelection ? 'Choose' : 'Buy Now'}</span>
+          <Zap className={`ora-product-card-action-icon w-3.5 h-3.5 shrink-0 fill-current ${forcedOutOfStock ? 'text-gray-200' : 'text-orange-400'}`} />
+          <span className="ora-product-card-action-label whitespace-nowrap">{forcedOutOfStock ? 'Unavailable' : needsSelection ? 'Choose' : 'Buy Now'}</span>
         </button>
       </div>
     </div>
