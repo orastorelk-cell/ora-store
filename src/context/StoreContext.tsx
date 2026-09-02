@@ -190,6 +190,7 @@ interface StoreContextType {
   unassignWaybill: (orderId: string) => void;
   markInvoicesGenerated: (orderIds: string[], generatedBy?: string) => Order[];
   markInvoiceBatchDownloaded: (orderIds: string[], downloadedBy?: string, downloadSet?: { date: string; number: number }) => Promise<void>;
+  markFardarCsvExported: (orderIds: string[], exportedBy?: string) => Promise<void>;
   scanDispatchBarcode: (barcode: string, scannedBy?: string) => Promise<{ success: boolean; message: string; order?: Order }>;
   recordCodPayments: (entries: { waybill: string; amount?: number; received_at?: string; reference?: string; source?: 'Fardar CSV' | 'Manual' | 'System' }[], recordedBy?: string) => Promise<{ updatedCount: number; notFound: string[] }>;
   syncOrderToSheet: (orderId: string) => Promise<boolean>;
@@ -2417,6 +2418,54 @@ useEffect(() => {
 
 
 
+  const markFardarCsvExported = async (
+    orderIds: string[],
+    exportedBy = adminUser?.name || 'Admin'
+  ): Promise<void> => {
+    const uniqueIds=Array.from(new Set(orderIds.map(String).filter(Boolean))).slice(0,500);
+    if(!uniqueIds.length) return;
+
+    const idSet=new Set(uniqueIds);
+    const now=new Date();
+    const nowIso=now.toISOString();
+    const batchId=`FARDAR-${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}-${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`;
+
+    const updatedOrders=orders
+      .filter((order)=>idSet.has(String(order.id)))
+      .map((order)=>({
+        ...order,
+        fardar_csv_exported_at:nowIso,
+        fardar_csv_exported_by:exportedBy,
+        fardar_csv_export_batch_id:batchId,
+        fardar_csv_exported_waybill:String(order.waybill_number || ''),
+      }));
+
+    if(updatedOrders.length!==uniqueIds.length){
+      const foundIds=new Set(updatedOrders.map((order)=>String(order.id)));
+      const missing=uniqueIds.filter((id)=>!foundIds.has(id));
+      throw new Error(`Could not find ${missing.length} Fardar order(s) in the current order list.`);
+    }
+
+    // Persist first so a successful CSV download cannot silently reappear in the
+    // next "new Fardar orders" file after refresh / another Staff login.
+    for(const order of updatedOrders){
+      await sharedStaffRequest(`/api/orders/${encodeURIComponent(order.id)}`,{
+        method:'PUT',
+        body:JSON.stringify({order}),
+      });
+    }
+
+    const updatedMap=new Map(updatedOrders.map((order)=>[String(order.id),order] as [string,Order]));
+    setOrders((prev)=>prev.map((order)=>updatedMap.get(String(order.id)) || order));
+
+    logActivity({
+      action:'Fardar Upload CSV Exported',
+      module:'Delivery',
+      details:`${updatedOrders.length} order(s) • ${batchId} • ${exportedBy}`,
+    });
+  };
+
+
   const recordCodPayments = async (
     entries: { waybill: string; amount?: number; received_at?: string; reference?: string; source?: 'Fardar CSV' | 'Manual' | 'System' }[],
     recordedBy = adminUser?.name || 'Admin'
@@ -3031,6 +3080,7 @@ useEffect(() => {
         unassignWaybill,
         markInvoicesGenerated,
         markInvoiceBatchDownloaded,
+        markFardarCsvExported,
         recordCodPayments,
         scanDispatchBarcode,
         syncOrderToSheet,
