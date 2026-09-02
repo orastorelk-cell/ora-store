@@ -34,8 +34,8 @@ export const bundleComponentOfferDisplayPatch = () => ({
         'ProductCard products access',
       );
 
-      const calcMarker = `  const autoReferencePrice = !hasDiscount && range.min === range.max\n    ? (autoRoundOffers.find((offer) => offer.active && Math.abs(offer.offerPrice - range.min) < 0.01)?.regularPrice || 0)\n    : 0;\n  const needsSelection = type === 'variant';`;
-      const calcReplacement = `  const autoReferencePrice = !hasDiscount && range.min === range.max\n    ? (autoRoundOffers.find((offer) => offer.active && Math.abs(offer.offerPrice - range.min) < 0.01)?.regularPrice || 0)\n    : 0;\n  const bundleOffer = type === 'bundle'\n    ? bundleComponentOfferDisplay(product, products, settings)\n    : { active: false, referencePrice: 0, customerPrice: range.min, saving: 0, percent: 0 };\n  const hasBundleOffer = type === 'bundle' && bundleOffer.active;\n  const needsSelection = type === 'variant';`;
+      const calcMarker = `  const autoReferencePrice = !product.force_out_of_stock && !hasDiscount && range.min === range.max\n    ? (autoRoundOffers.find((offer) => offer.active && Math.abs(offer.offerPrice - range.min) < 0.01)?.regularPrice || 0)\n    : 0;\n  const needsSelection = type === 'variant';`;
+      const calcReplacement = `  const autoReferencePrice = !product.force_out_of_stock && !hasDiscount && range.min === range.max\n    ? (autoRoundOffers.find((offer) => offer.active && Math.abs(offer.offerPrice - range.min) < 0.01)?.regularPrice || 0)\n    : 0;\n  const bundleOffer = type === 'bundle'\n    ? bundleComponentOfferDisplay(product, products, settings)\n    : { active: false, referencePrice: 0, customerPrice: range.min, saving: 0, percent: 0 };\n  const hasBundleOffer = !product.force_out_of_stock && type === 'bundle' && bundleOffer.active;\n  const needsSelection = type === 'variant';`;
       text = replaceRequired(text, calcMarker, calcReplacement, 'ProductCard combo calculation');
 
       const crossedBlock = `            {hasDiscount && type !== 'variant' && (\n              <div className="ora-product-card-regular-price text-xs sm:text-sm text-gray-400 line-through font-bold">Rs. {formatLkr(regularPrice)}</div>\n            )}\n            {!hasDiscount && autoReferencePrice > 0 && (\n              <div className="ora-product-card-regular-price text-xs sm:text-sm text-gray-400 line-through font-bold">Rs. {formatLkr(autoReferencePrice)}</div>\n            )}`;
@@ -44,8 +44,8 @@ export const bundleComponentOfferDisplayPatch = () => ({
 
       text = replaceRequired(
         text,
-        "            {(hasDiscount || hasAutoRoundOffer) && (",
-        "            {(hasBundleOffer || hasDiscount || hasAutoRoundOffer) && (",
+        "            {!forcedOutOfStock && (hasDiscount || hasAutoRoundOffer) && (",
+        "            {!forcedOutOfStock && (hasBundleOffer || hasDiscount || hasAutoRoundOffer) && (",
         'ProductCard offer badge visibility',
       );
 
@@ -67,8 +67,8 @@ export const bundleComponentOfferDisplayPatch = () => ({
         'ProductDetail helper import',
       );
 
-      const calcMarker = `  const hasDisplayedSpecialOffer = hasDiscount || autoRoundSpecialOffer.active;\n  const displayedRegularPrice = hasDiscount ? regularUnitPrice : autoRoundSpecialOffer.regularPrice;\n  const deliveryLabel = settings.free_delivery_enabled`;
-      const calcReplacement = `  const bundleOffer = type === 'bundle'\n    ? bundleComponentOfferDisplay(selectedProduct, products, settings)\n    : { active: false, referencePrice: 0, customerPrice: unitPrice, saving: 0, percent: 0 };\n  const hasBundleOffer = type === 'bundle' && bundleOffer.active;\n  const hasDisplayedSpecialOffer = hasBundleOffer || hasDiscount || autoRoundSpecialOffer.active;\n  const displayedRegularPrice = hasBundleOffer ? bundleOffer.referencePrice : (hasDiscount ? regularUnitPrice : autoRoundSpecialOffer.regularPrice);\n  const deliveryLabel = settings.free_delivery_enabled`;
+      const calcMarker = `  const hasDisplayedSpecialOffer = !selectedProduct.force_out_of_stock && (hasDiscount || autoRoundSpecialOffer.active);\n  const displayedRegularPrice = hasDiscount ? regularUnitPrice : autoRoundSpecialOffer.regularPrice;\n  const deliveryLabel = settings.free_delivery_enabled`;
+      const calcReplacement = `  const bundleOffer = type === 'bundle'\n    ? bundleComponentOfferDisplay(selectedProduct, products, settings)\n    : { active: false, referencePrice: 0, customerPrice: unitPrice, saving: 0, percent: 0 };\n  const hasBundleOffer = !selectedProduct.force_out_of_stock && type === 'bundle' && bundleOffer.active;\n  const hasDisplayedSpecialOffer = !selectedProduct.force_out_of_stock && (hasBundleOffer || hasDiscount || autoRoundSpecialOffer.active);\n  const displayedRegularPrice = hasBundleOffer ? bundleOffer.referencePrice : (hasDiscount ? regularUnitPrice : autoRoundSpecialOffer.regularPrice);\n  const deliveryLabel = settings.free_delivery_enabled`;
       text = replaceRequired(text, calcMarker, calcReplacement, 'ProductDetail combo calculation');
 
       const imageBadge = "{hasDisplayedSpecialOffer && <span className=\"absolute left-4 top-4 rounded-xl bg-orange-600 px-3 py-2 text-sm font-black text-white shadow-lg\">{hasDiscount ? `${discountPercent}% OFF` : `${autoRoundSpecialOffer.percent}% OFF`}</span>}";
