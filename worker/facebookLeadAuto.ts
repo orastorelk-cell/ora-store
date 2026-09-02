@@ -160,6 +160,33 @@ const graphGet = async (env: Env, path: string, fields: string) => {
   return data;
 };
 
+const graphListGet = async (env: Env, path: string, fields: string, limit = 100) => {
+  const accessToken = envText(env, 'META_PAGE_ACCESS_TOKEN');
+  const version = envText(env, 'META_GRAPH_API_VERSION');
+  if (!accessToken) throw new Error('META_PAGE_ACCESS_TOKEN is not configured.');
+  if (!/^v\d+\.\d+$/.test(version)) throw new Error('META_GRAPH_API_VERSION is not configured (example: vXX.X).');
+
+  const safePath = String(path || '')
+    .split('/')
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(part))
+    .join('/');
+  const url = new URL(`https://graph.facebook.com/${version}/${safePath}`);
+  url.searchParams.set('fields', fields);
+  url.searchParams.set('limit', String(Math.max(1, Math.min(100, limit))));
+  const response = await fetch(url, {
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      accept: 'application/json',
+    },
+  });
+  const data: any = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) {
+    throw new Error(data?.error?.message || `Meta Graph API ${response.status}`);
+  }
+  return data;
+};
+
 const normalizeFieldName = (value: unknown) =>
   String(value || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
 
@@ -445,6 +472,87 @@ const extractLeadEvents = (body: any): LeadEvent[] => {
   return Array.from(new Map(out.map((event) => [event.leadgen_id, event])).values()).slice(0, 50);
 };
 
+const TEMP_BACKFILL_PAGE_ID = '1299145169953538';
+const TEMP_BACKFILL_CUTOFF_MS = Date.parse('2026-09-02T07:29:40.780Z');
+
+const runTemporaryFacebookBackfill = async (
+  request: Request,
+  env: Env,
+  ctx: unknown,
+  baseWorker: BaseWorker,
+) => {
+  const runtime = getRuntime(env);
+  const formResponse = await graphListGet(
+    env,
+    `${TEMP_BACKFILL_PAGE_ID}/leadgen_forms`,
+    'id,name,status',
+    100,
+  );
+  const forms = (Array.isArray(formResponse?.data) ? formResponse.data : [])
+    .filter((form: any) => detectItemCode(form?.name));
+
+  const events = new Map<string, LeadEvent>();
+  for (const form of forms) {
+    const formId = String(form?.id || '').trim();
+    if (!formId) continue;
+    const leadResponse = await graphListGet(
+      env,
+      `${formId}/leads`,
+      'id,created_time,form_id',
+      100,
+    );
+    for (const lead of Array.isArray(leadResponse?.data) ? leadResponse.data : []) {
+      const leadId = String(lead?.id || '').trim();
+      const createdMs = Date.parse(String(lead?.created_time || ''));
+      if (!leadId || !Number.isFinite(createdMs) || createdMs < TEMP_BACKFILL_CUTOFF_MS) continue;
+      events.set(leadId, {
+        leadgen_id: leadId,
+        form_id: String(lead?.form_id || formId).trim() || formId,
+        page_id: TEMP_BACKFILL_PAGE_ID,
+      });
+    }
+  }
+
+  const ordered = Array.from(events.values()).sort((a, b) => a.leadgen_id.localeCompare(b.leadgen_id));
+  let existingSkipped = 0;
+  let imported = 0;
+  let failed = 0;
+  const failures: Array<{ lead_id: string; error: string }> = [];
+
+  for (const event of ordered) {
+    try {
+      const existing = await readExistingLeadOrder(runtime, event.leadgen_id);
+      // Important: existing manual imports are skipped completely here. Their
+      // legacy sheet-sync flags are not trusted for this one-time reconciliation,
+      // so this backfill can never append an existing lead again.
+      if (existing) {
+        existingSkipped += 1;
+        continue;
+      }
+      await processLead(event, request, env, ctx, baseWorker);
+      imported += 1;
+    } catch (error: any) {
+      failed += 1;
+      failures.push({
+        lead_id: event.leadgen_id,
+        error: String(error?.message || error || 'Backfill failed.').slice(0, 300),
+      });
+    }
+  }
+
+  return {
+    ok: failed === 0,
+    mode: 'temporary_real_lead_backfill',
+    cutoff: new Date(TEMP_BACKFILL_CUTOFF_MS).toISOString(),
+    forms_checked: forms.length,
+    lead_candidates: ordered.length,
+    existing_skipped: existingSkipped,
+    imported,
+    failed,
+    failures: failures.slice(0, 20),
+  };
+};
+
 export const facebookLeadAutoHandler = async (
   request: Request,
   envValue: unknown,
@@ -454,7 +562,21 @@ export const facebookLeadAutoHandler = async (
   const url = new URL(request.url);
   const webhookPath = '/api/integrations/facebook-leads/webhook';
   const statusPath = '/api/integrations/facebook-leads/status';
+  const backfillPath = '/api/integrations/facebook-leads/backfill-20260903';
   const env = (envValue || {}) as Env;
+
+  if (request.method === 'GET' && url.pathname === backfillPath) {
+    try {
+      const result = await runTemporaryFacebookBackfill(request, env, ctx, baseWorker);
+      return json(result, result.ok ? 200 : 207);
+    } catch (error: any) {
+      return json({
+        ok: false,
+        mode: 'temporary_real_lead_backfill',
+        error: String(error?.message || error || 'Backfill failed.').slice(0, 500),
+      }, 500);
+    }
+  }
 
   if (request.method === 'GET' && url.pathname === statusPath) {
     return json({
@@ -465,6 +587,7 @@ export const facebookLeadAutoHandler = async (
       access_token_configured: Boolean(envText(env, 'META_PAGE_ACCESS_TOKEN')),
       graph_version_configured: /^v\d+\.\d+$/.test(envText(env, 'META_GRAPH_API_VERSION')),
       webhook_path: webhookPath,
+      temporary_backfill_available: true,
     });
   }
 
