@@ -16,6 +16,12 @@ export interface ProductFolderZipResult {
   sizeBytes: number;
 }
 
+export interface ProductFolderZipOptions {
+  includeCatalogFiles?: boolean;
+  referenceProducts?: Product[];
+  fileNamePrefix?: string;
+}
+
 interface ZipFileMeta {
   nameBytes: Uint8Array;
   crc: number;
@@ -413,11 +419,14 @@ export const downloadProductFoldersZip = async (
   products: Product[],
   categories: Category[],
   onProgress?: (progress: ProductFolderZipProgress) => void,
+  options: ProductFolderZipOptions = {},
 ): Promise<ProductFolderZipResult> => {
   if (!products.length) throw new Error('There are no products to export.');
 
   const zip = new StoreOnlyZip();
   const backup = createProductBackup(products, categories);
+  const includeCatalogFiles = options.includeCatalogFiles !== false;
+  const referenceProducts = options.referenceProducts || products;
   const failed: string[] = [];
   let savedImages = 0;
 
@@ -437,28 +446,30 @@ export const downloadProductFoldersZip = async (
     });
   };
 
-  zip.addText(
-    '_README.txt',
-    [
-      'O-RA STORE PRODUCT FOLDER EXPORT',
-      '================================',
-      '',
-      'Each top-level product folder is named with the current Item Code (SKU).',
-      'Inside every product folder:',
-      '• DETAILS.txt = readable product details from the system',
-      '• SYSTEM-DATA.json = exact complete product record from the system',
-      '• product images = downloaded copies of all saved product image references',
-      '• variant images = downloaded with VARIANT-<item-code> file names when available',
-      '',
-      'The root O-RA-Products-Backup.json is the normal O-RA catalog backup and can be kept as an additional safety copy.',
-      '',
-      `Exported At: ${backup.exported_at}`,
-      `Products: ${products.length}`,
-      `Categories: ${categories.length}`,
-    ].join('\r\n'),
-  );
-  zip.addText('O-RA-Products-Backup.json', JSON.stringify(backup, null, 2));
-  zip.addText('CATEGORIES.json', JSON.stringify(categories, null, 2));
+  if (includeCatalogFiles) {
+    zip.addText(
+      '_README.txt',
+      [
+        'O-RA STORE PRODUCT FOLDER EXPORT',
+        '================================',
+        '',
+        'Each top-level product folder is named with the current Item Code (SKU).',
+        'Inside every product folder:',
+        '• DETAILS.txt = readable product details from the system',
+        '• SYSTEM-DATA.json = exact complete product record from the system',
+        '• product images = downloaded copies of all saved product image references',
+        '• variant images = downloaded with VARIANT-<item-code> file names when available',
+        '',
+        'The root O-RA-Products-Backup.json is the normal O-RA catalog backup and can be kept as an additional safety copy.',
+        '',
+        `Exported At: ${backup.exported_at}`,
+        `Products: ${products.length}`,
+        `Categories: ${categories.length}`,
+      ].join('\r\n'),
+    );
+    zip.addText('O-RA-Products-Backup.json', JSON.stringify(backup, null, 2));
+    zip.addText('CATEGORIES.json', JSON.stringify(categories, null, 2));
+  }
 
   const indexLines = [
     'O-RA STORE PRODUCT INDEX',
@@ -473,7 +484,7 @@ export const downloadProductFoldersZip = async (
     const folder = safeSegment(product.sku, `NO-CODE-${productIndex + 1}`);
     const base = `${folder}/`;
 
-    zip.addText(`${base}DETAILS.txt`, buildDetailsText(product, categories, products));
+    zip.addText(`${base}DETAILS.txt`, buildDetailsText(product, categories, referenceProducts));
     zip.addText(`${base}SYSTEM-DATA.json`, JSON.stringify(product, null, 2));
     indexLines.push(`${folder} | ${product.name_en || ''} | ${product.product_type || 'normal'} | ${product.status || ''}`);
 
@@ -526,23 +537,26 @@ export const downloadProductFoldersZip = async (
     }
   }
 
-  zip.addText('_PRODUCT-INDEX.txt', indexLines.join('\r\n'));
-  if (failed.length) {
-    zip.addText(
-      '_IMAGE-DOWNLOAD-FAILURES.txt',
-      [
-        'Some image files could not be downloaded while the ZIP was being created.',
-        'Their original system URLs are preserved below and inside the affected product folders.',
-        '',
-        ...failed,
-      ].join('\r\n'),
-    );
+  if (includeCatalogFiles) {
+    zip.addText('_PRODUCT-INDEX.txt', indexLines.join('\r\n'));
+    if (failed.length) {
+      zip.addText(
+        '_IMAGE-DOWNLOAD-FAILURES.txt',
+        [
+          'Some image files could not be downloaded while the ZIP was being created.',
+          'Their original system URLs are preserved below and inside the affected product folders.',
+          '',
+          ...failed,
+        ].join('\r\n'),
+      );
+    }
   }
 
   updateProgress('Creating ZIP file');
   const blob = zip.build();
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const fileName = `O-RA-Product-Folders-${timestamp}.zip`;
+  const prefix = safeSegment(options.fileNamePrefix || 'O-RA-Product-Folders', 'O-RA-Product-Folders');
+  const fileName = `${prefix}-${timestamp}.zip`;
   triggerDownload(blob, fileName);
 
   return {
