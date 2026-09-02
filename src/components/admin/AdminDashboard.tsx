@@ -104,6 +104,7 @@ import { buildVariantSku, normalizedProductType, productDisplayStock, productPri
 import { compressImageFile, uploadPublicImage, uploadRawImageFile } from '../../lib/imageUpload';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 import { createProductBackup, PRODUCT_BACKUP_MAX_BYTES, validateProductBackup } from '../../lib/productBackup';
+import { downloadProductFoldersZip } from '../../lib/productFolderZip';
 
 const ITEM_DETAIL_PRESETS: Array<{ label_en: string; label_si: string }> = [
   { label_en: 'Model', label_si: 'මාදිලිය' },
@@ -460,6 +461,8 @@ export const AdminDashboard: React.FC = () => {
   const [manualItemSearch, setManualItemSearch] = useState('');
   const productBackupInputRef = useRef<HTMLInputElement>(null);
   const [productBackupBusy, setProductBackupBusy] = useState(false);
+  const [productFolderZipBusy, setProductFolderZipBusy] = useState(false);
+  const [productFolderZipProgress, setProductFolderZipProgress] = useState('');
   const productContentTemplateInputRef = useRef<HTMLInputElement>(null);
 
   const exportProductBackup = () => {
@@ -478,6 +481,33 @@ export const AdminDashboard: React.FC = () => {
     anchor.click();
     anchor.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  };
+
+  const exportProductFoldersZip = async () => {
+    if (!products.length) {
+      alert('There are no products to export.');
+      return;
+    }
+
+    setProductFolderZipBusy(true);
+    setProductFolderZipProgress('Starting...');
+    try {
+      const result = await downloadProductFoldersZip(products, categories, (progress) => {
+        const count = progress.total ? `${progress.completed}/${progress.total}` : '';
+        setProductFolderZipProgress(count);
+      });
+      const failedLine = result.failedImages
+        ? `\nImage download failures: ${result.failedImages} (original URLs are saved inside the ZIP)`
+        : '';
+      alert(
+        `Product folder ZIP downloaded successfully.\n\nProducts: ${result.productCount}\nImages saved: ${result.savedImages}${failedLine}\n\nEach folder is named with the Item Code and contains DETAILS.txt, SYSTEM-DATA.json and the product images.`,
+      );
+    } catch (error:any) {
+      alert(error?.message || 'Product folder ZIP could not be created.');
+    } finally {
+      setProductFolderZipBusy(false);
+      setProductFolderZipProgress('');
+    }
   };
 
   const openProductBackupImport = () => {
@@ -3245,6 +3275,17 @@ Suitable For:
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Export Products</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void exportProductFoldersZip()}
+                disabled={!products.length || productFolderZipBusy || productBackupBusy}
+                className="px-3 py-2 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-300 font-bold text-[10px] flex items-center gap-1.5 shrink-0 disabled:opacity-40"
+                title="Download one ZIP with a folder for every Item Code, full product details and all saved images"
+              >
+                {productFolderZipBusy ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <FolderTree className="w-3.5 h-3.5" />}
+                <span>{productFolderZipBusy ? `ZIP ${productFolderZipProgress}` : 'Download Folder ZIP'}</span>
               </button>
 
               {adminUser?.role === 'admin' && <>
