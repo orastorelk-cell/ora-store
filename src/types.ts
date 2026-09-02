@@ -112,6 +112,8 @@ export interface Product {
   }[];
   stock_quantity: number;
   status: ProductStatus;
+  /** Manual storefront override: show Out of Stock and block customer ordering without changing real inventory. */
+  force_out_of_stock?: boolean;
   product_type?: ProductType;
   variants?: ProductVariant[];
   bundle_components?: BundleComponent[];
