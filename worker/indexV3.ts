@@ -1,4 +1,5 @@
 import fastWorker from './indexV2';
+import { facebookLeadAutoHandler } from './facebookLeadAuto';
 
 type WorkersAiLike = { run: (model: string, input: Record<string, any>) => Promise<any> };
 type R2UsageBucket = {
@@ -197,6 +198,9 @@ const storageUsageHandler = async (request:Request, envValue:unknown):Promise<Re
 
 export default {
   async fetch(request:Request, env:unknown, ctx:unknown) {
+    const leadResponse = await facebookLeadAutoHandler(request, env, ctx, fastWorker);
+    if (leadResponse) return leadResponse;
+
     const storageResponse = await storageUsageHandler(request, env);
     if (storageResponse) return storageResponse;
 
