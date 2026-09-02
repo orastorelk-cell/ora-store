@@ -1839,6 +1839,16 @@ app.post('/api/orders', async (req,res)=>{
           String(row?.id || '') === String(item?.product_id || '') ||
           String(row?.sku || '').trim().toUpperCase() === String(item?.main_sku || item?.sku || '').trim().toUpperCase()
         );
+        if (!product) return false;
+        const type = String(product?.product_type || 'normal');
+        if (type === 'variant') {
+          const variants = Array.isArray(product?.variants) ? product.variants : [];
+          const variant = variants.find((row:any) =>
+            String(row?.id || '') === String(item?.variant_id || '') ||
+            String(row?.sku || '').trim().toUpperCase() === String(item?.sku || '').trim().toUpperCase()
+          );
+          return Boolean(variant?.force_out_of_stock);
+        }
         return Boolean(product?.force_out_of_stock);
       });
       if (blockedItem) {
