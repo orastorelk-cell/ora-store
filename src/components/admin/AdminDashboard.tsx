@@ -3296,6 +3296,7 @@ Suitable For:
                   <th className="p-3">Selling Price</th>
                   <th className="p-3 whitespace-nowrap"><span className="block">Customer Price</span><span className="text-[8px] normal-case text-emerald-400">With Delivery</span></th>
                   <th className="p-3">Stock</th>
+                  <th className="p-3">Force Out of Stock</th>
                   <th className="p-3">Status</th>
                   <th className="p-3 text-right">Actions</th>
                 </tr>
@@ -3348,8 +3349,25 @@ Suitable For:
                       {normalizedProductType(p)==='bundle' ? <span className="font-bold text-cyan-300">Component-linked</span> : <span className={`font-bold ${p.stock_quantity <= 5 ? 'text-red-400' : 'text-emerald-400'}`}>{p.stock_quantity}</span>}
                     </td>
                     <td className="p-3">
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-neutral-800 text-neutral-300 border border-neutral-700">
-                        {p.status}
+                      <div className="flex min-w-[126px] items-center gap-2">
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={Boolean(p.force_out_of_stock)}
+                          onClick={() => updateProduct({ ...p, force_out_of_stock: !Boolean(p.force_out_of_stock) })}
+                          className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border transition ${p.force_out_of_stock ? 'border-red-500 bg-red-600' : 'border-neutral-600 bg-neutral-800'}`}
+                          title={p.force_out_of_stock ? 'Turn manual Out of Stock OFF' : 'Show this item as Out of Stock on the website'}
+                        >
+                          <span className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow transition-all ${p.force_out_of_stock ? 'left-[21px]' : 'left-0.5'}`} />
+                        </button>
+                        <span className={`text-[9px] font-black uppercase ${p.force_out_of_stock ? 'text-red-300' : 'text-neutral-500'}`}>
+                          {p.force_out_of_stock ? 'OUT OF STOCK' : 'Normal'}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="p-3">
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${p.force_out_of_stock ? 'bg-red-500/10 text-red-300 border-red-500/30' : 'bg-neutral-800 text-neutral-300 border-neutral-700'}`}>
+                        {p.force_out_of_stock ? 'Out of Stock (Manual)' : p.status}
                       </span>
                     </td>
                     <td className="p-3 text-right space-x-1">
