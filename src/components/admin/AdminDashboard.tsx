@@ -205,6 +205,7 @@ export const AdminDashboard: React.FC = () => {
     unassignWaybill,
     markInvoicesGenerated,
     markInvoiceBatchDownloaded,
+    markFardarCsvExported,
     scanDispatchBarcode,
     resetSystemData,
     clearOperationalTestData,
@@ -1439,15 +1440,31 @@ Suitable For:
     return digits;
   };
 
-  const downloadFardarUploadCsv = (selectedOrders: Order[]) => {
-    const ready = selectedOrders.filter(o =>
+  const downloadFardarUploadCsv = async (
+    selectedOrders: Order[],
+    fileLabel?: string,
+    includePreviouslyExported = false
+  ) => {
+    const eligible = selectedOrders.filter(o =>
       o.call_center_status === 'Confirmed' &&
       o.stock_allocated &&
       Boolean(o.waybill_number) &&
       o.order_status !== 'Cancelled'
     );
+    const alreadyExportedForCurrentWaybill = (order: Order) =>
+      Boolean(
+        order.fardar_csv_exported_at &&
+        order.fardar_csv_exported_waybill &&
+        String(order.fardar_csv_exported_waybill) === String(order.waybill_number || '')
+      );
+    const ready = includePreviouslyExported
+      ? eligible
+      : eligible.filter(o => o.dispatch_status !== 'Handed Over' && !alreadyExportedForCurrentWaybill(o));
+
     if (!ready.length) {
-      alert('No Fardar-ready orders. Confirm order + allocate stock + assign waybill first.');
+      alert(includePreviouslyExported
+        ? 'No Fardar-ready orders in this saved batch.'
+        : 'No NEW Fardar-ready orders. Previously exported / handed-over orders are excluded automatically.');
       return;
     }
 
@@ -1476,12 +1493,28 @@ Suitable For:
       ].map(csvEscape).join(',');
     });
 
+    // Save the export marker BEFORE downloading. If persistence fails, stop the
+    // download so the same orders cannot accidentally be duplicated next time.
+    const newlyExported = ready.filter(o => !alreadyExportedForCurrentWaybill(o));
+    if (newlyExported.length) {
+      try {
+        await markFardarCsvExported(newlyExported.map(o => o.id));
+      } catch (error:any) {
+        alert(`Fardar CSV was NOT downloaded because export history could not be saved.\n\n${error?.message || 'Please retry.'}`);
+        return;
+      }
+    }
+
     const blob = new Blob([[header.join(','),...rows].join('\n')],{type:'text/csv;charset=utf-8;'});
     const url=URL.createObjectURL(blob);
     const link=document.createElement('a');
     link.href=url;
-    link.download=`ora_fardar_ready_${new Date().toISOString().slice(0,10)}.csv`;
-    document.body.appendChild(link); link.click(); document.body.removeChild(link); URL.revokeObjectURL(url);
+    const safeFileLabel=String(fileLabel || new Date().toISOString().slice(0,10)).replace(/[^0-9A-Za-z_-]+/g,'-');
+    link.download=`ora_fardar_ready_${safeFileLabel}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const handleWebsiteConfirmedCsvUpload = (file: File) => {
@@ -4944,6 +4977,18 @@ Suitable For:
               const allocated = batchOrders.filter(o => o.stock_allocated && o.stock_status === 'Allocated');
               const waiting = batchOrders.filter(o => !o.stock_allocated && o.order_status !== 'Cancelled');
               const withWaybill = batchOrders.filter(o => Boolean(o.waybill_number));
+              const fardarNewReady = batchOrders.filter(o =>
+                o.call_center_status === 'Confirmed' &&
+                o.stock_allocated &&
+                Boolean(o.waybill_number) &&
+                o.order_status !== 'Cancelled' &&
+                o.dispatch_status !== 'Handed Over' &&
+                !(
+                  o.fardar_csv_exported_at &&
+                  o.fardar_csv_exported_waybill &&
+                  String(o.fardar_csv_exported_waybill) === String(o.waybill_number || '')
+                )
+              );
               const invoiceReady = batchOrders.filter(o => validateInvoiceOrder(o).length === 0 && !o.invoice_locked);
               const invoiced = batchOrders.filter(o => o.invoice_locked);
               const sourceClass = source === 'Website' ? 'emerald' : source === 'Facebook' ? 'blue' : 'fuchsia';
@@ -5008,11 +5053,11 @@ Suitable For:
                   <div className="flex flex-wrap justify-end gap-2">
                     <button
                       type="button"
-                      disabled={withWaybill.length === 0}
-                      onClick={()=>downloadFardarUploadCsv(batchOrders)}
+                      disabled={fardarNewReady.length === 0}
+                      onClick={()=>void downloadFardarUploadCsv(batchOrders)}
                       className="rounded-xl border border-violet-500/30 bg-violet-500/10 px-4 py-2.5 text-xs font-black text-violet-300 disabled:opacity-40"
                     >
-                      <Download className="mr-1 inline h-4 w-4"/> Fardar Upload CSV ({withWaybill.length})
+                      <Download className="mr-1 inline h-4 w-4"/> Fardar Upload CSV ({fardarNewReady.length} New)
                     </button>
                     <button
                       type="button"
