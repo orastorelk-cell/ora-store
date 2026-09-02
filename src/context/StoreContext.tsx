@@ -2162,6 +2162,11 @@ useEffect(() => {
       let callResult:Order['call_center_status'];
       if(['confirmed','confirm','confirm order'].includes(rawCall))callResult='Confirmed';else if(['cancelled','canceled','cancel','cancel entire order'].includes(rawCall))callResult='Cancelled';else{errors.push(`${id}: Order Action must be CONFIRM ORDER or CANCEL ENTIRE ORDER. PENDING / NO ANSWER are ignored by upload.`);return;}
       const reason=reasonI>=0?String(rows.map(c=>c[reasonI]).find(Boolean)||'').trim():'';
+      if(order.order_status==='Cancelled'){
+        ignoredCount++;
+        return;
+      }
+
       if(callResult==='Cancelled'){
         if(order.stock_allocated || order.invoice_locked || ['Shipped','Delivered'].includes(order.order_status)){errors.push(`${id}: This order is already stock/invoice/dispatch locked. Use an Admin correction/return flow instead of Call Center cancellation.`);return;}
         const cancelledBy=cancelledByI>=0?String(rows.map(c=>c[cancelledByI]).find(Boolean)||'Call Center').trim():'Call Center';
