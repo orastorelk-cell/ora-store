@@ -12,6 +12,7 @@ export const adminDashboardFardarHistoryPatch = () => ({
     if (text.includes(oldDownloadSignature)) {
       text = text.replace(oldDownloadSignature, '  const downloadFardarUploadCsv = (selectedOrders: Order[], fileLabel?: string) => {');
     }
+    // Newer source versions already support fileLabel + durable export history.
     const oldDownloadName = "    link.download=`ora_fardar_ready_${new Date().toISOString().slice(0,10)}.csv`;";
     if (text.includes(oldDownloadName)) {
       text = text.replace(oldDownloadName, "    const safeFileLabel = String(fileLabel || new Date().toISOString().slice(0,10)).replace(/[^0-9A-Za-z_-]+/g, '-');\n    link.download=`ora_fardar_ready_${safeFileLabel}.csv`;");
@@ -132,7 +133,7 @@ export const adminDashboardFardarHistoryPatch = () => ({
                   <button
                     type="button"
                     disabled={selectedDateReadyOrders.length === 0}
-                    onClick={()=>downloadFardarUploadCsv(selectedDateOrders, selectedFardarHistoryDate || 'selected-date')}
+                    onClick={()=>void downloadFardarUploadCsv(selectedDateOrders, selectedFardarHistoryDate || 'selected-date', true)}
                     className="rounded-xl border border-violet-300 bg-violet-50 px-4 py-2.5 text-xs font-black text-violet-800 disabled:opacity-40"
                   ><Download className="mr-1 inline h-4 w-4"/> Download Date CSV ({selectedDateReadyOrders.length})</button>
                 </div>
@@ -167,7 +168,7 @@ export const adminDashboardFardarHistoryPatch = () => ({
                         <button
                           type="button"
                           disabled={historyBatchReady.length === 0}
-                          onClick={()=>downloadFardarUploadCsv(historyBatchOrders, historyFileLabel)}
+                          onClick={()=>void downloadFardarUploadCsv(historyBatchOrders, historyFileLabel, true)}
                           className="rounded-xl border border-violet-300 bg-white px-3 py-2 text-[11px] font-black text-violet-800 disabled:opacity-40"
                         ><Download className="mr-1 inline h-3.5 w-3.5"/> Fardar CSV ({historyBatchReady.length})</button>
                       </div>
