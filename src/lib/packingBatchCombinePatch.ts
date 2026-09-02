@@ -49,7 +49,7 @@ export const packingBatchCombinePatch = () => ({
           try {
             const now=new Date();
             const date=[now.getFullYear(),String(now.getMonth()+1).padStart(2,'0'),String(now.getDate()).padStart(2,'0')].join('-');
-            const fileName=`${date}_Combined-${packingCombineBatchIds.length}-Batches_${combineSelectedOrders.length}-Invoices_A4-2xA5.pdf`;
+            const fileName=date+'_Combined-'+packingCombineBatchIds.length+'-Batches_'+combineSelectedOrders.length+'-Invoices_A4-2xA5.pdf';
             await generateA4TwoUpA5InvoicesPDF(combineSelectedOrders,settings,fileName);
           } catch(e:any) {
             alert(e?.message || 'Combined batch PDF generation failed.');
@@ -85,7 +85,7 @@ export const packingBatchCombinePatch = () => ({
                   const pages=batchOrders.reduce((sum,order)=>sum+getInvoicePageCount(order),0);
                   const isDownloaded=batchOrders.every(order=>Boolean(order.invoice_pack_downloaded_at));
                   return (
-                    <label key={'combine-'+batchId} className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 transition ${selected?'border-cyan-400/60 bg-cyan-500/10':'border-neutral-800 bg-neutral-950 hover:border-neutral-700'}`}>
+                    <label key={'combine-'+batchId} className={'flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 transition '+(selected?'border-cyan-400/60 bg-cyan-500/10':'border-neutral-800 bg-neutral-950 hover:border-neutral-700')}>
                       <input
                         type="checkbox"
                         checked={selected}
@@ -112,7 +112,7 @@ export const packingBatchCombinePatch = () => ({
                   className="rounded-xl bg-cyan-500 px-4 py-2.5 text-xs font-black text-neutral-950 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <Printer className="mr-1.5 inline h-4 w-4"/>
-                  {packingCombineBusy ? 'Preparing Combined PDF…' : `Combine & Download (${combineSelectedA4Sheets} A4)`}
+                  {packingCombineBusy ? 'Preparing Combined PDF…' : 'Combine & Download ('+combineSelectedA4Sheets+' A4)'}
                 </button>
                 <button
                   type="button"
