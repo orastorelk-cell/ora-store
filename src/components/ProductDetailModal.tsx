@@ -62,7 +62,9 @@ export const ProductDetailModal: React.FC = () => {
       setAddedToCart(false);
       return;
     }
-    const first = normalizedProductType(selectedProduct) === 'variant' ? activeVariants(selectedProduct)[0] : undefined;
+    const first = normalizedProductType(selectedProduct) === 'variant'
+      ? (activeVariants(selectedProduct).find((variant) => !variant.force_out_of_stock) || activeVariants(selectedProduct)[0])
+      : undefined;
     setSelectedVariantId(first?.id || '');
     setSelectedOptions(Object.fromEntries(variantOptions(first).map((option) => [option.name, option.value])));
     setQuantity(1);
@@ -146,8 +148,11 @@ export const ProductDetailModal: React.FC = () => {
     moveGalleryImage(deltaX < 0 ? 1 : -1);
   };
   const exactSku = selectedVariant?.sku || selectedProduct.sku;
-  const forcedOutOfStock = Boolean(selectedProduct.force_out_of_stock);
-  const canOrder = !forcedOutOfStock && (type !== 'variant' || Boolean(selectedVariant));
+  const forcedOutOfStock = type === 'variant'
+    ? Boolean(selectedVariant?.force_out_of_stock)
+    : Boolean(selectedProduct.force_out_of_stock);
+  const allVariantsForcedOut = type === 'variant' && variants.length > 0 && variants.every((variant) => Boolean(variant.force_out_of_stock));
+  const canOrder = !forcedOutOfStock && !allVariantsForcedOut && (type !== 'variant' || Boolean(selectedVariant));
   const specifications = (selectedProduct.specifications || []).filter((spec) => spec.label && spec.value);
   const itemDetails = [
     ...(String(selectedProduct.brand || '').trim() ? [{ id:'brand', label: language === 'si' ? 'වෙළඳ නාමය' : 'Brand', value:String(selectedProduct.brand || '').trim() }] : []),
@@ -190,11 +195,11 @@ export const ProductDetailModal: React.FC = () => {
 
   const selectOption = (name: string, value: string) => {
     const requested = { ...selectedOptions, [name]: value };
-    let candidate = variants.find((variant) => variantMatchesOptions(variant, requested));
-    if (!candidate) {
-      candidate = variants.find((variant) => variantOptions(variant).some((option) => option.name.toLowerCase() === name.toLowerCase() && option.value.toLowerCase() === value.toLowerCase()));
-    }
-    if (!candidate) return;
+    const exactMatches = variants.filter((variant) => variantMatchesOptions(variant, requested));
+    const fallbackMatches = variants.filter((variant) => variantOptions(variant).some((option) => option.name.toLowerCase() === name.toLowerCase() && option.value.toLowerCase() === value.toLowerCase()));
+    const candidates = exactMatches.length ? exactMatches : fallbackMatches;
+    const candidate = candidates.find((variant) => !variant.force_out_of_stock) || candidates[0];
+    if (!candidate || candidate.force_out_of_stock) return;
     setSelectedVariantId(candidate.id);
     setSelectedOptions(Object.fromEntries(variantOptions(candidate).map((option) => [option.name, option.value])));
     setQuantity(1);
@@ -295,9 +300,9 @@ export const ProductDetailModal: React.FC = () => {
               {hasDiscount && <div className="mb-1 text-sm font-bold text-gray-400 line-through">Rs. {formatLkr(regularUnitPrice)}</div>}
               <div className="flex flex-wrap items-center gap-2"><span className="text-3xl font-black text-orange-600">Rs. {formatLkr(unitPrice)}</span>{hasDiscount && <span className="rounded-full bg-orange-100 px-2 py-1 text-[10px] font-black text-orange-700">SPECIAL OFFER</span>}</div>
               <p className={`mt-1.5 flex items-center gap-1 text-[11px] font-black ${settings.free_delivery_enabled ? 'text-emerald-600' : 'text-gray-600'}`}><span aria-hidden="true">🚚</span><span>{deliveryLabel}</span></p>
-              {forcedOutOfStock && (
+              {(forcedOutOfStock || allVariantsForcedOut) && (
                 <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-black text-red-700">
-                  OUT OF STOCK • Details are available, but ordering is temporarily disabled.
+                  {allVariantsForcedOut ? 'OUT OF STOCK • All options are temporarily unavailable.' : 'OUT OF STOCK • This selected option is temporarily unavailable.'}
                 </div>
               )}
             </div>
@@ -310,10 +315,21 @@ export const ProductDetailModal: React.FC = () => {
                     <div className="flex flex-wrap gap-2">
                       {group.values.map((value) => {
                         const active = String(selectedOptions[group.name] || '').toLowerCase() === value.toLowerCase();
-                        const imageVariant = variants.find((variant) => variantOptions(variant).some((option) => option.name.toLowerCase() === group.name.toLowerCase() && option.value.toLowerCase() === value.toLowerCase()) && variant.image);
-                        return <button key={`${group.name}-${value}`} type="button" onClick={() => selectOption(group.name, value)} className={`inline-flex min-h-10 items-center gap-2 rounded-xl border-2 px-3 py-2 text-xs font-black transition ${active ? 'border-orange-600 bg-white text-orange-700 shadow-sm' : 'border-gray-200 bg-white text-gray-700 hover:border-orange-300'}`}>
+                        const requested = { ...selectedOptions, [group.name]: value };
+                        const exactMatches = variants.filter((variant) => variantMatchesOptions(variant, requested));
+                        const fallbackMatches = variants.filter((variant) => variantOptions(variant).some((option) => option.name.toLowerCase() === group.name.toLowerCase() && option.value.toLowerCase() === value.toLowerCase()));
+                        const candidates = exactMatches.length ? exactMatches : fallbackMatches;
+                        const optionUnavailable = candidates.length > 0 && candidates.every((variant) => Boolean(variant.force_out_of_stock));
+                        const imageVariant = candidates.find((variant) => variant.image) || fallbackMatches.find((variant) => variant.image);
+                        return <button
+                          key={`${group.name}-${value}`}
+                          type="button"
+                          disabled={optionUnavailable}
+                          onClick={() => selectOption(group.name, value)}
+                          className={`inline-flex min-h-10 items-center gap-2 rounded-xl border-2 px-3 py-2 text-xs font-black transition ${optionUnavailable ? 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400 line-through' : active ? 'border-orange-600 bg-white text-orange-700 shadow-sm' : 'border-gray-200 bg-white text-gray-700 hover:border-orange-300'}`}
+                        >
                           {group.name.toLowerCase() === 'color' && imageVariant?.image && !failedImages.has(imageVariant.image) && <img src={imageVariant.image} alt="" className="h-7 w-7 rounded-lg object-cover" referrerPolicy="no-referrer" onError={() => setFailedImages((prev) => new Set(prev).add(String(imageVariant.image)))} />}
-                          <span>{value}</span>
+                          <span>{value}{optionUnavailable ? ' • Out of Stock' : ''}</span>
                         </button>;
                       })}
                     </div>
@@ -328,7 +344,7 @@ export const ProductDetailModal: React.FC = () => {
               {type === 'variant' && selectedVariant && <div className="flex items-center gap-2 text-[10px] font-bold text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" />{variantOptionSummary(selectedVariant)} • {selectedVariant.sku}</div>}
             </div>
 
-            <div className="grid grid-cols-2 gap-2"><button disabled={!canOrder} onClick={handleAddToCart} className="rounded-full border border-orange-200 bg-orange-50 py-3 text-xs font-black text-orange-700 transition disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-100 disabled:text-gray-400 disabled:opacity-100"><ShoppingBag className="mr-1 inline h-4 w-4" />{forcedOutOfStock ? 'Out of Stock' : 'Add to Cart'}</button><button disabled={!canOrder} onClick={handleBuyNow} className="rounded-full bg-black py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:bg-gray-400 disabled:opacity-100"><Zap className="mr-1 inline h-4 w-4" />{forcedOutOfStock ? 'Unavailable' : 'Buy Now'}</button></div>
+            <div className="grid grid-cols-2 gap-2"><button disabled={!canOrder} onClick={handleAddToCart} className="rounded-full border border-orange-200 bg-orange-50 py-3 text-xs font-black text-orange-700 transition disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-100 disabled:text-gray-400 disabled:opacity-100"><ShoppingBag className="mr-1 inline h-4 w-4" />{forcedOutOfStock || allVariantsForcedOut ? 'Out of Stock' : 'Add to Cart'}</button><button disabled={!canOrder} onClick={handleBuyNow} className="rounded-full bg-black py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:bg-gray-400 disabled:opacity-100"><Zap className="mr-1 inline h-4 w-4" />{forcedOutOfStock || allVariantsForcedOut ? 'Unavailable' : 'Buy Now'}</button></div>
             <button onClick={openAssistantInquiry} className="w-full rounded-full border border-emerald-100 bg-emerald-50 py-2.5 text-xs font-bold text-emerald-700"><MessageSquare className="mr-2 inline h-4 w-4" />Ask O-RA Assistant • 24/7</button>
 
             {description && (
