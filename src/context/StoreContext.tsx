@@ -1204,6 +1204,7 @@ useEffect(() => {
   const cartLineId = (product: Product, variant?: ProductVariant) => `${product.id}::${variant?.id || 'base'}`;
 
   const addToCart = (product: Product, quantity = 1, variantId?: string) => {
+    if (product.force_out_of_stock) throw new Error(`${product.name_en} is currently out of stock.`);
     const type = normalizedProductType(product);
     const variant = type === 'variant' ? variantById(product, variantId) : undefined;
     if (type === 'variant' && !variant) throw new Error(`Please select a color / option for ${product.name_en}.`);
@@ -1239,6 +1240,7 @@ useEffect(() => {
   const clearCart = () => setCart([]);
 
   const startBuyNow = (product: Product, quantity = 1, variantId?: string) => {
+    if (product.force_out_of_stock) throw new Error(`${product.name_en} is currently out of stock.`);
     const type=normalizedProductType(product);
     const variant=type==='variant'?variantById(product,variantId):undefined;
     if(type==='variant' && !variant) throw new Error(`Please select a color / option for ${product.name_en}.`);
@@ -1406,6 +1408,13 @@ useEffect(() => {
   }): Promise<Order> => {
     if (cart.length === 0) {
       throw new Error('Cart is empty.');
+    }
+    const manuallyUnavailable = cart.find((item) => {
+      const currentProduct = products.find((product) => product.id === item.product.id);
+      return Boolean(currentProduct?.force_out_of_stock || item.product.force_out_of_stock);
+    });
+    if (manuallyUnavailable) {
+      throw new Error(`${manuallyUnavailable.product.name_en} is currently out of stock. Please remove it from the cart before ordering.`);
     }
     if (isCustomerBlocked(formData.phone, formData.whatsapp)) {
       throw new Error('This phone number is blocked from placing orders. Please contact O-RA support.');
