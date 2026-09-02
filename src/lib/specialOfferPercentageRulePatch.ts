@@ -106,8 +106,8 @@ export const specialOfferPercentageRulePatch = () => ({
       );
       text = replaceRequired(
         text,
-        "                            auto_price_enabled: p.auto_price_enabled !== false,\n                            auto_discount_on_cost_drop: p.auto_discount_on_cost_drop !== false,\n                            offer_buying_price: p.offer_buying_price,",
-        "                            auto_price_enabled: p.auto_price_enabled !== false,\n                            auto_discount_on_cost_drop: p.auto_discount_on_cost_drop !== false,\n                            auto_round_special_offer_enabled: Boolean((p as any).auto_round_special_offer_enabled),\n                            auto_round_special_offer_percent: roundSpecialOfferPercentForSelection(p),\n                            offer_buying_price: p.offer_buying_price,",
+        "                            auto_price_enabled: false,\n                            auto_discount_on_cost_drop: p.auto_discount_on_cost_drop !== false,\n                            offer_buying_price: p.offer_buying_price,",
+        "                            auto_price_enabled: false,\n                            auto_discount_on_cost_drop: p.auto_discount_on_cost_drop !== false,\n                            auto_round_special_offer_enabled: Boolean((p as any).auto_round_special_offer_enabled),\n                            auto_round_special_offer_percent: roundSpecialOfferPercentForSelection(p),\n                            offer_buying_price: p.offer_buying_price,",
         'existing product edit fields',
       );
 
