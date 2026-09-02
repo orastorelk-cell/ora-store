@@ -465,6 +465,9 @@ export const AdminDashboard: React.FC = () => {
   const [productBackupBusy, setProductBackupBusy] = useState(false);
   const [productFolderZipBusy, setProductFolderZipBusy] = useState(false);
   const [productFolderZipProgress, setProductFolderZipProgress] = useState('');
+  const [productFolderCode, setProductFolderCode] = useState('');
+  const [singleProductFolderZipBusy, setSingleProductFolderZipBusy] = useState(false);
+  const [singleProductFolderZipProgress, setSingleProductFolderZipProgress] = useState('');
   const productContentTemplateInputRef = useRef<HTMLInputElement>(null);
 
   const exportProductBackup = () => {
@@ -509,6 +512,53 @@ export const AdminDashboard: React.FC = () => {
     } finally {
       setProductFolderZipBusy(false);
       setProductFolderZipProgress('');
+    }
+  };
+
+  const exportProductFolderByCode = async () => {
+    const requestedCode = String(productFolderCode || '').trim().toUpperCase();
+    if (!requestedCode) {
+      alert('Enter an Item Code first.');
+      return;
+    }
+
+    const product = products.find((candidate) => String(candidate.sku || '').trim().toUpperCase() === requestedCode)
+      || products.find((candidate) => (candidate.variants || []).some(
+        (variant) => String(variant.sku || '').trim().toUpperCase() === requestedCode,
+      ));
+
+    if (!product) {
+      alert(`No product found for Item Code: ${requestedCode}`);
+      return;
+    }
+
+    setSingleProductFolderZipBusy(true);
+    setSingleProductFolderZipProgress('Starting...');
+    try {
+      const result = await downloadProductFoldersZip(
+        [product],
+        categories,
+        (progress) => {
+          const count = progress.total ? `${progress.completed}/${progress.total}` : '';
+          setSingleProductFolderZipProgress(count);
+        },
+        {
+          includeCatalogFiles: false,
+          referenceProducts: products,
+          fileNamePrefix: `O-RA-${product.sku || requestedCode}`,
+        },
+      );
+      const failedLine = result.failedImages
+        ? `\nImage download failures: ${result.failedImages} (source URLs are saved inside the product folder)`
+        : '';
+      alert(
+        `Product ZIP downloaded successfully.\n\nItem Code: ${product.sku}\nProduct: ${product.name_en || ''}\nImages saved: ${result.savedImages}${failedLine}\n\nThe ZIP contains only this product folder with DETAILS.txt, SYSTEM-DATA.json and its saved images.`,
+      );
+    } catch (error:any) {
+      alert(error?.message || 'Product ZIP could not be created.');
+    } finally {
+      setSingleProductFolderZipBusy(false);
+      setSingleProductFolderZipProgress('');
     }
   };
 
@@ -3321,6 +3371,32 @@ Suitable For:
                 {productFolderZipBusy ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <FolderTree className="w-3.5 h-3.5" />}
                 <span>{productFolderZipBusy ? `ZIP ${productFolderZipProgress}` : 'Download Folder ZIP'}</span>
               </button>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                <input
+                  type="text"
+                  placeholder="Item Code"
+                  value={productFolderCode}
+                  onChange={(event) => setProductFolderCode(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !singleProductFolderZipBusy && !productFolderZipBusy) {
+                      void exportProductFolderByCode();
+                    }
+                  }}
+                  className="w-28 sm:w-32 bg-neutral-900 border border-neutral-800 rounded-xl px-3 py-2 text-[10px] text-white font-mono uppercase focus:border-amber-500"
+                  title="Enter an exact product or variant Item Code"
+                />
+                <button
+                  type="button"
+                  onClick={() => void exportProductFolderByCode()}
+                  disabled={!productFolderCode.trim() || singleProductFolderZipBusy || productFolderZipBusy || productBackupBusy}
+                  className="px-3 py-2 rounded-xl border border-violet-500/40 bg-violet-500/10 text-violet-300 font-bold text-[10px] flex items-center gap-1.5 disabled:opacity-40"
+                  title="Download only the product folder that matches this Item Code"
+                >
+                  {singleProductFolderZipBusy ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                  <span>{singleProductFolderZipBusy ? `ZIP ${singleProductFolderZipProgress}` : 'Download Code ZIP'}</span>
+                </button>
+              </div>
 
               {adminUser?.role === 'admin' && <>
                 <input
