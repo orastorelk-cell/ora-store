@@ -2630,19 +2630,15 @@ Suitable For:
         return {
           ...target,
           buying_price: supplierPreview.newCost,
-          selling_price: supplierPreview.nextSelling,
-          discount_enabled: false,
-          discount_price: supplierPreview.nextSelling,
-          offer_buying_price: undefined,
-          supplier_offer_enabled: false,
-          supplier_offer_saved_at: undefined,
+          // Customer-facing price fields stay exactly as saved. Change them only
+          // from Product Edit when a manual selling-price change is intended.
           price_history: [...historyBase, {
             changed_at: now,
-            reason: `Supplier cost increased: Rs. ${supplierPreview.normalCost} -> Rs. ${supplierPreview.newCost}; normal price raised by Rs. ${supplierPreview.increasePerUnit}/item`,
+            reason: `Supplier cost increased: Rs. ${supplierPreview.normalCost} -> Rs. ${supplierPreview.newCost}; customer selling price kept unchanged`,
             buying_price: supplierPreview.newCost,
-            selling_price: supplierPreview.nextSelling,
-            discount_price: supplierPreview.nextSelling,
-            discount_enabled: false,
+            selling_price: Number(target.selling_price || 0),
+            discount_price: target.discount_price,
+            discount_enabled: Boolean(target.discount_enabled),
           }].slice(-50),
         };
       }
@@ -2667,7 +2663,7 @@ Suitable For:
     setSupplierMessage(supplierPreview.kind === 'offer'
       ? `Saved. Special Offer is now active: Rs. ${supplierRegularDisplay.toLocaleString()} -> Rs. ${supplierPreviewDisplay.toLocaleString()} (${supplierPreviewPercent}% OFF). Existing Qty Offer rules still apply after this item price.`
       : supplierPreview.kind === 'increase'
-        ? `Saved. Supplier cost increased by Rs. ${supplierPreview.increasePerUnit.toLocaleString()} per item, so the future normal customer price increased by the same amount to protect the original profit.`
+        ? `Saved. Buying cost increased by Rs. ${supplierPreview.increasePerUnit.toLocaleString()} per item. Customer selling price stayed at Rs. ${supplierRegularDisplay.toLocaleString()}. Change selling price manually from Product Edit only if needed.`
         : 'Saved. Supplier cost matches the normal buying cost; no offer is active.');
   };
 
@@ -3439,7 +3435,7 @@ Suitable For:
                             selling_price: p.selling_price,
                             discount_price: (p.discount_enabled !== false && p.discount_price && p.discount_price < p.selling_price ? p.discount_price : p.selling_price),
                             discount_enabled: Boolean(p.discount_enabled),
-                            auto_price_enabled: p.auto_price_enabled !== false,
+                            auto_price_enabled: false,
                             auto_discount_on_cost_drop: p.auto_discount_on_cost_drop !== false,
                             offer_buying_price: p.offer_buying_price,
                             supplier_offer_enabled: Boolean(p.supplier_offer_enabled),
@@ -3448,7 +3444,7 @@ Suitable For:
                             status: p.status,
                             images: p.images,
                           });
-                          setProductAutoPricing(p.auto_price_enabled !== false);
+                          setProductAutoPricing(false);
                           setProductAutoCode(false);
                           setIsAddProductOpen(true);
                           setActiveTab('add_product');
@@ -6234,7 +6230,7 @@ Suitable For:
                   <label className="text-xs font-black text-gray-800">New Supplier Buying Price (Rs.)
                     <input type="number" min="0" value={supplierNewCost || ''} onChange={(e)=>{setSupplierNewCost(Math.max(0,Number(e.target.value||0)));setSupplierMessage('');}} placeholder="Example: 300" className="mt-1 w-full rounded-xl border border-amber-300 bg-white px-3 py-3 text-base font-black text-gray-900 outline-none focus:border-amber-500" />
                   </label>
-                  <p className="mt-2 text-[10px] leading-4 text-gray-600"><b>Cheaper than saved cost:</b> exact saving per item becomes Special Offer. <b>Higher than saved cost:</b> no fake discount; normal selling price rises by the exact extra cost to preserve the original target profit.</p>
+                  <p className="mt-2 text-[10px] leading-4 text-gray-600"><b>Cheaper than saved cost:</b> exact saving per item becomes Special Offer. <b>Higher than saved cost:</b> buying cost can be saved, but the customer selling price stays unchanged until you edit it manually in Product Edit.</p>
                 </div>
 
                 {supplierPreview && supplierTarget && (
@@ -6250,7 +6246,7 @@ Suitable For:
                       <p className="mt-2 text-[10px] text-emerald-800">Qty 2 saves Rs. {(supplierPreview.savingPerUnit*2).toLocaleString()} from this supplier offer before the existing Qty Offer is calculated.</p>
                     </> : supplierPreview.kind==='increase' ? <>
                       <p className="text-xs font-black text-red-800">SUPPLIER COST INCREASE PREVIEW</p>
-                      <p className="mt-2 text-sm text-red-800">New cost is Rs. {supplierPreview.increasePerUnit.toLocaleString()} higher per item. Future normal customer price becomes <b>Rs. {supplierPreviewDisplay.toLocaleString()}</b>. No discount badge is shown.</p>
+                      <p className="mt-2 text-sm text-red-800">New cost is Rs. {supplierPreview.increasePerUnit.toLocaleString()} higher per item. Customer selling price will stay <b>Rs. {supplierRegularDisplay.toLocaleString()}</b>. Change it manually in Product Edit only if you want.</p>
                     </> : <p className="text-xs font-bold text-gray-600">Same as the saved normal buying cost. No price change is needed.</p>}
                   </div>
                 )}
