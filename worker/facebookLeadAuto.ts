@@ -581,7 +581,54 @@ export const facebookLeadAutoHandler = async (
   const webhookPath = '/api/integrations/facebook-leads/webhook';
   const statusPath = '/api/integrations/facebook-leads/status';
   const backfillPath = '/api/integrations/facebook-leads/backfill-20260903';
+  const backfillAllPath = '/api/integrations/facebook-leads/backfill-all-20260903';
   const env = (envValue || {}) as Env;
+
+  if (request.method === 'GET' && url.pathname === backfillAllPath) {
+    const html = `<!doctype html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>O-RA Facebook Backfill</title></head>
+<body style="font-family:Arial,sans-serif;padding:24px;max-width:760px;margin:auto">
+  <h2>O-RA Facebook Lead Backfill</h2>
+  <p id="status">Starting…</p>
+  <pre id="log" style="white-space:pre-wrap;background:#f6f6f6;padding:16px;border-radius:10px"></pre>
+  <script>
+    (async () => {
+      const status = document.getElementById('status');
+      const log = document.getElementById('log');
+      let runs = 0;
+      while (runs < 20) {
+        runs += 1;
+        status.textContent = 'Importing missing Facebook leads… run ' + runs;
+        const res = await fetch('/api/integrations/facebook-leads/backfill-20260903', { cache:'no-store' });
+        const data = await res.json().catch(() => ({ ok:false, error:'Invalid response' }));
+        log.textContent += JSON.stringify(data) + '\\n';
+        if (!res.ok || data.failed_this_run > 0 || data.ok === false) {
+          status.textContent = 'Stopped because an error occurred.';
+          return;
+        }
+        if (!data.run_again || Number(data.remaining || 0) <= 0) {
+          status.textContent = 'DONE — all missing leads were processed.';
+          return;
+        }
+        await new Promise(r => setTimeout(r, 700));
+      }
+      status.textContent = 'Stopped after safety limit.';
+    })().catch((error) => {
+      document.getElementById('status').textContent = 'Stopped because an error occurred.';
+      document.getElementById('log').textContent += String(error);
+    });
+  </script>
+</body>
+</html>`;
+    return new Response(html, {
+      status: 200,
+      headers: {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-store',
+      },
+    });
+  }
 
   if (request.method === 'GET' && url.pathname === backfillPath) {
     try {
