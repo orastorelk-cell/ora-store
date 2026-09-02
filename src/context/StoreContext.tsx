@@ -178,6 +178,7 @@ interface StoreContextType {
     ignoredCount: number;
   }>;
   updateOrderStatus: (orderId: string, status: OrderStatus) => void;
+  cancelOrderDirect: (orderId: string, reason: string, cancelledBy?: string) => Promise<{ success: boolean; message: string }>;
   updateOrderDeliveryDetails: (orderId: string, details: { address: string; city: string; district?: string }) => Promise<{ success: boolean; sheetSynced: boolean; message: string }>;
   updatePaymentStatus: (orderId: string, status: 'Pending' | 'Paid' | 'Refunded') => void;
   confirmAdvancePayment: (orderId: string) => void;
@@ -1916,6 +1917,67 @@ useEffect(() => {
     logActivity({ action: 'Order Status Changed', module: 'Orders', target_id: orderId, target_label: order?.order_number || orderId, details: `Status: ${status}` });
   };
 
+  const cancelOrderDirect = async (
+    orderId: string,
+    reason: string,
+    cancelledBy = adminUser?.name || 'Admin'
+  ): Promise<{ success: boolean; message: string }> => {
+    const order=orders.find((candidate)=>candidate.id===orderId);
+    if(!order) throw new Error('Order not found.');
+    if(order.order_status==='Cancelled') return { success:true, message:`${order.order_number} is already cancelled.` };
+
+    if(
+      order.stock_allocated ||
+      order.invoice_locked ||
+      order.dispatch_status==='Handed Over' ||
+      order.order_status==='Shipped' ||
+      order.order_status==='Delivered'
+    ){
+      throw new Error('This order is already stock / invoice / dispatch locked. Use the existing Admin correction / return flow instead.');
+    }
+
+    const cleanReason=String(reason || '').trim();
+    if(!cleanReason) throw new Error('Cancel reason is required.');
+
+    const now=new Date().toISOString();
+    const updated:Order={
+      ...order,
+      call_center_status:'Cancelled',
+      order_status:'Cancelled',
+      call_center_updated_at:now,
+      cancelled_at:now,
+      cancelled_by:cancelledBy,
+      cancel_reason:cleanReason,
+      notes:[order.notes,'Cancelled directly in O-RA',`Reason: ${cleanReason}`].filter(Boolean).join(' | '),
+    };
+
+    // Persist before changing local UI so refresh cannot restore the old status.
+    await sharedStaffRequest(`/api/orders/${encodeURIComponent(updated.id)}`,{
+      method:'PUT',
+      body:JSON.stringify({order:updated}),
+    });
+
+    setOrders((prev)=>{
+      const next=prev.map((candidate)=>candidate.id===updated.id?updated:candidate);
+      try{localStorage.setItem('ora_orders',JSON.stringify(next));}catch{}
+      return next;
+    });
+
+    logActivity({
+      action:'Order Cancelled Directly',
+      module:'Orders',
+      target_id:updated.id,
+      target_label:updated.order_number,
+      details:`${cleanReason} • ${cancelledBy}`,
+    });
+
+    return {
+      success:true,
+      message:`${updated.order_number} cancelled in O-RA. Confirm/Cancel CSV upload remains available for bulk decisions.`,
+    };
+  };
+
+
   const updateOrderDeliveryDetails = async (
     orderId: string,
     details: { address: string; city: string; district?: string },
@@ -3068,6 +3130,7 @@ useEffect(() => {
         placeOrder,
         importBulkOrders,
         updateOrderStatus,
+        cancelOrderDirect,
         updateOrderDeliveryDetails,
         updatePaymentStatus,
         confirmAdvancePayment,
