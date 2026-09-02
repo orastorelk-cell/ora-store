@@ -175,6 +175,7 @@ export const AdminDashboard: React.FC = () => {
     updateCategory,
     deleteCategory,
     updateOrderStatus,
+    cancelOrderDirect,
     updateOrderDeliveryDetails,
     updatePaymentStatus,
     confirmAdvancePayment,
@@ -4102,7 +4103,7 @@ Suitable For:
                     </div>
                   </div>
 
-                  <div className="flex items-center space-x-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span
                       className={`rounded-lg border px-2.5 py-1 text-xs font-bold ${
                         order.order_status === 'Delivered'
@@ -4121,6 +4122,46 @@ Suitable For:
                     >
                       {order.order_status}
                     </span>
+
+                    {order.order_status !== 'Cancelled' && (
+                      <button
+                        type="button"
+                        disabled={
+                          Boolean(order.stock_allocated) ||
+                          Boolean(order.invoice_locked) ||
+                          order.dispatch_status === 'Handed Over' ||
+                          order.order_status === 'Shipped' ||
+                          order.order_status === 'Delivered'
+                        }
+                        onClick={async()=>{
+                          const reason=window.prompt(
+                            `Cancel ${order.order_number}\n\nReason:`,
+                            'Customer cancellation'
+                          );
+                          if(reason===null) return;
+                          const cleanReason=reason.trim();
+                          if(!cleanReason){ alert('Cancel reason is required.'); return; }
+                          if(!window.confirm(`Cancel ${order.order_number}?\n\nReason: ${cleanReason}\n\nThis changes the O-RA order to Cancelled.`)) return;
+                          try{
+                            const result=await cancelOrderDirect(order.id,cleanReason,adminUser?.name || 'Admin');
+                            alert(result.message);
+                          }catch(error:any){
+                            alert(error?.message || 'Order could not be cancelled.');
+                          }
+                        }}
+                        className="inline-flex items-center gap-1 rounded-lg border border-red-500/40 bg-red-500/10 px-2.5 py-1 text-[10px] font-black text-red-300 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:border-neutral-700 disabled:bg-neutral-800 disabled:text-neutral-500"
+                        title={
+                          order.stock_allocated || order.invoice_locked || order.dispatch_status === 'Handed Over' || order.order_status === 'Shipped' || order.order_status === 'Delivered'
+                            ? 'Already stock / invoice / dispatch locked. Use correction / return flow.'
+                            : 'Cancel this order directly in O-RA'
+                        }
+                      >
+                        <X className="h-3 w-3"/>
+                        {order.stock_allocated || order.invoice_locked || order.dispatch_status === 'Handed Over' || order.order_status === 'Shipped' || order.order_status === 'Delivered'
+                          ? 'Cancel Locked'
+                          : 'Cancel Order'}
+                      </button>
+                    )}
                   </div>
                 </div>
 
