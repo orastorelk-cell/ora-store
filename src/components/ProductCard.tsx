@@ -35,7 +35,10 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
   const hasDiscount = discountPercent > 0;
   const regularPrice = type !== 'variant' ? regularDisplayUnitPrice(product, settings) : 0;
   const needsSelection = type === 'variant';
-  const forcedOutOfStock = Boolean(product.force_out_of_stock);
+  const selectableVariants = type === 'variant' ? activeVariants(product) : [];
+  const forcedOutOfStock = type === 'variant'
+    ? selectableVariants.length > 0 && selectableVariants.every((variant) => Boolean(variant.force_out_of_stock))
+    : Boolean(product.force_out_of_stock);
   const images = cleanImages(product.images);
   const primaryImage = images[0] || activeVariants(product).find((v) => String(v.image || '').trim())?.image || '';
   const deliveryLabel = settings.free_delivery_enabled
