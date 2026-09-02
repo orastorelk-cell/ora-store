@@ -3599,25 +3599,30 @@ Suitable For:
             </div>
           </div>
 
+
           <div className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden">
             <div className="p-4 border-b border-neutral-800">
-              <h3 className="font-bold text-white text-sm">Stock Report by Item Code</h3>
-              <p className="mt-1 text-[10px] text-neutral-500">Search one Item Code / name and see purchase history summary, current packing, available stock and physical stock in one place.</p>
-              <div className="relative mt-3 max-w-xl">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
-                <input
-                  type="text"
-                  value={stockItemSearch}
-                  onChange={(e)=>setStockItemSearch(e.target.value)}
-                  placeholder="Type Item Code or Item Name..."
-                  className="w-full rounded-xl border border-neutral-700 bg-neutral-950 py-2.5 pl-10 pr-16 text-sm text-white outline-none focus:border-amber-500"
-                />
-                {stockItemSearch && (
-                  <button type="button" onClick={()=>setStockItemSearch('')}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-neutral-400 hover:text-white">
-                    Clear
-                  </button>
-                )}
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                <div>
+                  <h3 className="font-bold text-white text-sm">Item Code Stock Movement Report</h3>
+                  <p className="mt-1 text-[10px] text-neutral-500">Daily Purchase + Packing movement with current stock. Click an Item Code to open its 30-day report chart.</p>
+                </div>
+                <div className="relative w-full max-w-xl">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
+                  <input
+                    type="text"
+                    value={stockItemSearch}
+                    onChange={(e)=>setStockItemSearch(e.target.value)}
+                    placeholder="Type Item Code or Item Name..."
+                    className="w-full rounded-xl border border-neutral-700 bg-neutral-950 py-2.5 pl-10 pr-16 text-sm text-white outline-none focus:border-amber-500"
+                  />
+                  {stockItemSearch && (
+                    <button type="button" onClick={()=>setStockItemSearch('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-neutral-400 hover:text-white">
+                      Clear
+                    </button>
+                  )}
+                </div>
               </div>
               <p className="mt-2 text-[10px] text-neutral-500">
                 Showing {stockItemReportRows.length} of {stockByItemCodeRows.length} item code{stockByItemCodeRows.length===1?'':'s'}
@@ -3625,64 +3630,156 @@ Suitable For:
             </div>
 
             <div className="overflow-x-auto max-h-[560px]">
-              <table className="w-full min-w-[1180px] text-left text-xs text-neutral-300">
+              <table className="w-full min-w-[1320px] text-left text-xs text-neutral-300">
                 <thead className="bg-neutral-950 sticky top-0 z-10 text-[10px] uppercase text-neutral-500">
                   <tr>
                     <th className="p-3">Item Code</th>
                     <th className="p-3">Item / Variant</th>
-                    <th className="p-3">Last Purchase</th>
-                    <th className="p-3 text-center">Purchased Qty</th>
-                    <th className="p-3 text-center">Before Purchase</th>
-                    <th className="p-3 text-center">After Purchase</th>
+                    <th className="p-3 text-center">Today Purchase</th>
+                    <th className="p-3 text-center">Today Packed</th>
+                    <th className="p-3 text-center">Total Purchased</th>
+                    <th className="p-3 text-center">Total Packed</th>
                     <th className="p-3 text-center">Packing Now</th>
-                    <th className="p-3 text-center">Available Now</th>
-                    <th className="p-3 text-center">Physical Now</th>
+                    <th className="p-3 text-center">Available</th>
+                    <th className="p-3 text-center">Physical</th>
+                    <th className="p-3 text-center">Stock Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-800">
                   {stockItemReportRows.map((row) => (
-                    <tr key={row.sku} className="hover:bg-neutral-800/50">
-                      <td className="p-3 font-mono font-black text-amber-400">{row.sku}</td>
+                    <tr key={row.sku} className={'hover:bg-neutral-800/50 ' + (selectedStockReportSku===row.sku?'bg-amber-500/5':'')}>
+                      <td className="p-3">
+                        <button
+                          type="button"
+                          onClick={()=>setSelectedStockReportSku(row.sku)}
+                          className="inline-flex items-center gap-1.5 font-mono font-black text-amber-400 underline decoration-amber-500/30 underline-offset-4 hover:text-amber-300"
+                          title="Open item movement chart"
+                        >
+                          {row.sku}<BarChart3 className="h-3.5 w-3.5"/>
+                        </button>
+                      </td>
                       <td className="p-3">
                         <div className="font-semibold text-white">{row.name}</div>
                         <div className="mt-0.5 text-[10px] text-neutral-500">{row.variant || row.type}</div>
                       </td>
-                      <td className="p-3">
-                        {row.latestPurchaseAt ? <>
-                          <div className="font-semibold text-white">{new Date(row.latestPurchaseAt).toLocaleDateString()}</div>
-                          <div className="mt-0.5 text-[10px] text-neutral-500">{row.latestPoNumber}</div>
-                        </> : <span className="text-neutral-600">No purchase record</span>}
+                      <td className="p-3 text-center">
+                        <span className={'inline-flex min-w-12 justify-center rounded-lg px-2.5 py-1.5 font-black ' + (row.todayPurchased>0?'bg-sky-500/10 text-sky-300':'bg-neutral-800 text-neutral-500')}>+{row.todayPurchased}</span>
                       </td>
                       <td className="p-3 text-center">
-                        <div className="font-black text-sky-300">{row.totalPurchased}</div>
-                        {row.latestPurchaseQty>0 && <div className="text-[9px] text-neutral-500">Latest +{row.latestPurchaseQty}</div>}
+                        <span className={'inline-flex min-w-12 justify-center rounded-lg px-2.5 py-1.5 font-black ' + (row.todayPacked>0?'bg-orange-500/10 text-orange-300':'bg-neutral-800 text-neutral-500')}>{row.todayPacked}</span>
                       </td>
-                      <td className="p-3 text-center font-bold text-neutral-300">{row.beforeLatestPurchase===null?'—':row.beforeLatestPurchase}</td>
-                      <td className="p-3 text-center font-bold text-blue-300">{row.afterLatestPurchase===null?'—':row.afterLatestPurchase}</td>
+                      <td className="p-3 text-center font-black text-sky-300">{row.totalPurchased}</td>
+                      <td className="p-3 text-center font-black text-orange-300">{row.totalPacked}</td>
                       <td className="p-3 text-center">
-                        <span className={`inline-flex min-w-12 justify-center rounded-lg px-2.5 py-1.5 font-black ${row.packing>0?'bg-orange-500/10 text-orange-300':'bg-neutral-800 text-neutral-500'}`}>{row.packing}</span>
+                        <span className={'inline-flex min-w-12 justify-center rounded-lg px-2.5 py-1.5 font-black ' + (row.packing>0?'bg-orange-500/10 text-orange-300':'bg-neutral-800 text-neutral-500')}>{row.packing}</span>
                       </td>
                       <td className="p-3 text-center">
-                        <span className={`inline-flex min-w-12 justify-center rounded-lg px-2.5 py-1.5 font-black ${row.available>0?'bg-emerald-500/10 text-emerald-300':'bg-red-500/10 text-red-300'}`}>{row.available}</span>
+                        <span className={'inline-flex min-w-12 justify-center rounded-lg px-2.5 py-1.5 font-black ' + (row.available>0?'bg-emerald-500/10 text-emerald-300':'bg-red-500/10 text-red-300')}>{row.available}</span>
                       </td>
                       <td className="p-3 text-center">
                         <span className="inline-flex min-w-12 justify-center rounded-lg bg-violet-500/10 px-2.5 py-1.5 font-black text-violet-300">{row.currentPhysical}</span>
                       </td>
+                      <td className="p-3 text-center">
+                        <span className={'inline-flex rounded-full px-2.5 py-1 text-[9px] font-black ' + (row.stockHealth==='OUT OF STOCK'?'bg-red-500/15 text-red-300':row.stockHealth==='LOW STOCK'?'bg-amber-500/15 text-amber-300':'bg-emerald-500/15 text-emerald-300')}>
+                          {row.stockHealth}
+                        </span>
+                      </td>
                     </tr>
                   ))}
                   {stockItemReportRows.length===0 && (
-                    <tr><td colSpan={9} className="p-6 text-center text-neutral-500">{stockItemSearch.trim()?'No matching Item Code / Item Name.':'No stock item codes available.'}</td></tr>
+                    <tr><td colSpan={10} className="p-6 text-center text-neutral-500">{stockItemSearch.trim()?'No matching Item Code / Item Name.':'No stock item codes available.'}</td></tr>
                   )}
                 </tbody>
               </table>
             </div>
 
-            <div className="grid grid-cols-1 gap-2 border-t border-neutral-800 bg-neutral-950/50 p-3 text-[10px] text-neutral-500 sm:grid-cols-3">
-              <div><b className="text-orange-300">Packing Now</b> = allocated to confirmed active orders, not handed to courier yet.</div>
-              <div><b className="text-emerald-300">Available Now</b> = sellable stock remaining after allocation.</div>
-              <div><b className="text-violet-300">Physical Now</b> = Available + Packing currently still physically with you.</div>
+            <div className="grid grid-cols-1 gap-2 border-t border-neutral-800 bg-neutral-950/50 p-3 text-[10px] text-neutral-500 sm:grid-cols-4">
+              <div><b className="text-sky-300">Today Purchase</b> = quantity entered through Add Purchase today.</div>
+              <div><b className="text-orange-300">Today Packed</b> = quantity allocated to confirmed orders today.</div>
+              <div><b className="text-emerald-300">Available</b> = sellable stock after allocation.</div>
+              <div><b className="text-violet-300">Physical</b> = Available + Packing stock still physically with you.</div>
             </div>
           </div>
+
+          {selectedStockReportRow && (
+            <div className="rounded-2xl border border-amber-500/30 bg-neutral-900 overflow-hidden">
+              <div className="flex flex-col gap-3 border-b border-neutral-800 p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <BarChart3 className="h-5 w-5 text-amber-400"/>
+                    <h3 className="font-black text-white">{selectedStockReportRow.sku} • Stock Movement Report</h3>
+                  </div>
+                  <p className="mt-1 text-xs text-neutral-400">{selectedStockReportRow.name}{selectedStockReportRow.variant ? ' • ' + selectedStockReportRow.variant : ''}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={()=>setSelectedStockReportSku('')}
+                  className="inline-flex items-center justify-center rounded-lg border border-neutral-700 bg-neutral-950 p-2 text-neutral-400 hover:text-white"
+                  aria-label="Close stock report"
+                >
+                  <X className="h-4 w-4"/>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 xl:grid-cols-6">
+                <div className="rounded-xl border border-sky-500/20 bg-sky-500/5 p-3"><p className="text-[9px] font-bold uppercase text-neutral-500">Total Purchased</p><p className="mt-1 text-xl font-black text-sky-300">{selectedStockReportRow.totalPurchased}</p></div>
+                <div className="rounded-xl border border-orange-500/20 bg-orange-500/5 p-3"><p className="text-[9px] font-bold uppercase text-neutral-500">Total Packed</p><p className="mt-1 text-xl font-black text-orange-300">{selectedStockReportRow.totalPacked}</p></div>
+                <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-3"><p className="text-[9px] font-bold uppercase text-neutral-500">Today Purchase</p><p className="mt-1 text-xl font-black text-blue-300">+{selectedStockReportRow.todayPurchased}</p></div>
+                <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3"><p className="text-[9px] font-bold uppercase text-neutral-500">Today Packed</p><p className="mt-1 text-xl font-black text-amber-300">{selectedStockReportRow.todayPacked}</p></div>
+                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3"><p className="text-[9px] font-bold uppercase text-neutral-500">Available Now</p><p className="mt-1 text-xl font-black text-emerald-300">{selectedStockReportRow.available}</p></div>
+                <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-3"><p className="text-[9px] font-bold uppercase text-neutral-500">Physical Now</p><p className="mt-1 text-xl font-black text-violet-300">{selectedStockReportRow.currentPhysical}</p></div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 p-4 pt-0 xl:grid-cols-[1.5fr_1fr]">
+                <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-4">
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-bold text-white">Daily Purchase vs Packing</h4>
+                      <p className="text-[10px] text-neutral-500">Last 30 days</p>
+                    </div>
+                    <span className={'rounded-full px-3 py-1 text-[10px] font-black ' + (selectedStockReportRow.stockHealth==='OUT OF STOCK'?'bg-red-500/15 text-red-300':selectedStockReportRow.stockHealth==='LOW STOCK'?'bg-amber-500/15 text-amber-300':'bg-emerald-500/15 text-emerald-300')}>{selectedStockReportRow.stockHealth}</span>
+                  </div>
+                  <div className="h-72 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={selectedStockDailyReport} margin={{top:8,right:8,left:-18,bottom:20}}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#262626"/>
+                        <XAxis dataKey="label" interval={4} tick={{fill:'#a3a3a3',fontSize:9}}/>
+                        <YAxis allowDecimals={false} tick={{fill:'#a3a3a3',fontSize:9}}/>
+                        <Tooltip contentStyle={{background:'#171717',border:'1px solid #404040',borderRadius:12}}/>
+                        <Legend/>
+                        <Bar dataKey="purchased" name="Purchased" fill="#38bdf8" radius={[4,4,0,0]}/>
+                        <Bar dataKey="packed" name="Packed" fill="#f59e0b" radius={[4,4,0,0]}/>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-neutral-800 bg-neutral-950 overflow-hidden">
+                  <div className="border-b border-neutral-800 p-4">
+                    <h4 className="text-sm font-bold text-white">Daily Movement</h4>
+                    <p className="text-[10px] text-neutral-500">Days with Purchase or Packing activity</p>
+                  </div>
+                  <div className="max-h-72 overflow-auto">
+                    <table className="w-full text-left text-xs text-neutral-300">
+                      <thead className="sticky top-0 bg-neutral-900 text-[9px] uppercase text-neutral-500"><tr><th className="p-2.5">Date</th><th className="p-2.5 text-center">In</th><th className="p-2.5 text-center">Packed</th><th className="p-2.5 text-center">Net</th></tr></thead>
+                      <tbody className="divide-y divide-neutral-800">
+                        {selectedStockMovementRows.length===0 ? (
+                          <tr><td colSpan={4} className="p-5 text-center text-neutral-600">No movement in the last 30 days.</td></tr>
+                        ) : selectedStockMovementRows.map((movement)=>(
+                          <tr key={movement.date}>
+                            <td className="p-2.5 font-mono text-neutral-300">{movement.date}</td>
+                            <td className="p-2.5 text-center font-black text-sky-300">+{movement.purchased}</td>
+                            <td className="p-2.5 text-center font-black text-orange-300">{movement.packed}</td>
+                            <td className={'p-2.5 text-center font-black ' + (movement.net>0?'text-emerald-300':movement.net<0?'text-red-300':'text-neutral-500')}>{movement.net>0?'+':''}{movement.net}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-4">
