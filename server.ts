@@ -971,20 +971,68 @@ app.put('/api/admin/storefront/state', requireAdminSession, async (req,res) => {
   try {
     const products = Array.isArray(req.body?.products) ? req.body.products : null;
     const categories = Array.isArray(req.body?.categories) ? req.body.categories : null;
-    const settings = req.body?.settings && typeof req.body.settings === 'object' && !Array.isArray(req.body.settings) ? req.body.settings : null;
-    if (!products || !categories || !settings) return res.status(400).json({ error:'Products, categories and settings are required.' });
+    const incomingSettings = req.body?.settings && typeof req.body.settings === 'object' && !Array.isArray(req.body.settings) ? req.body.settings : null;
+    if (!products || !categories || !incomingSettings) return res.status(400).json({ error:'Products, categories and settings are required.' });
+
+    // Private integration safety: an older/stale Admin tab must never erase the
+    // working Apps Script URL just because its local settings copy contains blank.
+    // An intentional clear can still be added later as a dedicated explicit action.
+    const currentState = await readSharedStorefrontState();
+    const previousWebhook = String(currentState?.settings?.google_sheet_webhook_url || '').trim();
+    const incomingWebhook = String(incomingSettings?.google_sheet_webhook_url || '').trim();
+    const settings = {
+      ...incomingSettings,
+      google_sheet_webhook_url: incomingWebhook || previousWebhook,
+    };
+
     const state = await writeSharedStorefrontState({ products, categories, settings });
+    const webhook = String(settings.google_sheet_webhook_url || '').trim();
+
     try {
-  const webhook = String(settings?.google_sheet_webhook_url || '').trim();
-  if (webhook) {
-    postAppsScriptFastServer(webhook, {
-      payload_type: 'catalog_sync',
-      products,
-      pricing: Object.fromEntries((Array.isArray(products) ? products : []).map((p:any) => [String(p?.sku || ''), Number(p?.selling_price || 0)])),
-    }).catch(() => {});
-  }
-} catch { /* non-blocking */ }
-return res.json({ ok:true, version:state.version, updated_at:state.updated_at });
+      if (webhook) {
+        postAppsScriptFastServer(webhook, {
+          payload_type: 'catalog_sync',
+          products,
+          pricing: Object.fromEntries((Array.isArray(products) ? products : []).map((p:any) => [String(p?.sku || ''), Number(p?.selling_price || 0)])),
+        }).catch(() => {});
+      }
+    } catch { /* non-blocking */ }
+
+    // If the integration was restored after being blank, automatically recover
+    // durable orders that were safely saved while Sheet sync was unavailable.
+    let recoveredUnsynced = 0;
+    let recoveryError = '';
+    if (!previousWebhook && webhook) {
+      try {
+        const currentOrders = await getOrderSnapshots();
+        const pending = currentOrders.filter((order:any) =>
+          isOrderEligibleForSheetServer(order) &&
+          order?.is_synced_google_sheets !== true
+        );
+        for (let i=0; i<pending.length; i+=250) {
+          const batch = pending.slice(i, i+250);
+          const sheetSync = await syncOrdersToGoogleSheetsServer(batch);
+          if (!sheetSync.ok) throw new Error(sheetSync.error || 'Google Sheet recovery sync failed.');
+          const syncedAt = new Date().toISOString();
+          for (const order of batch) {
+            order.is_synced_google_sheets = true;
+            order.synced_at = syncedAt;
+          }
+          await saveOrderSnapshotsBatch(batch);
+          recoveredUnsynced += batch.length;
+        }
+      } catch (e:any) {
+        recoveryError = e?.message || 'Google Sheet recovery sync failed.';
+      }
+    }
+
+    return res.json({
+      ok:true,
+      version:state.version,
+      updated_at:state.updated_at,
+      recovered_unsynced_orders:recoveredUnsynced,
+      ...(recoveryError ? { recovery_error:recoveryError } : {}),
+    });
 
   } catch (e:any) {
     return res.status(500).json({ error:e?.message || 'Shared storefront state could not be saved.' });
