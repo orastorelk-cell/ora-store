@@ -2,7 +2,7 @@ import React from 'react';
 import { ArrowLeft, Bot, Building2, Mail, MapPin, Phone, ShieldCheck, ShoppingBag, MessageCircle } from 'lucide-react';
 import { useStore } from '../context/StoreContext';
 
-export type StoreInfoPageKind = 'return' | 'contact' | 'about' | 'privacy' | 'terms';
+export type StoreInfoPageKind = 'return' | 'contact' | 'about' | 'privacy' | 'terms' | 'dataDeletion';
 
 const PAGE_META: Record<StoreInfoPageKind, { en: string; si: string }> = {
   return: { en: 'Return & Refund Policy', si: 'Return සහ Refund ප්‍රතිපත්තිය' },
@@ -10,6 +10,7 @@ const PAGE_META: Record<StoreInfoPageKind, { en: string; si: string }> = {
   about: { en: 'About Us', si: 'අප ගැන' },
   privacy: { en: 'Privacy Policy', si: 'පෞද්ගලිකත්ව ප්‍රතිපත්තිය' },
   terms: { en: 'Terms & Conditions', si: 'නියම සහ කොන්දේසි' },
+  dataDeletion: { en: 'User Data Deletion', si: 'පරිශීලක දත්ත මකාදැමීම' },
 };
 
 const splitContent = (value: string) => String(value || '').split(/\n{2,}/).map(v => v.trim()).filter(Boolean);
@@ -30,13 +31,35 @@ export const StoreInfoPage: React.FC<{ kind: StoreInfoPageKind }> = ({ kind }) =
   const { language, settings } = useStore();
   const si = language === 'si';
   const title = si ? PAGE_META[kind].si : PAGE_META[kind].en;
-  const enabled = kind === 'return' ? settings.return_policy_page_enabled !== false
+  const enabled = kind === 'dataDeletion' ? true
+    : kind === 'return' ? settings.return_policy_page_enabled !== false
     : kind === 'contact' ? settings.contact_page_enabled !== false
     : kind === 'about' ? settings.about_page_enabled !== false
     : kind === 'privacy' ? settings.privacy_page_enabled !== false
     : settings.terms_page_enabled !== false;
 
-  const rawContent = kind === 'return' ? (si ? settings.return_policy_si : settings.return_policy_en)
+  const dataDeletionContent = si
+    ? `O-RA Store වෙත Facebook / Meta Lead Form එකක් හරහා ලබාදුන් ඔබගේ පුද්ගලික දත්ත මකාදැමීමට ඉල්ලීමක් කළ හැක.
+
+දත්ත මකාදැමීම සඳහා අපගේ support email වෙත email එකක් එවන්න: {{EMAIL}}
+
+Email Subject එක ලෙස “Facebook Data Deletion Request” යොදන්න. ඔබව නිවැරදිව හඳුනාගැනීමට ඔබ Lead Form එකේ භාවිතා කළ නම සහ phone number එක පමණක් සඳහන් කරන්න. Passwords, card details හෝ වෙනත් අනවශ්‍ය sensitive information එවන්න එපා.
+
+ඉල්ලීම තහවුරු කළ පසු O-RA Store විසින් අපගේ Facebook lead/order records තුළ O-RA Store විසින් පාලනය කරන අදාළ පුද්ගලික දත්ත සාධාරණ කාලයක් තුළ මකාදැමීමට හෝ anonymize කිරීමට කටයුතු කරයි. නීතිමය, ගිණුම්කරණ, fraud-prevention හෝ dispute-resolution අවශ්‍යතා සඳහා තබාගැනීමට අවශ්‍ය දත්ත මෙයට යටත් නොවිය හැක.
+
+ප්‍රශ්න සඳහා: {{EMAIL}}`
+    : `You may request deletion of personal data that you submitted to O-RA Store through a Facebook / Meta Lead Form.
+
+To request deletion, email our support address: {{EMAIL}}
+
+Use the subject “Facebook Data Deletion Request”. To help us identify the correct record, include only the name and phone number you used on the Lead Form. Do not send passwords, card details, or other unnecessary sensitive information.
+
+After we verify the request, O-RA Store will delete or anonymize the relevant personal data that O-RA Store controls in our Facebook lead/order records within a reasonable period. Some information may need to be retained where required for legal, accounting, fraud-prevention, or dispute-resolution purposes.
+
+Questions: {{EMAIL}}`;
+
+  const rawContent = kind === 'dataDeletion' ? dataDeletionContent
+    : kind === 'return' ? (si ? settings.return_policy_si : settings.return_policy_en)
     : kind === 'contact' ? (si ? settings.contact_intro_si : settings.contact_intro_en)
     : kind === 'about' ? (si ? settings.about_page_si : settings.about_page_en)
     : kind === 'privacy' ? (si ? settings.privacy_policy_si : settings.privacy_policy_en)
