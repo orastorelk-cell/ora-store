@@ -28,8 +28,8 @@ export type SupplierPriceChangeKind = 'offer' | 'increase' | 'same';
  * Supplier-price changes are deliberately separate from the initial profit table.
  * The initial product keeps its original buying cost + original selling price.
  * - Cheaper source: the exact saving per unit becomes the customer Special Offer.
- * - Dearer source: the exact extra cost is added to the normal selling price so
- *   the original target profit is preserved.
+ * - Dearer source: buying cost may be updated, but the saved customer selling
+ *   price stays unchanged. Selling-price changes are always manual.
  */
 export const supplierPricePreview = (
   current: { buying_price: number; selling_price: number },
@@ -60,8 +60,9 @@ export const supplierPricePreview = (
       savingPerUnit: 0,
       increasePerUnit: delta,
       normalSelling,
-      nextSelling: normalSelling + delta,
-      offerSelling: normalSelling + delta,
+      // Customer-facing prices are deliberately manual after product creation.
+      nextSelling: normalSelling,
+      offerSelling: normalSelling,
     };
   }
   return {
@@ -102,9 +103,9 @@ export const repriceAfterBuyingCostChange = (
   if (preview.kind === 'increase') {
     return {
       buying_price: preview.newCost,
-      selling_price: preview.nextSelling,
-      discount_price: preview.nextSelling,
-      discount_enabled: false,
+      selling_price: preview.normalSelling,
+      discount_price: Number(current.discount_price || preview.normalSelling),
+      discount_enabled: Boolean(current.discount_enabled),
       changed: true,
     };
   }
