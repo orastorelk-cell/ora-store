@@ -65,6 +65,8 @@ export interface ProductVariant {
   }[];
   stock_quantity: number;
   status: ProductStatus;
+  /** Manual storefront override for this exact variant only. */
+  force_out_of_stock?: boolean;
 }
 
 export interface BundleComponent {
