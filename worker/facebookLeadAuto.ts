@@ -374,18 +374,22 @@ const callOrderSave = async (
   order: Order,
 ) => {
   const url = new URL('/api/orders', request.url);
+  const body = JSON.stringify({ order, wait_sheet_sync: true });
+  const bodyBytes = new TextEncoder().encode(body).byteLength;
   const inner = new Request(url, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
+      'content-length': String(bodyBytes),
       'x-ora-integration': 'facebook-leads',
     },
-    body: JSON.stringify({ order, wait_sheet_sync: true }),
+    body,
   });
   const response = await baseWorker.fetch(inner, env, ctx);
   const data: any = await response.clone().json().catch(() => ({}));
   if (!response.ok || data?.ok !== true) {
-    throw new Error(data?.error || `O-RA order save failed (${response.status}).`);
+    const preflight = `id=${Boolean(order?.id)} no=${Boolean(order?.order_number)} name=${Boolean(order?.customer_name)} items=${Array.isArray(order?.items)} count=${Array.isArray(order?.items) ? order.items.length : 0}`;
+    throw new Error(`${data?.error || `O-RA order save failed (${response.status}).`} [${preflight}]`);
   }
   return data;
 };
@@ -472,6 +476,21 @@ const extractLeadEvents = (body: any): LeadEvent[] => {
   return Array.from(new Map(out.map((event) => [event.leadgen_id, event])).values()).slice(0, 50);
 };
 
+const readAllExistingFacebookLeadIds = async (runtime: Runtime) => {
+  const url = new URL(`${runtime.supabaseUrl}/rest/v1/order_snapshots`);
+  url.searchParams.set('select', 'payload');
+  url.searchParams.set('order', 'created_at.desc');
+  url.searchParams.set('limit', '2000');
+  const response = await fetch(url, { headers: supabaseHeaders(runtime) });
+  const rows: any[] = await response.json().catch(() => []);
+  if (!response.ok) throw new Error(`Could not read existing Facebook Lead IDs (${response.status}).`);
+  return new Set(
+    rows
+      .map((row) => String(row?.payload?.platform_lead_id || '').trim())
+      .filter(Boolean),
+  );
+};
+
 const TEMP_BACKFILL_PAGE_ID = '1299145169953538';
 const TEMP_BACKFILL_CUTOFF_MS = Date.parse('2026-09-02T07:29:40.780Z');
 
@@ -514,42 +533,41 @@ const runTemporaryFacebookBackfill = async (
   }
 
   const ordered = Array.from(events.values()).sort((a, b) => a.leadgen_id.localeCompare(b.leadgen_id));
-  let existingSkipped = 0;
+  const existingLeadIds = await readAllExistingFacebookLeadIds(runtime);
+  const missing = ordered.filter((event) => !existingLeadIds.has(event.leadgen_id));
+  const batch = missing.slice(0, 2);
+
   let imported = 0;
   let failed = 0;
   const failures: Array<{ lead_id: string; error: string }> = [];
 
-  for (const event of ordered) {
+  for (const event of batch) {
     try {
-      const existing = await readExistingLeadOrder(runtime, event.leadgen_id);
-      // Important: existing manual imports are skipped completely here. Their
-      // legacy sheet-sync flags are not trusted for this one-time reconciliation,
-      // so this backfill can never append an existing lead again.
-      if (existing) {
-        existingSkipped += 1;
-        continue;
-      }
       await processLead(event, request, env, ctx, baseWorker);
       imported += 1;
     } catch (error: any) {
       failed += 1;
       failures.push({
         lead_id: event.leadgen_id,
-        error: String(error?.message || error || 'Backfill failed.').slice(0, 300),
+        error: String(error?.message || error || 'Backfill failed.').slice(0, 500),
       });
     }
   }
 
+  const remaining = Math.max(0, missing.length - imported);
   return {
     ok: failed === 0,
     mode: 'temporary_real_lead_backfill',
     cutoff: new Date(TEMP_BACKFILL_CUTOFF_MS).toISOString(),
     forms_checked: forms.length,
     lead_candidates: ordered.length,
-    existing_skipped: existingSkipped,
-    imported,
-    failed,
-    failures: failures.slice(0, 20),
+    already_in_system: ordered.length - missing.length,
+    attempted_this_run: batch.length,
+    imported_this_run: imported,
+    failed_this_run: failed,
+    remaining,
+    run_again: remaining > 0,
+    failures,
   };
 };
 
