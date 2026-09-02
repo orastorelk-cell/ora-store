@@ -3349,26 +3349,64 @@ Suitable For:
                       {normalizedProductType(p)==='bundle' ? <span className="font-bold text-cyan-300">Component-linked</span> : <span className={`font-bold ${p.stock_quantity <= 5 ? 'text-red-400' : 'text-emerald-400'}`}>{p.stock_quantity}</span>}
                     </td>
                     <td className="p-3">
-                      <div className="flex min-w-[126px] items-center gap-2">
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={Boolean(p.force_out_of_stock)}
-                          onClick={() => updateProduct({ ...p, force_out_of_stock: !Boolean(p.force_out_of_stock) })}
-                          className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border transition ${p.force_out_of_stock ? 'border-red-500 bg-red-600' : 'border-neutral-600 bg-neutral-800'}`}
-                          title={p.force_out_of_stock ? 'Turn manual Out of Stock OFF' : 'Show this item as Out of Stock on the website'}
-                        >
-                          <span className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow transition-all ${p.force_out_of_stock ? 'left-[21px]' : 'left-0.5'}`} />
-                        </button>
-                        <span className={`text-[9px] font-black uppercase ${p.force_out_of_stock ? 'text-red-300' : 'text-neutral-500'}`}>
-                          {p.force_out_of_stock ? 'OUT OF STOCK' : 'Normal'}
-                        </span>
-                      </div>
+                      {normalizedProductType(p) === 'variant' ? (
+                        <div className="min-w-[220px] space-y-2">
+                          {(p.variants || []).filter((variant) => variant.status !== 'Draft').map((variant) => (
+                            <div key={variant.id} className="flex items-center justify-between gap-3 rounded-lg border border-neutral-800 bg-neutral-950/70 px-2.5 py-2">
+                              <div className="min-w-0">
+                                <p className={`truncate text-[9px] font-black ${variant.force_out_of_stock ? 'text-red-300' : 'text-neutral-300'}`}>{variant.option_value || variant.sku}</p>
+                                <p className="truncate font-mono text-[8px] text-neutral-600">{variant.sku}</p>
+                              </div>
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={Boolean(variant.force_out_of_stock)}
+                                onClick={() => updateProduct({
+                                  ...p,
+                                  force_out_of_stock: false,
+                                  variants: (p.variants || []).map((row) => row.id === variant.id
+                                    ? { ...row, force_out_of_stock: !Boolean(row.force_out_of_stock) }
+                                    : row),
+                                })}
+                                className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border transition ${variant.force_out_of_stock ? 'border-red-500 bg-red-600' : 'border-neutral-600 bg-neutral-800'}`}
+                                title={variant.force_out_of_stock ? `Turn ${variant.option_value || variant.sku} Out of Stock OFF` : `Set ${variant.option_value || variant.sku} Out of Stock`}
+                              >
+                                <span className={`absolute top-0.5 h-3.5 w-3.5 rounded-full bg-white shadow transition-all ${variant.force_out_of_stock ? 'left-[18px]' : 'left-0.5'}`} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="flex min-w-[126px] items-center gap-2">
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={Boolean(p.force_out_of_stock)}
+                            onClick={() => updateProduct({ ...p, force_out_of_stock: !Boolean(p.force_out_of_stock) })}
+                            className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border transition ${p.force_out_of_stock ? 'border-red-500 bg-red-600' : 'border-neutral-600 bg-neutral-800'}`}
+                            title={p.force_out_of_stock ? 'Turn manual Out of Stock OFF' : 'Show this item as Out of Stock on the website'}
+                          >
+                            <span className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow transition-all ${p.force_out_of_stock ? 'left-[21px]' : 'left-0.5'}`} />
+                          </button>
+                          <span className={`text-[9px] font-black uppercase ${p.force_out_of_stock ? 'text-red-300' : 'text-neutral-500'}`}>
+                            {p.force_out_of_stock ? 'OUT OF STOCK' : 'Normal'}
+                          </span>
+                        </div>
+                      )}
                     </td>
                     <td className="p-3">
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${p.force_out_of_stock ? 'bg-red-500/10 text-red-300 border-red-500/30' : 'bg-neutral-800 text-neutral-300 border-neutral-700'}`}>
-                        {p.force_out_of_stock ? 'Out of Stock (Manual)' : p.status}
-                      </span>
+                      {normalizedProductType(p) === 'variant' ? (() => {
+                        const liveVariants=(p.variants || []).filter((variant) => variant.status !== 'Draft');
+                        const blocked=liveVariants.filter((variant) => variant.force_out_of_stock).length;
+                        const allBlocked=liveVariants.length > 0 && blocked === liveVariants.length;
+                        return <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${allBlocked ? 'bg-red-500/10 text-red-300 border-red-500/30' : blocked > 0 ? 'bg-amber-500/10 text-amber-300 border-amber-500/30' : 'bg-neutral-800 text-neutral-300 border-neutral-700'}`}>
+                          {allBlocked ? 'Out of Stock (All Variants)' : blocked > 0 ? `${blocked}/${liveVariants.length} Variants Out` : p.status}
+                        </span>;
+                      })() : (
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${p.force_out_of_stock ? 'bg-red-500/10 text-red-300 border-red-500/30' : 'bg-neutral-800 text-neutral-300 border-neutral-700'}`}>
+                          {p.force_out_of_stock ? 'Out of Stock (Manual)' : p.status}
+                        </span>
+                      )}
                     </td>
                     <td className="p-3 text-right space-x-1">
                       <button
