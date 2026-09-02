@@ -98,6 +98,14 @@ export const adminDashboardFardarHistoryDurablePatch = () => ({
           order.stock_allocated &&
           Boolean(order.waybill_number) &&
           order.order_status !== 'Cancelled'
+        );
+        const selectedDateNewReadyOrders = selectedDateReadyOrders.filter(order =>
+          order.dispatch_status !== 'Handed Over' &&
+          !(
+            order.fardar_csv_exported_at &&
+            order.fardar_csv_exported_waybill &&
+            String(order.fardar_csv_exported_waybill) === String(order.waybill_number || '')
+          )
         );`;
 
     if (!text.includes(oldDerived)) throw new Error('[O-RA Fardar durable history] derived history marker not found');
