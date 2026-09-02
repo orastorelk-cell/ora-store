@@ -20,8 +20,8 @@ export const roundSpecialOfferPercentBadgePatch = () => ({
       let text = code;
       text = replaceOnce(
         text,
-        "  const hasAutoRoundOffer = !product.force_out_of_stock && !hasDiscount && autoRoundOffers.some((offer) => offer.active);\n  const autoReferencePrice = !product.force_out_of_stock && !hasDiscount && range.min === range.max",
-        "  const hasAutoRoundOffer = !product.force_out_of_stock && !hasDiscount && autoRoundOffers.some((offer) => offer.active);\n  const autoRoundDiscountPercent = Math.max(0, ...autoRoundOffers.filter((offer) => offer.active).map((offer) => offer.percent));\n  const autoReferencePrice = !product.force_out_of_stock && !hasDiscount && range.min === range.max",
+        "  const hasAutoRoundOffer = !manualProductOut && !hasDiscount && autoRoundOffers.some((offer) => offer.active);\n  const autoReferencePrice = !manualProductOut && !hasDiscount && range.min === range.max",
+        "  const hasAutoRoundOffer = !manualProductOut && !hasDiscount && autoRoundOffers.some((offer) => offer.active);\n  const autoRoundDiscountPercent = Math.max(0, ...autoRoundOffers.filter((offer) => offer.active).map((offer) => offer.percent));\n  const autoReferencePrice = !manualProductOut && !hasDiscount && range.min === range.max",
         'ProductCard percent calculation',
       );
       text = replaceOnce(
