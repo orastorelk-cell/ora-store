@@ -347,7 +347,12 @@ const callOrderSave = async (
   order: Order,
 ) => {
   const url = new URL('/api/orders', request.url);
-  const body = JSON.stringify({ order, wait_sheet_sync: true });
+  // Use the normal server-side queued Sheet mirror. The server durably saves the
+  // order first, then its Cloudflare waitUntil job writes the Sheet and persists
+  // is_synced_google_sheets=true. Avoid wait_sheet_sync here because indexBase
+  // would perform a second write/read-back pass and could overwrite a successful
+  // first sync with a stale false flag if that extra verification times out.
+  const body = JSON.stringify({ order });
   const bodyBytes = new TextEncoder().encode(body).byteLength;
   const inner = new Request(url, {
     method: 'POST',
