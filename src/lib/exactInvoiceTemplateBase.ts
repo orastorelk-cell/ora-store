@@ -166,17 +166,22 @@ export function buildExactInvoiceSvg(
 
   const rowY = [569, 607, 645, 683];
 
-  // Combo codes are longer than normal SKUs. Keep them inside the ITEM CODE
-  // column by wrapping at the last hyphen; normal/variant SKU rendering is unchanged.
+  // Keep every Item Code inside its own column. Longer normal/variant codes
+  // (for example R0008-MAROON) previously overflowed into ITEM / DESCRIPTION
+  // because only CB-* combo codes were wrapped. Use the same single <text>
+  // element with tspans so Invoice Design text IDs remain stable.
   const renderInvoiceItemCode = (skuValue: unknown, y: number) => {
     const sku = String(skuValue || '').trim();
     if (!sku) return `<text class="t table" x="155" y="${y}"></text>`;
-    if (!/^CB-/i.test(sku) || sku.length <= 11) {
+    if (sku.length <= 11) {
       return `<text class="t table" x="155" y="${y}">${esc(sku)}</text>`;
     }
+
     const splitAt = sku.lastIndexOf('-');
-    const first = splitAt > 2 ? `${sku.slice(0, splitAt + 1)}` : sku.slice(0, 9);
-    const second = splitAt > 2 ? sku.slice(splitAt + 1) : sku.slice(9);
+    const canSplitAtHyphen = splitAt > 2 && splitAt < sku.length - 1;
+    const first = canSplitAtHyphen ? sku.slice(0, splitAt + 1) : sku.slice(0, 9);
+    const second = canSplitAtHyphen ? sku.slice(splitAt + 1) : sku.slice(9);
+
     return `<text class="t table" x="145" y="${y-8}" font-size="18" font-weight="600"><tspan x="145" dy="0">${esc(first)}</tspan><tspan x="145" dy="20">${esc(second)}</tspan></text>`;
   };
 
