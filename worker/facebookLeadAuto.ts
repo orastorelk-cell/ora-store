@@ -266,7 +266,20 @@ const buildFacebookOrder = async (
   const address = pickField(fields, ['full_address', 'customer_address', 'address', 'street_address']);
   const city = pickField(fields, ['city', 'town']);
   const district = pickField(fields, ['district']);
-  const variantValue = pickField(fields, ['selected_color', 'color', 'colour', 'variant', 'option']);
+  const variantValue = pickField(fields, [
+    'selected_color',
+    'color',
+    'colour',
+    'variant',
+    'option',
+    'size',
+    'length',
+    'design',
+    'pattern',
+    'model',
+    'type',
+    'style',
+  ]);
   const quantityRaw = pickField(fields, ['quantity', 'qty']);
   const quantity = parseQuantity(quantityRaw);
   const note = pickField(fields, ['notes', 'note', 'message', 'comment']);
