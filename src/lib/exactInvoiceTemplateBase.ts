@@ -173,7 +173,7 @@ export function buildExactInvoiceSvg(
   const renderInvoiceItemCode = (skuValue: unknown, y: number) => {
     const sku = String(skuValue || '').trim();
     if (!sku) return `<text class="t table" x="155" y="${y}"></text>`;
-    if (sku.length <= 10) {
+    if (sku.length <= 11) {
       return `<text class="t table" x="155" y="${y}">${esc(sku)}</text>`;
     }
 
