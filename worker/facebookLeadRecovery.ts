@@ -9,6 +9,9 @@ type RecoverySummary = {
   failed: number;
   errors: string[];
   at: string;
+  page_id?: string;
+  page_name?: string;
+  forms?: KnownForm[];
 };
 
 const text = (env: Env, key: string) => String(env?.[key] || '').trim();
@@ -52,14 +55,10 @@ const readKnownForms = async (env: Env): Promise<KnownForm[]> => {
   return Array.from(forms.values()).slice(0, 100);
 };
 
-/**
- * A Page Access Token represents the Page itself. Discover the forms that are
- * actually accessible to that token instead of assuming historic form IDs still
- * belong to the same Page. This is important when the store changes Facebook Page.
- */
-const discoverCurrentPageForms = async (env: Env): Promise<KnownForm[]> => {
+const discoverCurrentPageForms = async (env: Env) => {
   const page = await graph(env, 'me', { fields: 'id,name' });
   const pageId = String(page?.id || '').trim();
+  const pageName = String(page?.name || '').trim();
   if (!pageId) throw new Error('Current Page token did not return a Page ID.');
 
   const formsResponse = await graph(env, `${pageId}/leadgen_forms`, {
@@ -73,7 +72,7 @@ const discoverCurrentPageForms = async (env: Env): Promise<KnownForm[]> => {
     const name = String(form?.name || '').trim() || `Form ${id}`;
     if (id) forms.set(id, { id, name });
   }
-  return Array.from(forms.values());
+  return { pageId, pageName, forms: Array.from(forms.values()) };
 };
 
 const hex = (bytes: ArrayBuffer) =>
@@ -111,11 +110,6 @@ const writeRecoveryLog = async (env: Env, summary: RecoverySummary) => {
   }
 };
 
-/**
- * Safety net for Meta Lead Ads. It scans the forms accessible to the current
- * Facebook Page token, then replays recent lead IDs through the exact same order
- * + Sheet path. platform_lead_id dedupe makes repeated scans safe.
- */
 export const recoverRecentFacebookLeads = async (
   baseWorker: WorkerLike,
   envValue: unknown,
@@ -141,13 +135,14 @@ export const recoverRecentFacebookLeads = async (
     let productForms: KnownForm[] = [];
 
     try {
-      productForms = await discoverCurrentPageForms(env);
+      const discovered = await discoverCurrentPageForms(env);
+      summary.page_id = discovered.pageId;
+      summary.page_name = discovered.pageName;
+      productForms = discovered.forms;
     } catch (error: any) {
       summary.errors.push(`Current Page form discovery: ${String(error?.message || error)}`);
     }
 
-    // Fallback only when Page discovery cannot return forms. Historic IDs may
-    // belong to an older Page, so they should not override current Page forms.
     if (!productForms.length) {
       try {
         productForms = await readKnownForms(env);
@@ -157,6 +152,7 @@ export const recoverRecentFacebookLeads = async (
     }
 
     summary.forms_checked = productForms.length;
+    summary.forms = productForms.slice(0, 20);
     if (!productForms.length) throw new Error('No Facebook lead forms are accessible to the current Page token.');
 
     const cutoff = Date.now() - 72 * 60 * 60 * 1000;
@@ -180,9 +176,9 @@ export const recoverRecentFacebookLeads = async (
         const body = JSON.stringify({
           object: 'page',
           entry: [{
-            id: '',
+            id: summary.page_id || '',
             time: Math.floor(Date.now() / 1000),
-            changes: [{ field: 'leadgen', value: { leadgen_id: leadId, form_id: form.id } }],
+            changes: [{ field: 'leadgen', value: { leadgen_id: leadId, form_id: form.id, page_id: summary.page_id || '' } }],
           }],
         });
         const signature = await signBody(text(env, 'META_WEBHOOK_APP_SECRET'), body);
@@ -214,6 +210,6 @@ export const recoverRecentFacebookLeads = async (
   summary.at = new Date().toISOString();
   summary.errors = summary.errors.slice(0, 20);
   await writeRecoveryLog(env, summary);
-  console.log(`[O-RA Meta recovery] forms=${summary.forms_checked}, recent=${summary.recent_leads_seen}, replayed=${summary.replayed}, failed=${summary.failed}`);
+  console.log(`[O-RA Meta recovery] page=${summary.page_name || summary.page_id || 'unknown'}, forms=${summary.forms_checked}, recent=${summary.recent_leads_seen}, replayed=${summary.replayed}, failed=${summary.failed}`);
   return summary;
 };
