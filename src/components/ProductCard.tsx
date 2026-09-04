@@ -1,9 +1,10 @@
 import React from 'react';
-import { ShoppingBag, Zap, Eye, Image as ImageIcon } from 'lucide-react';
+import { Heart, ShoppingBag, Zap, Eye, Image as ImageIcon } from 'lucide-react';
 import { Product } from '../types';
 import { useStore } from '../context/StoreContext';
 import { activeVariants, normalizedProductType, productPriceRange, regularDisplayUnitPrice, selectionDiscountPercent } from '../lib/productVariants';
 import { formatLkr } from '../lib/currency';
+import { isInWishlist, toggleWishlist, WISHLIST_CHANGED_EVENT } from '../lib/wishlist';
 
 interface ProductCardProps {
   product: Product;
@@ -24,6 +25,18 @@ const cleanImages = (images: string[] = []) => {
 
 export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
   const { language, addToCart, setSelectedProduct, startBuyNow, settings } = useStore();
+  const [wishlisted, setWishlisted] = React.useState(() => isInWishlist(product.id));
+
+  React.useEffect(() => {
+    const sync = () => setWishlisted(isInWishlist(product.id));
+    sync();
+    window.addEventListener(WISHLIST_CHANGED_EVENT, sync);
+    window.addEventListener('storage', sync);
+    return () => {
+      window.removeEventListener(WISHLIST_CHANGED_EVENT, sync);
+      window.removeEventListener('storage', sync);
+    };
+  }, [product.id]);
 
   const type = normalizedProductType(product);
   const range = productPriceRange(product, settings);
@@ -44,6 +57,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
   const deliveryLabel = settings.free_delivery_enabled
     ? 'FREE Islandwide Delivery'
     : `Islandwide Delivery: Rs. ${formatLkr(Math.max(0, Number(settings.delivery_fee || 0)))}`;
+
+  const handleWishlist = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setWishlisted(toggleWishlist(product.id));
+  };
 
   const handleBuyNow = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -70,7 +88,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
             src={primaryImage}
             alt={product.name_en}
             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-            referrerPolicy="no-referrer"                     loading="lazy"
+            referrerPolicy="no-referrer"
+            loading="lazy"
           />
         ) : (
           <div className="h-full w-full flex flex-col items-center justify-center text-gray-300">
@@ -80,7 +99,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
         )}
 
         {forcedOutOfStock ? (
-          <div className="absolute top-2 left-2 rounded-xl bg-red-600 px-2.5 py-1.5 text-xs font-black text-white shadow-lg sm:text-sm">
+          <div className="absolute top-2 left-2 rounded-xl bg-red-600 px-2.5 py-1.5 text-xs sm:text-sm font-black text-white shadow-lg">
             OUT OF STOCK
           </div>
         ) : hasDiscount && (
@@ -89,7 +108,17 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
           </div>
         )}
 
-        <div className="ora-product-card-sku absolute top-2 right-2 bg-white/90 backdrop-blur-md text-gray-500 text-[9px] font-mono px-2 py-0.5 rounded-md border border-gray-200">
+        <button
+          type="button"
+          onClick={handleWishlist}
+          aria-label={wishlisted ? 'Remove from wishlist' : 'Add to wishlist'}
+          title={wishlisted ? 'Remove from Wishlist' : 'Add to Wishlist'}
+          className={`absolute right-2 top-2 z-20 flex h-9 w-9 items-center justify-center rounded-full border shadow-md backdrop-blur-md transition-all ${wishlisted ? 'border-rose-200 bg-rose-50 text-rose-500' : 'border-white/80 bg-white/90 text-gray-500 hover:text-rose-500'}`}
+        >
+          <Heart className={`h-4.5 w-4.5 ${wishlisted ? 'fill-rose-500 text-rose-500' : ''}`} />
+        </button>
+
+        <div className="ora-product-card-sku absolute top-12 right-2 bg-white/90 backdrop-blur-md text-gray-500 text-[9px] font-mono px-2 py-0.5 rounded-md border border-gray-200">
           {product.sku}
         </div>
 
