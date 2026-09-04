@@ -52,6 +52,30 @@ const readKnownForms = async (env: Env): Promise<KnownForm[]> => {
   return Array.from(forms.values()).slice(0, 100);
 };
 
+/**
+ * A Page Access Token represents the Page itself. Discover the forms that are
+ * actually accessible to that token instead of assuming historic form IDs still
+ * belong to the same Page. This is important when the store changes Facebook Page.
+ */
+const discoverCurrentPageForms = async (env: Env): Promise<KnownForm[]> => {
+  const page = await graph(env, 'me', { fields: 'id,name' });
+  const pageId = String(page?.id || '').trim();
+  if (!pageId) throw new Error('Current Page token did not return a Page ID.');
+
+  const formsResponse = await graph(env, `${pageId}/leadgen_forms`, {
+    fields: 'id,name',
+    limit: '100',
+  });
+
+  const forms = new Map<string, KnownForm>();
+  for (const form of Array.isArray(formsResponse?.data) ? formsResponse.data : []) {
+    const id = String(form?.id || '').trim();
+    const name = String(form?.name || '').trim() || `Form ${id}`;
+    if (id) forms.set(id, { id, name });
+  }
+  return Array.from(forms.values());
+};
+
 const hex = (bytes: ArrayBuffer) =>
   Array.from(new Uint8Array(bytes)).map((b) => b.toString(16).padStart(2, '0')).join('');
 
@@ -88,9 +112,9 @@ const writeRecoveryLog = async (env: Env, summary: RecoverySummary) => {
 };
 
 /**
- * Safety net for Meta Lead Ads. It scans every Facebook form previously seen by the
- * live webhook, then replays recent lead IDs through the exact same order + Sheet path.
- * platform_lead_id dedupe makes repeated scans safe.
+ * Safety net for Meta Lead Ads. It scans the forms accessible to the current
+ * Facebook Page token, then replays recent lead IDs through the exact same order
+ * + Sheet path. platform_lead_id dedupe makes repeated scans safe.
  */
 export const recoverRecentFacebookLeads = async (
   baseWorker: WorkerLike,
@@ -114,9 +138,26 @@ export const recoverRecentFacebookLeads = async (
   }
 
   try {
-    const productForms = await readKnownForms(env);
+    let productForms: KnownForm[] = [];
+
+    try {
+      productForms = await discoverCurrentPageForms(env);
+    } catch (error: any) {
+      summary.errors.push(`Current Page form discovery: ${String(error?.message || error)}`);
+    }
+
+    // Fallback only when Page discovery cannot return forms. Historic IDs may
+    // belong to an older Page, so they should not override current Page forms.
+    if (!productForms.length) {
+      try {
+        productForms = await readKnownForms(env);
+      } catch (error: any) {
+        summary.errors.push(`Historic form fallback: ${String(error?.message || error)}`);
+      }
+    }
+
     summary.forms_checked = productForms.length;
-    if (!productForms.length) throw new Error('No known Facebook lead forms were found in O-RA history.');
+    if (!productForms.length) throw new Error('No Facebook lead forms are accessible to the current Page token.');
 
     const cutoff = Date.now() - 72 * 60 * 60 * 1000;
 
