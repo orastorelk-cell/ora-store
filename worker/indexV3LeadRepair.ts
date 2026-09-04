@@ -6,4 +6,7 @@ export default {
     scheduleFacebookLeadRecoveryOnce(baseWorker, env, ctx);
     return baseWorker.fetch(request, env, ctx);
   },
+  async scheduled(_controller: unknown, env: unknown, ctx: any) {
+    scheduleFacebookLeadRecoveryOnce(baseWorker, env, ctx);
+  },
 };
