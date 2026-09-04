@@ -11,7 +11,6 @@ type RecoverySummary = {
   page_name?: string;
   forms_checked: number;
   forms: KnownForm[];
-  cutoff?: string;
   recent_leads_seen: number;
   replayed: number;
   failed: number;
@@ -19,8 +18,8 @@ type RecoverySummary = {
 };
 
 const RECOVERY_KEY = 'facebook-lead-recovery-once-v3';
-const FALLBACK_WINDOW_MS = 72 * 60 * 60 * 1000;
 const RETRY_INTERVAL_MS = 5 * 60 * 1000;
+const LEADS_PER_FORM = 25;
 
 let nextAttemptAt = 0;
 let inFlight: Promise<void> | null = null;
@@ -60,7 +59,6 @@ const readKnownForms = async (env: Env): Promise<KnownForm[]> => {
   const response = await fetch(url, { headers: headers(db.key) });
   const rows: any[] = await response.json().catch(() => []);
   if (!response.ok) throw new Error(`Could not read Facebook form history (${response.status}).`);
-
   const events = Array.isArray(rows?.[0]?.payload?.events) ? rows[0].payload.events : [];
   const forms = new Map<string, KnownForm>();
   for (const event of events) {
@@ -80,25 +78,6 @@ const discoverCurrentPageForms = async (env: Env, pageId: string): Promise<Known
     if (id) forms.set(id, { id, name });
   }
   return Array.from(forms.values());
-};
-
-const readLatestFacebookCreatedAt = async (env: Env): Promise<number> => {
-  const db = runtime(env);
-  if (!db.url || !db.key) return Date.now() - FALLBACK_WINDOW_MS;
-  const url = new URL(`${db.url}/rest/v1/order_snapshots`);
-  url.searchParams.set('select', 'created_at,payload');
-  url.searchParams.set('order', 'created_at.desc');
-  url.searchParams.set('limit', '100');
-  const response = await fetch(url, { headers: headers(db.key) });
-  const rows: any[] = await response.json().catch(() => []);
-  if (!response.ok) return Date.now() - FALLBACK_WINDOW_MS;
-  for (const row of rows) {
-    if (String(row?.payload?.order_source || '') !== 'Facebook Ads') continue;
-    const raw = String(row?.payload?.platform_lead_created_at || row?.payload?.created_at || row?.created_at || '');
-    const parsed = Date.parse(raw);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return Date.now() - FALLBACK_WINDOW_MS;
 };
 
 const writeSummary = async (env: Env, summary: RecoverySummary) => {
@@ -146,10 +125,9 @@ const runRecovery = async (baseWorker: BaseWorker, envValue: unknown, ctx: unkno
     summary.page_name = String(page?.name || '').trim() || undefined;
     if (!pageId) throw new Error('Current Page token did not return a Page ID.');
 
-    const [currentForms, historicForms, cutoffMs] = await Promise.all([
+    const [currentForms, historicForms] = await Promise.all([
       discoverCurrentPageForms(env, pageId),
       readKnownForms(env),
-      readLatestFacebookCreatedAt(env),
     ]);
 
     const merged = new Map<string, KnownForm>();
@@ -157,19 +135,22 @@ const runRecovery = async (baseWorker: BaseWorker, envValue: unknown, ctx: unkno
     const forms = Array.from(merged.values()).slice(0, 100);
     summary.forms = forms;
     summary.forms_checked = forms.length;
-    summary.cutoff = new Date(cutoffMs).toISOString();
     summary.phase = 'discovered';
     summary.at = new Date().toISOString();
     await writeSummary(env, summary);
     if (!forms.length) throw new Error('No Facebook lead forms are accessible to the current Page token.');
 
-    // Small overlap prevents a lead created at the same second as the last saved order being skipped.
-    const cutoff = cutoffMs - 60_000;
-
+    // Do not rely on created_time for recovery. Replay the newest leads from every
+    // accessible form and let the normal handler's platform_lead_id dedupe decide.
+    // Existing orders are ignored safely; missing leads are created through the
+    // exact same normal order + Google Sheet path.
     for (const form of forms) {
       let leads: any;
       try {
-        leads = await graph(env, `${form.id}/leads`, { fields: 'id,created_time', limit: '100' });
+        leads = await graph(env, `${form.id}/leads`, {
+          fields: 'id,created_time',
+          limit: String(LEADS_PER_FORM),
+        });
       } catch (error: any) {
         summary.failed += 1;
         summary.errors.push(`Form ${form.name} (${form.id}): ${String(error?.message || error)}`);
@@ -177,12 +158,11 @@ const runRecovery = async (baseWorker: BaseWorker, envValue: unknown, ctx: unkno
       }
 
       const candidates = (Array.isArray(leads?.data) ? leads.data : [])
-        .map((lead: any) => ({ lead, created: Date.parse(String(lead?.created_time || '')) }))
-        .filter(({ lead, created }: any) => String(lead?.id || '').trim() && Number.isFinite(created) && created >= cutoff)
-        .sort((a: any, b: any) => a.created - b.created);
+        .filter((lead: any) => String(lead?.id || '').trim())
+        .reverse();
 
-      for (const candidate of candidates) {
-        const leadId = String(candidate.lead?.id || '').trim();
+      for (const lead of candidates) {
+        const leadId = String(lead?.id || '').trim();
         summary.recent_leads_seen += 1;
         const body = JSON.stringify({
           object: 'page',
@@ -237,15 +217,12 @@ export const scheduleFacebookLeadRecoveryOnce = (
 ) => {
   const env = (envValue || {}) as Env;
   if (text(env, 'META_LEADS_AUTO_ENABLED') !== '1') return;
-
   const now = Date.now();
   if (inFlight || now < nextAttemptAt) return;
   nextAttemptAt = now + RETRY_INTERVAL_MS;
-
   inFlight = runRecovery(baseWorker, envValue, ctx)
     .catch(() => undefined)
     .finally(() => { inFlight = null; });
-
   const waitUntil = (ctx as any)?.waitUntil;
   if (typeof waitUntil === 'function') waitUntil.call(ctx, inFlight);
 };
