@@ -1,8 +1,8 @@
 type Env = Record<string, any>;
 type WorkerLike = { fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> };
 
+type KnownForm = { id: string; name: string };
 type RecoverySummary = {
-  page_id: string;
   forms_checked: number;
   recent_leads_seen: number;
   replayed: number;
@@ -26,6 +26,32 @@ const graph = async (env: Env, path: string, params: Record<string, string> = {}
   return data;
 };
 
+const supabaseRuntime = (env: Env) => ({
+  url: text(env, 'VITE_SUPABASE_URL').replace(/\/$/, ''),
+  key: text(env, 'SUPABASE_SECRET_KEY') || text(env, 'SUPABASE_SERVICE_ROLE_KEY'),
+});
+
+const readKnownForms = async (env: Env): Promise<KnownForm[]> => {
+  const runtime = supabaseRuntime(env);
+  if (!runtime.url || !runtime.key) throw new Error('Supabase server configuration is missing.');
+  const url = new URL(`${runtime.url}/rest/v1/admin_data_store`);
+  url.searchParams.set('key', 'eq.facebook-lead-auto-log-v1');
+  url.searchParams.set('select', 'payload');
+  const response = await fetch(url, {
+    headers: { apikey: runtime.key, authorization: `Bearer ${runtime.key}`, accept: 'application/json' },
+  });
+  const rows: any[] = await response.json().catch(() => []);
+  if (!response.ok) throw new Error(`Could not read Facebook form history (${response.status}).`);
+  const events = Array.isArray(rows?.[0]?.payload?.events) ? rows[0].payload.events : [];
+  const forms = new Map<string, KnownForm>();
+  for (const event of events) {
+    const id = String(event?.form_id || '').trim();
+    const name = String(event?.form_name || '').trim();
+    if (id && /(?:^|[^A-Z0-9])R\d{4,}(?=$|[^A-Z0-9])/i.test(name)) forms.set(id, { id, name });
+  }
+  return Array.from(forms.values()).slice(0, 100);
+};
+
 const hex = (bytes: ArrayBuffer) =>
   Array.from(new Uint8Array(bytes)).map((b) => b.toString(16).padStart(2, '0')).join('');
 
@@ -40,15 +66,13 @@ const signBody = async (secret: string, body: string) => {
 
 const writeRecoveryLog = async (env: Env, summary: RecoverySummary) => {
   try {
-    const supabaseUrl = text(env, 'VITE_SUPABASE_URL').replace(/\/$/, '');
-    const supabaseKey = text(env, 'SUPABASE_SECRET_KEY') || text(env, 'SUPABASE_SERVICE_ROLE_KEY');
-    if (!supabaseUrl || !supabaseKey) return;
-    const url = `${supabaseUrl}/rest/v1/admin_data_store?on_conflict=key`;
-    await fetch(url, {
+    const runtime = supabaseRuntime(env);
+    if (!runtime.url || !runtime.key) return;
+    await fetch(`${runtime.url}/rest/v1/admin_data_store?on_conflict=key`, {
       method: 'POST',
       headers: {
-        apikey: supabaseKey,
-        authorization: `Bearer ${supabaseKey}`,
+        apikey: runtime.key,
+        authorization: `Bearer ${runtime.key}`,
         'content-type': 'application/json',
         prefer: 'resolution=merge-duplicates,return=minimal',
       },
@@ -59,14 +83,14 @@ const writeRecoveryLog = async (env: Env, summary: RecoverySummary) => {
       }]),
     });
   } catch {
-    // Recovery logging must never block lead recovery.
+    // Logging must never block recovery.
   }
 };
 
 /**
- * Safety net for Meta Lead Ads. The live webhook remains the primary path.
- * This recovery scan replays recent lead IDs through the exact same order handler.
- * Existing platform_lead_id dedupe prevents duplicate orders.
+ * Safety net for Meta Lead Ads. It scans every Facebook form previously seen by the
+ * live webhook, then replays recent lead IDs through the exact same order + Sheet path.
+ * platform_lead_id dedupe makes repeated scans safe.
  */
 export const recoverRecentFacebookLeads = async (
   baseWorker: WorkerLike,
@@ -75,7 +99,6 @@ export const recoverRecentFacebookLeads = async (
 ): Promise<RecoverySummary> => {
   const env = (envValue || {}) as Env;
   const summary: RecoverySummary = {
-    page_id: '',
     forms_checked: 0,
     recent_leads_seen: 0,
     replayed: 0,
@@ -91,29 +114,19 @@ export const recoverRecentFacebookLeads = async (
   }
 
   try {
-    const me = await graph(env, 'me', { fields: 'id,name' });
-    const pageId = String(me?.id || '').trim();
-    if (!pageId) throw new Error('Meta Page ID could not be resolved from the Page token.');
-    summary.page_id = pageId;
-
-    const forms = await graph(env, `${pageId}/leadgen_forms`, { fields: 'id,name,status', limit: '100' });
-    const productForms = (Array.isArray(forms?.data) ? forms.data : [])
-      .filter((form: any) => /(?:^|[^A-Z0-9])R\d{4,}(?=$|[^A-Z0-9])/i.test(String(form?.name || '')))
-      .slice(0, 100);
+    const productForms = await readKnownForms(env);
     summary.forms_checked = productForms.length;
+    if (!productForms.length) throw new Error('No known Facebook lead forms were found in O-RA history.');
 
     const cutoff = Date.now() - 72 * 60 * 60 * 1000;
 
     for (const form of productForms) {
-      const formId = String(form?.id || '').trim();
-      if (!formId) continue;
-
       let leads: any;
       try {
-        leads = await graph(env, `${formId}/leads`, { fields: 'id,created_time', limit: '100' });
+        leads = await graph(env, `${form.id}/leads`, { fields: 'id,created_time', limit: '100' });
       } catch (error: any) {
         summary.failed += 1;
-        summary.errors.push(`Form ${formId}: ${String(error?.message || error)}`);
+        summary.errors.push(`Form ${form.name} (${form.id}): ${String(error?.message || error)}`);
         continue;
       }
 
@@ -126,9 +139,9 @@ export const recoverRecentFacebookLeads = async (
         const body = JSON.stringify({
           object: 'page',
           entry: [{
-            id: pageId,
+            id: '',
             time: Math.floor(Date.now() / 1000),
-            changes: [{ field: 'leadgen', value: { leadgen_id: leadId, form_id: formId, page_id: pageId } }],
+            changes: [{ field: 'leadgen', value: { leadgen_id: leadId, form_id: form.id } }],
           }],
         });
         const signature = await signBody(text(env, 'META_WEBHOOK_APP_SECRET'), body);
@@ -136,7 +149,7 @@ export const recoverRecentFacebookLeads = async (
         if (signature) headers['x-hub-signature-256'] = signature;
 
         try {
-          const response = await baseWorker.fetch(new Request('https://ora.internal/api/integrations/meta/webhook', {
+          const response = await baseWorker.fetch(new Request('https://ora.internal/api/integrations/facebook-leads/webhook', {
             method: 'POST', headers, body,
           }), envValue, ctx);
           if (response.ok) {
