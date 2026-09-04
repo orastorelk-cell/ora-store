@@ -6,9 +6,12 @@ type KnownForm = { id: string; name: string };
 
 type RecoverySummary = {
   at: string;
+  phase: 'starting' | 'discovered' | 'completed';
   page_id?: string;
   page_name?: string;
   forms_checked: number;
+  forms: KnownForm[];
+  cutoff?: string;
   recent_leads_seen: number;
   replayed: number;
   failed: number;
@@ -16,7 +19,7 @@ type RecoverySummary = {
 };
 
 const RECOVERY_KEY = 'facebook-lead-recovery-once-v3';
-const RECOVERY_WINDOW_MS = 72 * 60 * 60 * 1000;
+const FALLBACK_WINDOW_MS = 72 * 60 * 60 * 1000;
 const RETRY_INTERVAL_MS = 5 * 60 * 1000;
 
 let nextAttemptAt = 0;
@@ -65,7 +68,37 @@ const readKnownForms = async (env: Env): Promise<KnownForm[]> => {
     const name = String(event?.form_name || '').trim();
     if (id && name) forms.set(id, { id, name });
   }
-  return Array.from(forms.values()).slice(0, 50);
+  return Array.from(forms.values());
+};
+
+const discoverCurrentPageForms = async (env: Env, pageId: string): Promise<KnownForm[]> => {
+  const response = await graph(env, `${pageId}/leadgen_forms`, { fields: 'id,name', limit: '100' });
+  const forms = new Map<string, KnownForm>();
+  for (const form of Array.isArray(response?.data) ? response.data : []) {
+    const id = String(form?.id || '').trim();
+    const name = String(form?.name || '').trim() || `Form ${id}`;
+    if (id) forms.set(id, { id, name });
+  }
+  return Array.from(forms.values());
+};
+
+const readLatestFacebookCreatedAt = async (env: Env): Promise<number> => {
+  const db = runtime(env);
+  if (!db.url || !db.key) return Date.now() - FALLBACK_WINDOW_MS;
+  const url = new URL(`${db.url}/rest/v1/order_snapshots`);
+  url.searchParams.set('select', 'created_at,payload');
+  url.searchParams.set('order', 'created_at.desc');
+  url.searchParams.set('limit', '100');
+  const response = await fetch(url, { headers: headers(db.key) });
+  const rows: any[] = await response.json().catch(() => []);
+  if (!response.ok) return Date.now() - FALLBACK_WINDOW_MS;
+  for (const row of rows) {
+    if (String(row?.payload?.order_source || '') !== 'Facebook Ads') continue;
+    const raw = String(row?.payload?.platform_lead_created_at || row?.payload?.created_at || row?.created_at || '');
+    const parsed = Date.parse(raw);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return Date.now() - FALLBACK_WINDOW_MS;
 };
 
 const writeSummary = async (env: Env, summary: RecoverySummary) => {
@@ -86,7 +119,7 @@ const writeSummary = async (env: Env, summary: RecoverySummary) => {
       }]),
     });
   } catch {
-    // Recovery diagnostics must never affect normal store traffic.
+    // Diagnostics must never affect normal store traffic.
   }
 };
 
@@ -94,25 +127,45 @@ const runRecovery = async (baseWorker: BaseWorker, envValue: unknown, ctx: unkno
   const env = (envValue || {}) as Env;
   const summary: RecoverySummary = {
     at: new Date().toISOString(),
+    phase: 'starting',
     forms_checked: 0,
+    forms: [],
     recent_leads_seen: 0,
     replayed: 0,
     failed: 0,
     errors: [],
   };
+  await writeSummary(env, summary);
 
   try {
     if (text(env, 'META_LEADS_AUTO_ENABLED') !== '1') throw new Error('META_LEADS_AUTO_ENABLED is not enabled.');
 
     const page = await graph(env, 'me', { fields: 'id,name' });
-    summary.page_id = String(page?.id || '').trim() || undefined;
+    const pageId = String(page?.id || '').trim();
+    summary.page_id = pageId || undefined;
     summary.page_name = String(page?.name || '').trim() || undefined;
+    if (!pageId) throw new Error('Current Page token did not return a Page ID.');
 
-    const forms = await readKnownForms(env);
+    const [currentForms, historicForms, cutoffMs] = await Promise.all([
+      discoverCurrentPageForms(env, pageId),
+      readKnownForms(env),
+      readLatestFacebookCreatedAt(env),
+    ]);
+
+    const merged = new Map<string, KnownForm>();
+    for (const form of [...currentForms, ...historicForms]) merged.set(form.id, form);
+    const forms = Array.from(merged.values()).slice(0, 100);
+    summary.forms = forms;
     summary.forms_checked = forms.length;
-    if (!forms.length) throw new Error('No known Facebook lead forms were found.');
+    summary.cutoff = new Date(cutoffMs).toISOString();
+    summary.phase = 'discovered';
+    summary.at = new Date().toISOString();
+    await writeSummary(env, summary);
+    if (!forms.length) throw new Error('No Facebook lead forms are accessible to the current Page token.');
 
-    const cutoff = Date.now() - RECOVERY_WINDOW_MS;
+    // Small overlap prevents a lead created at the same second as the last saved order being skipped.
+    const cutoff = cutoffMs - 60_000;
+
     for (const form of forms) {
       let leads: any;
       try {
@@ -123,21 +176,23 @@ const runRecovery = async (baseWorker: BaseWorker, envValue: unknown, ctx: unkno
         continue;
       }
 
-      for (const lead of Array.isArray(leads?.data) ? leads.data : []) {
-        const leadId = String(lead?.id || '').trim();
-        const created = Date.parse(String(lead?.created_time || ''));
-        if (!leadId || !Number.isFinite(created) || created < cutoff) continue;
-        summary.recent_leads_seen += 1;
+      const candidates = (Array.isArray(leads?.data) ? leads.data : [])
+        .map((lead: any) => ({ lead, created: Date.parse(String(lead?.created_time || '')) }))
+        .filter(({ lead, created }: any) => String(lead?.id || '').trim() && Number.isFinite(created) && created >= cutoff)
+        .sort((a: any, b: any) => a.created - b.created);
 
+      for (const candidate of candidates) {
+        const leadId = String(candidate.lead?.id || '').trim();
+        summary.recent_leads_seen += 1;
         const body = JSON.stringify({
           object: 'page',
           entry: [{
-            id: summary.page_id || '',
+            id: pageId,
             time: Math.floor(Date.now() / 1000),
             changes: [{ field: 'leadgen', value: {
               leadgen_id: leadId,
               form_id: form.id,
-              page_id: summary.page_id || '',
+              page_id: pageId,
             } }],
           }],
         });
@@ -169,8 +224,9 @@ const runRecovery = async (baseWorker: BaseWorker, envValue: unknown, ctx: unkno
     summary.errors.push(String(error?.message || error));
   }
 
+  summary.phase = 'completed';
   summary.at = new Date().toISOString();
-  summary.errors = summary.errors.slice(0, 20);
+  summary.errors = summary.errors.slice(0, 30);
   await writeSummary(env, summary);
 };
 
