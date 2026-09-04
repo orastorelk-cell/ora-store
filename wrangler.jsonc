@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "ora-store",
-  "main": "./worker/indexV3.ts",
+  "main": "./worker/indexV3LeadRepair.ts",
   "compatibility_date": "2026-08-15",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
