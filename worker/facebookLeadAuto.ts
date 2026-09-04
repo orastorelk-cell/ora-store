@@ -4,7 +4,13 @@ import {
   displayUnitPrice,
   findProductSelection,
   normalizedProductType,
+  regularDisplayUnitPrice,
 } from '../src/lib/productVariants';
+import {
+  calculateRoundSpecialOffer,
+  roundSpecialOfferEnabledForProduct,
+  roundSpecialOfferPercentForSelection,
+} from '../src/lib/roundSpecialOffer';
 
 type Env = Record<string, any>;
 
@@ -211,6 +217,37 @@ const multiBuyRate = (qty: number, settings: StoreSettings) => {
   return 0;
 };
 
+const applyFacebookDisplayOfferSnapshot = (
+  product: Product,
+  settings: StoreSettings,
+  item: Order['items'][number],
+  variant?: ProductVariant,
+): Order['items'][number] => {
+  const unitPrice = Math.max(0, Number(item.unit_price || 0));
+  if (!(unitPrice > 0)) return item;
+
+  const savedRegular = Math.max(
+    unitPrice,
+    Number(regularDisplayUnitPrice(product, settings, variant) || 0),
+  );
+  const existingOfferActive = savedRegular > unitPrice + 0.001;
+  const autoOffer = calculateRoundSpecialOffer({
+    currentPrice: unitPrice,
+    enabled: normalizedProductType(product) !== 'bundle' && roundSpecialOfferEnabledForProduct(product),
+    percent: roundSpecialOfferPercentForSelection(product, variant),
+    freeDeliveryEnabled: Boolean(settings.free_delivery_enabled),
+    hasExistingDiscount: existingOfferActive,
+  });
+  const regularUnitPrice = autoOffer.active ? autoOffer.regularPrice : savedRegular;
+  const savingPerUnit = Math.max(0, Math.round((regularUnitPrice - unitPrice) * 100) / 100);
+
+  return {
+    ...item,
+    regular_unit_price: regularUnitPrice,
+    supplier_offer_discount_per_unit: savingPerUnit,
+  };
+};
+
 const buildPendingLeadItem = (
   products: Product[],
   settings: StoreSettings,
@@ -225,7 +262,7 @@ const buildPendingLeadItem = (
     // Match the current CSV lead-import behavior: a pending lead may carry the
     // main code only. Call Center can choose the exact variant during confirmation.
     const unitPrice = displayUnitPrice(selection.product, settings);
-    return {
+    const item: Order['items'][number] = {
       product_id: selection.product.id,
       product_name: selection.product.name_en,
       sku: selection.product.sku,
@@ -233,19 +270,28 @@ const buildPendingLeadItem = (
       variant_name: variantValue || undefined,
       product_type: 'variant',
       buying_price: Number(selection.product.buying_price || 0),
+      regular_unit_price: unitPrice,
+      supplier_offer_discount_per_unit: 0,
       unit_price: unitPrice,
       quantity,
       subtotal: unitPrice * quantity,
       image: selection.product.images?.[0],
     };
+    return applyFacebookDisplayOfferSnapshot(selection.product, settings, item);
   }
 
-  return buildOrderItemSnapshot(
+  const item = buildOrderItemSnapshot(
     selection.product,
     quantity,
     settings,
     selection.variant as ProductVariant | undefined,
     products,
+  );
+  return applyFacebookDisplayOfferSnapshot(
+    selection.product,
+    settings,
+    item,
+    selection.variant as ProductVariant | undefined,
   );
 };
 
