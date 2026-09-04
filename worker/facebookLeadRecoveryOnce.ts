@@ -13,14 +13,16 @@ type RecoverySummary = {
   forms_checked: number;
   forms: KnownForm[];
   recent_leads_seen: number;
+  missing_leads_found?: number;
   replayed: number;
   failed: number;
   errors: string[];
 };
 
 const RECOVERY_KEY = 'facebook-lead-recovery-once-v3';
-const RETRY_INTERVAL_MS = 5 * 60 * 1000;
-const LEADS_PER_FORM = 100;
+const RETRY_INTERVAL_MS = 60 * 1000;
+const LEADS_PER_FORM = 15;
+const GRAPH_TIMEOUT_MS = 6500;
 
 let nextAttemptAt = 0;
 let inFlight: Promise<void> | null = null;
@@ -42,25 +44,46 @@ const graph = async (env: Env, path: string, params: Record<string, string> = {}
   const token = text(env, 'META_PAGE_ACCESS_TOKEN');
   const version = text(env, 'META_GRAPH_API_VERSION') || 'v26.0';
   if (!token) throw new Error('META_PAGE_ACCESS_TOKEN is missing.');
+
   const url = new URL(`https://graph.facebook.com/${version}/${path.replace(/^\/+/, '')}`);
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
   url.searchParams.set('access_token', token);
-  const response = await fetch(url, { headers: { accept: 'application/json' } });
-  const data: any = await response.json().catch(() => ({}));
-  if (!response.ok || data?.error) throw new Error(data?.error?.message || `Meta Graph API ${response.status}`);
-  return data;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GRAPH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      headers: { accept: 'application/json' },
+      signal: controller.signal,
+    });
+    const data: any = await response.json().catch(() => ({}));
+    if (!response.ok || data?.error) {
+      throw new Error(data?.error?.message || `Meta Graph API ${response.status}`);
+    }
+    return data;
+  } catch (error: any) {
+    if (error?.name === 'AbortError') throw new Error(`Meta Graph API timeout for ${path}`);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 };
 
-const readKnownForms = async (env: Env): Promise<KnownForm[]> => {
+const readStore = async (env: Env, keyName: string) => {
   const db = runtime(env);
-  if (!db.url || !db.key) throw new Error('Supabase server configuration is missing.');
+  if (!db.url || !db.key) return null;
   const url = new URL(`${db.url}/rest/v1/admin_data_store`);
-  url.searchParams.set('key', 'eq.facebook-lead-auto-log-v1');
+  url.searchParams.set('key', `eq.${keyName}`);
   url.searchParams.set('select', 'payload');
   const response = await fetch(url, { headers: headers(db.key) });
   const rows: any[] = await response.json().catch(() => []);
-  if (!response.ok) throw new Error(`Could not read Facebook form history (${response.status}).`);
-  const events = Array.isArray(rows?.[0]?.payload?.events) ? rows[0].payload.events : [];
+  if (!response.ok) return null;
+  return rows?.[0]?.payload || null;
+};
+
+const readKnownForms = async (env: Env): Promise<KnownForm[]> => {
+  const payload = await readStore(env, 'facebook-lead-auto-log-v1');
+  const events = Array.isArray(payload?.events) ? payload.events : [];
   const forms = new Map<string, KnownForm>();
   for (const event of events) {
     const id = String(event?.form_id || '').trim();
@@ -68,6 +91,11 @@ const readKnownForms = async (env: Env): Promise<KnownForm[]> => {
     if (id && name) forms.set(id, { id, name });
   }
   return Array.from(forms.values());
+};
+
+const readPreviousRecovery = async (env: Env): Promise<Partial<RecoverySummary> | null> => {
+  const payload = await readStore(env, RECOVERY_KEY);
+  return payload && typeof payload === 'object' ? payload : null;
 };
 
 const readExistingLeadIds = async (env: Env): Promise<Set<string>> => {
@@ -123,47 +151,61 @@ const writeSummary = async (env: Env, summary: RecoverySummary) => {
 
 const runRecovery = async (baseWorker: BaseWorker, envValue: unknown, ctx: unknown) => {
   const env = (envValue || {}) as Env;
+
+  const [previous, existingLeadIds] = await Promise.all([
+    readPreviousRecovery(env),
+    readExistingLeadIds(env),
+  ]);
+
   const summary: RecoverySummary = {
     at: new Date().toISOString(),
     phase: 'starting',
+    page_id: String(previous?.page_id || '').trim() || undefined,
+    page_name: String(previous?.page_name || '').trim() || undefined,
     forms_checked: 0,
-    forms: [],
+    forms: Array.isArray(previous?.forms) ? previous!.forms!.filter((f: any) => f?.id) as KnownForm[] : [],
     recent_leads_seen: 0,
+    missing_leads_found: 0,
     replayed: 0,
     failed: 0,
     errors: [],
   };
-  await writeSummary(env, summary);
 
   try {
-    if (text(env, 'META_LEADS_AUTO_ENABLED') !== '1') throw new Error('META_LEADS_AUTO_ENABLED is not enabled.');
+    if (text(env, 'META_LEADS_AUTO_ENABLED') !== '1') {
+      throw new Error('META_LEADS_AUTO_ENABLED is not enabled.');
+    }
 
-    const page = await graph(env, 'me', { fields: 'id,name' });
-    const pageId = String(page?.id || '').trim();
-    summary.page_id = pageId || undefined;
-    summary.page_name = String(page?.name || '').trim() || undefined;
-    if (!pageId) throw new Error('Current Page token did not return a Page ID.');
+    // Reuse the already-discovered ORA STORE Page/forms from the previous run.
+    // This avoids spending most of Cloudflare's background execution window on
+    // rediscovery every time. Rediscover only when no cache exists.
+    if (!summary.page_id || !summary.forms.length) {
+      const page = await graph(env, 'me', { fields: 'id,name' });
+      const pageId = String(page?.id || '').trim();
+      summary.page_id = pageId || undefined;
+      summary.page_name = String(page?.name || '').trim() || undefined;
+      if (!pageId) throw new Error('Current Page token did not return a Page ID.');
 
-    const [currentForms, historicForms, existingLeadIds] = await Promise.all([
-      discoverCurrentPageForms(env, pageId),
-      readKnownForms(env),
-      readExistingLeadIds(env),
-    ]);
+      const [currentForms, historicForms] = await Promise.all([
+        discoverCurrentPageForms(env, pageId),
+        readKnownForms(env),
+      ]);
+      const merged = new Map<string, KnownForm>();
+      for (const form of [...currentForms, ...historicForms]) merged.set(form.id, form);
+      summary.forms = Array.from(merged.values()).slice(0, 100);
+    }
 
-    const merged = new Map<string, KnownForm>();
-    for (const form of [...currentForms, ...historicForms]) merged.set(form.id, form);
-    const forms = Array.from(merged.values()).slice(0, 100);
-    summary.forms = forms;
-    summary.forms_checked = forms.length;
+    summary.forms_checked = summary.forms.length;
     summary.phase = 'discovered';
     summary.at = new Date().toISOString();
     await writeSummary(env, summary);
-    if (!forms.length) throw new Error('No Facebook lead forms are accessible to the current Page token.');
+    if (!summary.page_id || !summary.forms.length) {
+      throw new Error('No Facebook lead forms are accessible to the current Page token.');
+    }
 
-    // Fetch every form in parallel so Cloudflare waitUntil is not spent doing
-    // 11+ network calls serially. We then replay only lead IDs not already in
-    // order_snapshots; the normal handler still performs its own dedupe too.
-    const perForm = await Promise.all(forms.map(async (form): Promise<LeadCandidate[]> => {
+    // Fetch small recent batches in parallel. Each Graph request has a hard
+    // timeout so one slow/archived form cannot block the whole recovery run.
+    const perForm = await Promise.all(summary.forms.map(async (form): Promise<LeadCandidate[]> => {
       try {
         const leads = await graph(env, `${form.id}/leads`, {
           fields: 'id,created_time',
@@ -189,17 +231,20 @@ const runRecovery = async (baseWorker: BaseWorker, envValue: unknown, ctx: unkno
     const missing = allCandidates
       .filter((candidate) => !existingLeadIds.has(candidate.id))
       .sort((a, b) => a.created - b.created);
+    summary.missing_leads_found = missing.length;
 
-    for (const candidate of missing) {
+    // Missing volume here should be small. Process oldest first through the exact
+    // normal webhook/order/Sheet flow; its own platform_lead_id dedupe remains active.
+    for (const candidate of missing.slice(0, 20)) {
       const body = JSON.stringify({
         object: 'page',
         entry: [{
-          id: pageId,
+          id: summary.page_id,
           time: Math.floor(Date.now() / 1000),
           changes: [{ field: 'leadgen', value: {
             leadgen_id: candidate.id,
             form_id: candidate.form.id,
-            page_id: pageId,
+            page_id: summary.page_id,
           } }],
         }],
       });
