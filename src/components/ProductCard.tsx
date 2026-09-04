@@ -118,7 +118,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
           <Heart className={`h-4.5 w-4.5 ${wishlisted ? 'fill-rose-500 text-rose-500' : ''}`} />
         </button>
 
-        <div className="ora-product-card-sku absolute top-12 right-2 bg-white/90 backdrop-blur-md text-gray-500 text-[9px] font-mono px-2 py-0.5 rounded-md border border-gray-200">
+        <div className="ora-product-card-sku absolute top-14 sm:top-12 right-2 bg-white/90 backdrop-blur-md text-gray-500 text-[9px] font-mono px-2 py-0.5 rounded-md border border-gray-200">
           {product.sku}
         </div>
 
