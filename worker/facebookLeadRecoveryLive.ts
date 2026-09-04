@@ -21,7 +21,7 @@ type Summary = {
 
 const KEY = 'facebook-lead-recovery-live-v1';
 const GRAPH_TIMEOUT_MS = 6500;
-const CONCURRENCY = 2;
+const CONCURRENCY = 1;
 let running: Promise<void> | null = null;
 
 const text = (env: Env, key: string) => String(env?.[key] || '').trim();
@@ -62,21 +62,21 @@ const writeSummary = async (env: Env, summary: Summary) => {
   } catch {}
 };
 
-const latestFacebookTime = async (env: Env) => {
+const recoveryBaseline = async (env: Env) => {
   const runtime = db(env);
   if (!runtime.url || !runtime.key) throw new Error('Supabase server configuration is missing.');
   const url = new URL(`${runtime.url}/rest/v1/order_snapshots`);
   url.searchParams.set('select', 'created_at,payload');
-  url.searchParams.set('payload->>order_source', 'eq.Facebook Ads');
-  url.searchParams.set('order', 'created_at.desc');
+  url.searchParams.set('order_number', 'eq.FB-000057');
   url.searchParams.set('limit', '1');
   const response = await fetch(url, { headers: dbHeaders(runtime.key) });
   const rows: any[] = await response.json().catch(() => []);
-  if (!response.ok) throw new Error(`Could not read latest Facebook order (${response.status}).`);
+  if (!response.ok) throw new Error(`Could not read FB-000057 recovery baseline (${response.status}).`);
   const row = rows?.[0] || {};
   const raw = String(row?.payload?.platform_lead_created_at || row?.payload?.created_at || row?.created_at || '');
   const parsed = Date.parse(raw);
-  return Number.isFinite(parsed) ? parsed : Date.now() - 72 * 60 * 60 * 1000;
+  if (!Number.isFinite(parsed)) throw new Error('FB-000057 recovery baseline timestamp is missing.');
+  return parsed;
 };
 
 const formsForPage = async (env: Env, pageId: string): Promise<KnownForm[]> => {
@@ -106,7 +106,6 @@ const processCandidate = async (candidate: Candidate, pageId: string, envValue: 
       page_id: pageId,
     } }] }],
   });
-
   await facebookLeadAutoHandler(
     new Request('https://ora.internal/api/integrations/facebook-leads/webhook', {
       method: 'POST',
@@ -146,7 +145,7 @@ const run = async (baseWorker: BaseWorker, envValue: unknown) => {
 
     const [page, cutoffMs] = await Promise.all([
       graph(env, 'me', { fields: 'id,name' }),
-      latestFacebookTime(env),
+      recoveryBaseline(env),
     ]);
     const pageId = String(page?.id || '').trim();
     if (!pageId) throw new Error('Current Page token did not return a Page ID.');
