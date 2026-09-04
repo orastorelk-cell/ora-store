@@ -89,8 +89,10 @@
   }
 
   .ora-product-card-sku {
-    top: clamp(0.35rem, 1.8vw, 0.5rem);
-    right: clamp(0.35rem, 1.8vw, 0.5rem);
+    top: auto;
+    right: auto;
+    bottom: clamp(0.35rem, 1.8vw, 0.5rem);
+    left: clamp(0.35rem, 1.8vw, 0.5rem);
     max-width: 56%;
     overflow: hidden;
     padding-right: clamp(0.3rem, 1.4vw, 0.5rem);
