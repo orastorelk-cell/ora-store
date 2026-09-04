@@ -1,7 +1,14 @@
 type Env = Record<string, any>;
 type WorkerLike = { fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> };
 
-type KnownForm = { id: string; name: string };
+type KnownForm = {
+  id: string;
+  name: string;
+  page_id?: string;
+  page_name?: string;
+  access_token?: string;
+};
+
 type RecoverySummary = {
   forms_checked: number;
   recent_leads_seen: number;
@@ -9,15 +16,18 @@ type RecoverySummary = {
   failed: number;
   errors: string[];
   at: string;
-  page_id?: string;
-  page_name?: string;
-  forms?: KnownForm[];
+  pages?: Array<{ id: string; name: string; forms: number }>;
+  forms?: Array<{ id: string; name: string; page_id?: string; page_name?: string }>;
 };
 
 const text = (env: Env, key: string) => String(env?.[key] || '').trim();
 
-const graph = async (env: Env, path: string, params: Record<string, string> = {}) => {
-  const token = text(env, 'META_PAGE_ACCESS_TOKEN');
+const graphWithToken = async (
+  env: Env,
+  token: string,
+  path: string,
+  params: Record<string, string> = {},
+) => {
   const version = text(env, 'META_GRAPH_API_VERSION') || 'v26.0';
   if (!token) throw new Error('META_PAGE_ACCESS_TOKEN is missing.');
   const url = new URL(`https://graph.facebook.com/${version}/${path.replace(/^\/+/, '')}`);
@@ -28,6 +38,9 @@ const graph = async (env: Env, path: string, params: Record<string, string> = {}
   if (!response.ok || data?.error) throw new Error(data?.error?.message || `Meta Graph API ${response.status}`);
   return data;
 };
+
+const graph = async (env: Env, path: string, params: Record<string, string> = {}) =>
+  graphWithToken(env, text(env, 'META_PAGE_ACCESS_TOKEN'), path, params);
 
 const supabaseRuntime = (env: Env) => ({
   url: text(env, 'VITE_SUPABASE_URL').replace(/\/$/, ''),
@@ -55,24 +68,88 @@ const readKnownForms = async (env: Env): Promise<KnownForm[]> => {
   return Array.from(forms.values()).slice(0, 100);
 };
 
-const discoverCurrentPageForms = async (env: Env) => {
-  const page = await graph(env, 'me', { fields: 'id,name' });
+const discoverAccessibleForms = async (
+  env: Env,
+  summary: RecoverySummary,
+): Promise<KnownForm[]> => {
+  const rootToken = text(env, 'META_PAGE_ACCESS_TOKEN');
+  if (!rootToken) throw new Error('META_PAGE_ACCESS_TOKEN is missing.');
+
+  const targets = new Map<string, KnownForm>();
+  const pageDiagnostics: Array<{ id: string; name: string; forms: number }> = [];
+
+  // If the configured token is a User token, /me/accounts returns every Page the
+  // user can manage plus a Page token for each one. Scan all of them so changing
+  // the Page used by an ad cannot silently stop recovery.
+  try {
+    const accounts = await graphWithToken(env, rootToken, 'me/accounts', {
+      fields: 'id,name,access_token',
+      limit: '100',
+    });
+
+    const pages = Array.isArray(accounts?.data) ? accounts.data : [];
+    if (pages.length) {
+      for (const page of pages) {
+        const pageId = String(page?.id || '').trim();
+        const pageName = String(page?.name || '').trim();
+        const pageToken = String(page?.access_token || '').trim();
+        if (!pageId || !pageToken) continue;
+
+        try {
+          const formsResponse = await graphWithToken(env, pageToken, `${pageId}/leadgen_forms`, {
+            fields: 'id,name',
+            limit: '100',
+          });
+          const forms = Array.isArray(formsResponse?.data) ? formsResponse.data : [];
+          pageDiagnostics.push({ id: pageId, name: pageName, forms: forms.length });
+          for (const form of forms) {
+            const id = String(form?.id || '').trim();
+            const name = String(form?.name || '').trim() || `Form ${id}`;
+            if (id) targets.set(id, {
+              id,
+              name,
+              page_id: pageId,
+              page_name: pageName,
+              access_token: pageToken,
+            });
+          }
+        } catch (error: any) {
+          summary.errors.push(`Page ${pageName || pageId}: ${String(error?.message || error)}`);
+        }
+      }
+
+      summary.pages = pageDiagnostics;
+      if (targets.size) return Array.from(targets.values());
+    }
+  } catch {
+    // A Page token cannot list /me/accounts. Fall through and treat it as a Page token.
+  }
+
+  // Page-token mode: discover forms only for the Page represented by the token.
+  const page = await graphWithToken(env, rootToken, 'me', { fields: 'id,name' });
   const pageId = String(page?.id || '').trim();
   const pageName = String(page?.name || '').trim();
-  if (!pageId) throw new Error('Current Page token did not return a Page ID.');
+  if (!pageId) throw new Error('Configured Meta token did not return a Page ID.');
 
-  const formsResponse = await graph(env, `${pageId}/leadgen_forms`, {
+  const formsResponse = await graphWithToken(env, rootToken, `${pageId}/leadgen_forms`, {
     fields: 'id,name',
     limit: '100',
   });
+  const forms = Array.isArray(formsResponse?.data) ? formsResponse.data : [];
+  summary.pages = [{ id: pageId, name: pageName, forms: forms.length }];
 
-  const forms = new Map<string, KnownForm>();
-  for (const form of Array.isArray(formsResponse?.data) ? formsResponse.data : []) {
+  for (const form of forms) {
     const id = String(form?.id || '').trim();
     const name = String(form?.name || '').trim() || `Form ${id}`;
-    if (id) forms.set(id, { id, name });
+    if (id) targets.set(id, {
+      id,
+      name,
+      page_id: pageId,
+      page_name: pageName,
+      access_token: rootToken,
+    });
   }
-  return { pageId, pageName, forms: Array.from(forms.values()) };
+  return Array.from(targets.values());
 };
 
 const hex = (bytes: ArrayBuffer) =>
@@ -135,12 +212,9 @@ export const recoverRecentFacebookLeads = async (
     let productForms: KnownForm[] = [];
 
     try {
-      const discovered = await discoverCurrentPageForms(env);
-      summary.page_id = discovered.pageId;
-      summary.page_name = discovered.pageName;
-      productForms = discovered.forms;
+      productForms = await discoverAccessibleForms(env, summary);
     } catch (error: any) {
-      summary.errors.push(`Current Page form discovery: ${String(error?.message || error)}`);
+      summary.errors.push(`Page/form discovery: ${String(error?.message || error)}`);
     }
 
     if (!productForms.length) {
@@ -152,15 +226,21 @@ export const recoverRecentFacebookLeads = async (
     }
 
     summary.forms_checked = productForms.length;
-    summary.forms = productForms.slice(0, 20);
-    if (!productForms.length) throw new Error('No Facebook lead forms are accessible to the current Page token.');
+    summary.forms = productForms.slice(0, 50).map(({ id, name, page_id, page_name }) => ({
+      id, name, page_id, page_name,
+    }));
+    if (!productForms.length) throw new Error('No Facebook lead forms are accessible to the configured Meta token.');
 
     const cutoff = Date.now() - 72 * 60 * 60 * 1000;
 
     for (const form of productForms) {
       let leads: any;
+      const formToken = form.access_token || text(env, 'META_PAGE_ACCESS_TOKEN');
       try {
-        leads = await graph(env, `${form.id}/leads`, { fields: 'id,created_time', limit: '100' });
+        leads = await graphWithToken(env, formToken, `${form.id}/leads`, {
+          fields: 'id,created_time',
+          limit: '100',
+        });
       } catch (error: any) {
         summary.failed += 1;
         summary.errors.push(`Form ${form.name} (${form.id}): ${String(error?.message || error)}`);
@@ -176,9 +256,13 @@ export const recoverRecentFacebookLeads = async (
         const body = JSON.stringify({
           object: 'page',
           entry: [{
-            id: summary.page_id || '',
+            id: form.page_id || '',
             time: Math.floor(Date.now() / 1000),
-            changes: [{ field: 'leadgen', value: { leadgen_id: leadId, form_id: form.id, page_id: summary.page_id || '' } }],
+            changes: [{ field: 'leadgen', value: {
+              leadgen_id: leadId,
+              form_id: form.id,
+              page_id: form.page_id || '',
+            } }],
           }],
         });
         const signature = await signBody(text(env, 'META_WEBHOOK_APP_SECRET'), body);
@@ -186,9 +270,12 @@ export const recoverRecentFacebookLeads = async (
         if (signature) headers['x-hub-signature-256'] = signature;
 
         try {
+          const replayEnv = form.access_token
+            ? { ...env, META_PAGE_ACCESS_TOKEN: form.access_token }
+            : envValue;
           const response = await baseWorker.fetch(new Request('https://ora.internal/api/integrations/facebook-leads/webhook', {
             method: 'POST', headers, body,
-          }), envValue, ctx);
+          }), replayEnv, ctx);
           if (response.ok) {
             summary.replayed += 1;
           } else {
@@ -208,8 +295,8 @@ export const recoverRecentFacebookLeads = async (
   }
 
   summary.at = new Date().toISOString();
-  summary.errors = summary.errors.slice(0, 20);
+  summary.errors = summary.errors.slice(0, 30);
   await writeRecoveryLog(env, summary);
-  console.log(`[O-RA Meta recovery] page=${summary.page_name || summary.page_id || 'unknown'}, forms=${summary.forms_checked}, recent=${summary.recent_leads_seen}, replayed=${summary.replayed}, failed=${summary.failed}`);
+  console.log(`[O-RA Meta recovery] pages=${summary.pages?.length || 0}, forms=${summary.forms_checked}, recent=${summary.recent_leads_seen}, replayed=${summary.replayed}, failed=${summary.failed}`);
   return summary;
 };
