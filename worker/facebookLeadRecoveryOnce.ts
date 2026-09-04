@@ -3,6 +3,7 @@ import { facebookLeadAutoHandler } from './facebookLeadAuto';
 type Env = Record<string, any>;
 type BaseWorker = { fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> };
 type KnownForm = { id: string; name: string };
+type LeadCandidate = { id: string; created: number; form: KnownForm };
 
 type RecoverySummary = {
   at: string;
@@ -19,7 +20,7 @@ type RecoverySummary = {
 
 const RECOVERY_KEY = 'facebook-lead-recovery-once-v3';
 const RETRY_INTERVAL_MS = 5 * 60 * 1000;
-const LEADS_PER_FORM = 25;
+const LEADS_PER_FORM = 100;
 
 let nextAttemptAt = 0;
 let inFlight: Promise<void> | null = null;
@@ -67,6 +68,24 @@ const readKnownForms = async (env: Env): Promise<KnownForm[]> => {
     if (id && name) forms.set(id, { id, name });
   }
   return Array.from(forms.values());
+};
+
+const readExistingLeadIds = async (env: Env): Promise<Set<string>> => {
+  const db = runtime(env);
+  const ids = new Set<string>();
+  if (!db.url || !db.key) return ids;
+  const url = new URL(`${db.url}/rest/v1/order_snapshots`);
+  url.searchParams.set('select', 'payload');
+  url.searchParams.set('order', 'created_at.desc');
+  url.searchParams.set('limit', '1000');
+  const response = await fetch(url, { headers: headers(db.key) });
+  const rows: any[] = await response.json().catch(() => []);
+  if (!response.ok) return ids;
+  for (const row of rows) {
+    const leadId = String(row?.payload?.platform_lead_id || '').trim();
+    if (leadId) ids.add(leadId);
+  }
+  return ids;
 };
 
 const discoverCurrentPageForms = async (env: Env, pageId: string): Promise<KnownForm[]> => {
@@ -125,9 +144,10 @@ const runRecovery = async (baseWorker: BaseWorker, envValue: unknown, ctx: unkno
     summary.page_name = String(page?.name || '').trim() || undefined;
     if (!pageId) throw new Error('Current Page token did not return a Page ID.');
 
-    const [currentForms, historicForms] = await Promise.all([
+    const [currentForms, historicForms, existingLeadIds] = await Promise.all([
       discoverCurrentPageForms(env, pageId),
       readKnownForms(env),
+      readExistingLeadIds(env),
     ]);
 
     const merged = new Map<string, KnownForm>();
@@ -140,63 +160,71 @@ const runRecovery = async (baseWorker: BaseWorker, envValue: unknown, ctx: unkno
     await writeSummary(env, summary);
     if (!forms.length) throw new Error('No Facebook lead forms are accessible to the current Page token.');
 
-    // Do not rely on created_time for recovery. Replay the newest leads from every
-    // accessible form and let the normal handler's platform_lead_id dedupe decide.
-    // Existing orders are ignored safely; missing leads are created through the
-    // exact same normal order + Google Sheet path.
-    for (const form of forms) {
-      let leads: any;
+    // Fetch every form in parallel so Cloudflare waitUntil is not spent doing
+    // 11+ network calls serially. We then replay only lead IDs not already in
+    // order_snapshots; the normal handler still performs its own dedupe too.
+    const perForm = await Promise.all(forms.map(async (form): Promise<LeadCandidate[]> => {
       try {
-        leads = await graph(env, `${form.id}/leads`, {
+        const leads = await graph(env, `${form.id}/leads`, {
           fields: 'id,created_time',
           limit: String(LEADS_PER_FORM),
         });
+        return (Array.isArray(leads?.data) ? leads.data : [])
+          .map((lead: any) => ({
+            id: String(lead?.id || '').trim(),
+            created: Date.parse(String(lead?.created_time || '')) || 0,
+            form,
+          }))
+          .filter((lead: LeadCandidate) => Boolean(lead.id));
       } catch (error: any) {
         summary.failed += 1;
         summary.errors.push(`Form ${form.name} (${form.id}): ${String(error?.message || error)}`);
-        continue;
+        return [];
       }
+    }));
 
-      const candidates = (Array.isArray(leads?.data) ? leads.data : [])
-        .filter((lead: any) => String(lead?.id || '').trim())
-        .reverse();
+    const allCandidates = perForm.flat();
+    summary.recent_leads_seen = allCandidates.length;
 
-      for (const lead of candidates) {
-        const leadId = String(lead?.id || '').trim();
-        summary.recent_leads_seen += 1;
-        const body = JSON.stringify({
-          object: 'page',
-          entry: [{
-            id: pageId,
-            time: Math.floor(Date.now() / 1000),
-            changes: [{ field: 'leadgen', value: {
-              leadgen_id: leadId,
-              form_id: form.id,
-              page_id: pageId,
-            } }],
-          }],
-        });
+    const missing = allCandidates
+      .filter((candidate) => !existingLeadIds.has(candidate.id))
+      .sort((a, b) => a.created - b.created);
 
-        try {
-          const response = await facebookLeadAutoHandler(
-            new Request('https://ora.internal/api/integrations/facebook-leads/webhook', {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body,
-            }),
-            envValue,
-            ctx,
-            baseWorker,
-          );
-          if (response?.ok) summary.replayed += 1;
-          else {
-            summary.failed += 1;
-            summary.errors.push(`Lead ${leadId}: recovery webhook did not complete.`);
-          }
-        } catch (error: any) {
+    for (const candidate of missing) {
+      const body = JSON.stringify({
+        object: 'page',
+        entry: [{
+          id: pageId,
+          time: Math.floor(Date.now() / 1000),
+          changes: [{ field: 'leadgen', value: {
+            leadgen_id: candidate.id,
+            form_id: candidate.form.id,
+            page_id: pageId,
+          } }],
+        }],
+      });
+
+      try {
+        const response = await facebookLeadAutoHandler(
+          new Request('https://ora.internal/api/integrations/facebook-leads/webhook', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body,
+          }),
+          envValue,
+          ctx,
+          baseWorker,
+        );
+        if (response?.ok) {
+          summary.replayed += 1;
+          existingLeadIds.add(candidate.id);
+        } else {
           summary.failed += 1;
-          summary.errors.push(`Lead ${leadId}: ${String(error?.message || error)}`);
+          summary.errors.push(`Lead ${candidate.id}: recovery webhook did not complete.`);
         }
+      } catch (error: any) {
+        summary.failed += 1;
+        summary.errors.push(`Lead ${candidate.id}: ${String(error?.message || error)}`);
       }
     }
   } catch (error: any) {
