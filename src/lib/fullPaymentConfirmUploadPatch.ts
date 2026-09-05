@@ -50,12 +50,14 @@ export const fullPaymentConfirmUploadPatch = () => ({
     }
 
     if (id.endsWith('/src/components/admin/AdminDashboard.tsx')) {
-      const stateMarker = "  const [selectedLeadItemCode, setSelectedLeadItemCode] = useState(products[0]?.sku || '');";
+      // adminDashboardUnifiedUploadPatch runs before this patch and keeps this marker.
+      // Use it instead of a fragile state variable that may be rewritten/removed.
+      const stateMarker = "  // Branding changes stay as a draft until the admin explicitly saves them.\n";
       if (!text.includes("const [paidUploadMode, setPaidUploadMode] = useState<'full_paid'|'advance_50'>")) {
         text = replaceRequired(
           text,
           stateMarker,
-          stateMarker + "\n  const [paidUploadMode, setPaidUploadMode] = useState<'full_paid'|'advance_50'>('full_paid');",
+          "  const [paidUploadMode, setPaidUploadMode] = useState<'full_paid'|'advance_50'>('full_paid');\n\n" + stateMarker,
           'payment mode state',
         );
       }
@@ -96,50 +98,60 @@ export const fullPaymentConfirmUploadPatch = () => ({
       }
 
       // Existing Fardar rule is COD total for COD orders and zero for non-COD.
-      // Only add one special case: a confirmed 50% advance collects the balance.
+      // Add only one special case: a confirmed 50% advance collects the balance.
       const fardarCodOld = "      const cod = o.payment_method === 'COD' ? Math.round(o.total_amount) : 0;";
       const fardarCodNew = "      const cod = o.payment_paid_type === 'Advance' && Number(o.payment_received_amount || 0) > 0 ? Math.max(0, Math.round(Number(o.total_amount || 0) - Number(o.payment_received_amount || 0))) : o.payment_method === 'COD' ? Math.round(o.total_amount) : 0;";
       if (text.includes(fardarCodOld)) text = text.replace(fardarCodOld, fardarCodNew);
       else if (!text.includes(fardarCodNew)) throw new Error('[O-RA paid upload] Fardar COD marker not found');
 
       if (!text.includes('PAID / ADVANCE ORDERS • SEPARATE UPLOAD')) {
-        const pageOpen = `      {activeTab === 'confirm_upload' && (\n        <div className="space-y-6">`;
-        if (!text.includes(pageOpen)) throw new Error('[O-RA paid upload] Confirm Upload page marker not found');
+        // Unified upload plugin turns Confirm Upload into an IIFE. Locate that exact
+        // section first, then inject the panel only inside its returned page wrapper.
+        const unifiedScopeMarker = "      {activeTab === 'confirm_upload' && (() => {";
+        const legacyScopeMarker = "      {activeTab === 'confirm_upload' && (";
+        let scopeStart = text.indexOf(unifiedScopeMarker);
+        if (scopeStart < 0) scopeStart = text.indexOf(legacyScopeMarker);
+        if (scopeStart < 0) throw new Error('[O-RA paid upload] Confirm Upload scope not found');
+
+        const pageDivMarker = '<div className="space-y-6">';
+        const pageDivAt = text.indexOf(pageDivMarker, scopeStart);
+        if (pageDivAt < 0) throw new Error('[O-RA paid upload] Confirm Upload page wrapper not found');
+        const insertAt = pageDivAt + pageDivMarker.length;
 
         const panel = `
-          <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/5 p-5 space-y-4">
+          <div className="rounded-2xl border border-emerald-500/40 bg-emerald-50 p-5 space-y-4">
             <div className="flex items-start gap-3">
-              <WalletCards className="mt-0.5 h-6 w-6 shrink-0 text-emerald-400" />
+              <WalletCards className="mt-0.5 h-6 w-6 shrink-0 text-emerald-600" />
               <div>
-                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-emerald-300">PAID / ADVANCE ORDERS • SEPARATE UPLOAD</p>
-                <h2 className="mt-1 text-base font-black text-white">Paid Order Confirm Upload</h2>
-                <p className="mt-1 text-xs leading-5 text-neutral-400">Use the exact same completed Confirm / Cancel CSV. Choose the payment type first, then upload. Normal COD orders still use the normal upload section below.</p>
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-emerald-700">PAID / ADVANCE ORDERS • SEPARATE UPLOAD</p>
+                <h2 className="mt-1 text-base font-black text-gray-900">Paid Order Confirm Upload</h2>
+                <p className="mt-1 text-xs leading-5 text-gray-600">Use the exact same completed Confirm / Cancel CSV. Choose the payment type first, then upload. Normal COD orders still use the normal upload section below.</p>
               </div>
             </div>
 
-            <label className="block text-xs font-black text-neutral-200">
+            <label className="block text-xs font-black text-gray-800">
               Payment Type
-              <select value={paidUploadMode} onChange={e=>setPaidUploadMode(e.target.value as 'full_paid'|'advance_50')} className="mt-2 w-full rounded-xl border border-emerald-500/30 bg-neutral-950 px-3 py-3 text-sm font-black text-white outline-none">
+              <select value={paidUploadMode} onChange={e=>setPaidUploadMode(e.target.value as 'full_paid'|'advance_50')} className="mt-2 w-full rounded-xl border border-emerald-300 bg-white px-3 py-3 text-sm font-black text-gray-900 outline-none">
                 <option value="full_paid">Full Payment — Courier COD Rs. 0</option>
                 <option value="advance_50">50% Advance — Courier collects remaining 50%</option>
               </select>
             </label>
 
             <div className="grid grid-cols-2 gap-2 text-[10px] sm:grid-cols-4">
-              <div className="rounded-xl border border-emerald-500/20 bg-neutral-950 p-2 text-center font-black text-emerald-300">{paidUploadMode==='full_paid'?'FULLY PAID':'50% PAID'}</div>
-              <div className="rounded-xl border border-emerald-500/20 bg-neutral-950 p-2 text-center font-black text-emerald-300">{paidUploadMode==='full_paid'?'Bank Payment':'Advance Paid'}</div>
-              <div className="rounded-xl border border-emerald-500/20 bg-neutral-950 p-2 text-center font-black text-emerald-300">Invoice: {paidUploadMode==='full_paid'?'FULLY PAID':'50% ADVANCE PAID'}</div>
-              <div className="rounded-xl border border-emerald-500/20 bg-neutral-950 p-2 text-center font-black text-emerald-300">Courier COD: {paidUploadMode==='full_paid'?'Rs. 0':'Remaining 50%'}</div>
+              <div className="rounded-xl border border-emerald-200 bg-white p-2 text-center font-black text-emerald-700">{paidUploadMode==='full_paid'?'FULLY PAID':'50% PAID'}</div>
+              <div className="rounded-xl border border-emerald-200 bg-white p-2 text-center font-black text-emerald-700">{paidUploadMode==='full_paid'?'Bank Payment':'Advance Paid'}</div>
+              <div className="rounded-xl border border-emerald-200 bg-white p-2 text-center font-black text-emerald-700">Invoice: {paidUploadMode==='full_paid'?'FULLY PAID':'50% ADVANCE PAID'}</div>
+              <div className="rounded-xl border border-emerald-200 bg-white p-2 text-center font-black text-emerald-700">Courier COD: {paidUploadMode==='full_paid'?'Rs. 0':'Remaining 50%'}</div>
             </div>
 
-            <label className="block cursor-pointer rounded-xl bg-emerald-500 px-4 py-3 text-center text-xs font-black text-neutral-950">
+            <label className="block cursor-pointer rounded-xl bg-emerald-600 px-4 py-3 text-center text-xs font-black text-white">
               <Upload className="mr-1 inline h-4 w-4"/> Upload Paid / Advance Confirm + Cancel CSV
               <input type="file" accept=".csv,text/csv" className="hidden" onChange={e=>{const file=e.target.files?.[0];e.currentTarget.value='';if(file)void handlePaidConfirmedCsvUpload(file);}}/>
             </label>
-            <p className="text-[10px] leading-4 text-neutral-500">Same CSV template. This upload creates its own paid/advance packing batch and does not alter the normal COD upload path.</p>
+            <p className="text-[10px] leading-4 text-gray-500">Same CSV template. This upload creates its own paid/advance packing batch and does not alter the normal COD upload path.</p>
           </div>`;
 
-        text = text.replace(pageOpen, pageOpen + panel);
+        text = text.slice(0, insertAt) + panel + text.slice(insertAt);
       }
     }
 
