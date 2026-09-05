@@ -37,8 +37,12 @@ export const restockPurchaseAtomicSafetyPatch = () => ({
       }
 
       if (!text.includes('const addPurchaseOrdersBatch=(rows:Array<{')) {
-        const categoryMarker = "\n  // Category CRUD";
-        if (!text.includes(categoryMarker)) throw new Error('[O-RA atomic purchase] purchase function insertion marker not found');
+        // IMPORTANT: there is also a "// Category CRUD" comment inside the
+        // StoreContextType interface. Anchor to the implementation's addCategory
+        // declaration so executable code can never be injected into the interface.
+        const categoryImplementationMarker = "  // Category CRUD\n  const addCategory =";
+        const categoryImplementationAt = text.indexOf(categoryImplementationMarker);
+        if (categoryImplementationAt < 0) throw new Error('[O-RA atomic purchase] purchase implementation insertion marker not found');
         const batchFunction = `
   const addPurchaseOrdersBatch=(rows:Array<{supplier_name:string;product_id:string;variant_id?:string;quantity_added:number;unit_buying_price:number;invoice_ref?:string;bill_image_url?:string;notes?:string;performed_by?:string;po_number?:string;}>)=>{
     if(!rows.length)return;
@@ -118,7 +122,7 @@ export const restockPurchaseAtomicSafetyPatch = () => ({
     setStockHistory(prev=>[...[...logs].reverse(),...prev]);
   };
 `;
-        text = text.replace(categoryMarker, batchFunction + categoryMarker);
+        text = text.slice(0, categoryImplementationAt) + batchFunction + text.slice(categoryImplementationAt);
       }
 
       const providerMarker = "        addPurchaseOrder,\n        settings,";
