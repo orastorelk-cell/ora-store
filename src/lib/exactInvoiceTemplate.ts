@@ -82,6 +82,33 @@ const wrapInvoiceItemDescriptions = (svg: string) => {
   );
 };
 
+// Fully-paid invoices still need to show the real order total for accounting,
+// while making it impossible to mistake that total for money the courier should
+// collect. Keep normal COD/advance invoices byte-for-byte unchanged and add a
+// second bottom line only when this invoice is explicitly FULLY PAID.
+const addFullyPaidBalanceLine = (svg: string, order: Order) => {
+  const snapshotLabel = String((order as any)?.invoice_payment_label_snapshot || '').trim().toUpperCase();
+  const isFullyPaid = snapshotLabel === 'FULLY PAID'
+    || ((order as any)?.payment_paid_type === 'Full' && (order as any)?.payment_status === 'Paid');
+  if (!isFullyPaid) return svg;
+
+  return svg.replace(
+    /<text class="t value" x="1005" y="([0-9.]+)" style="font-weight:400">TOTAL LKR<\/text>\s*<text class="t table" x="1475" y="\1" text-anchor="end">([^<]*)<\/text>/,
+    (_full, yText: string, totalText: string) => {
+      const y = Number(yText);
+      if (!Number.isFinite(y)) return _full;
+      const totalY = y - 14;
+      const balanceY = y + 16;
+      return [
+        `<text class="t value" x="1005" y="${totalY}" style="font-weight:400">TOTAL LKR</text>`,
+        `<text class="t table" x="1475" y="${totalY}" text-anchor="end">${totalText}</text>`,
+        `<text class="t value" x="1005" y="${balanceY}" style="font-weight:700">COD / BALANCE</text>`,
+        `<text class="t table" x="1475" y="${balanceY}" text-anchor="end" style="font-weight:700">0</text>`,
+      ].join('');
+    },
+  );
+};
+
 // Keep the approved Invoice V6 template untouched. Add only the requested
 // District line in the unused customer-details space directly below City.
 export function buildExactInvoiceSvg(
@@ -100,6 +127,7 @@ export function buildExactInvoiceSvg(
   let svg = buildExactInvoiceSvgBase(baseOrder, settings, sample, pageItems, pageIndex, totalPages);
   svg = normalizeGeneratedByFooter(svg);
   svg = wrapInvoiceItemDescriptions(svg);
+  svg = addFullyPaidBalanceLine(svg, order);
   if (!district) return svg;
 
   const marker = '<!-- Waybill: no redundant courier name -->';
