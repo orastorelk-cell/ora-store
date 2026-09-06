@@ -82,11 +82,10 @@ const wrapInvoiceItemDescriptions = (svg: string) => {
   );
 };
 
-// Fully-paid invoices still need to show the real order total for accounting,
-// while making it impossible to mistake that total for money the courier should
-// collect. Keep normal COD/advance invoices byte-for-byte unchanged and add a
-// second bottom line only when this invoice is explicitly FULLY PAID.
-const addFullyPaidBalanceLine = (svg: string, order: Order) => {
+// FULLY PAID invoices must not look like the courier still has money to collect.
+// Keep the real order total visible for reference, strike it out, and show 0 as the
+// actual TOTAL LKR. Normal COD / advance invoices remain untouched.
+const makeFullyPaidTotalZero = (svg: string, order: Order) => {
   const snapshotLabel = String((order as any)?.invoice_payment_label_snapshot || '').trim().toUpperCase();
   const isFullyPaid = snapshotLabel === 'FULLY PAID'
     || ((order as any)?.payment_paid_type === 'Full' && (order as any)?.payment_status === 'Paid');
@@ -97,13 +96,10 @@ const addFullyPaidBalanceLine = (svg: string, order: Order) => {
     (_full, yText: string, totalText: string) => {
       const y = Number(yText);
       if (!Number.isFinite(y)) return _full;
-      const totalY = y - 14;
-      const balanceY = y + 16;
       return [
-        `<text class="t value" x="1005" y="${totalY}" style="font-weight:400">TOTAL LKR</text>`,
-        `<text class="t table" x="1475" y="${totalY}" text-anchor="end">${totalText}</text>`,
-        `<text class="t value" x="1005" y="${balanceY}" style="font-weight:700">COD / BALANCE</text>`,
-        `<text class="t table" x="1475" y="${balanceY}" text-anchor="end" style="font-weight:700">0</text>`,
+        `<text class="t value" x="1005" y="${y}" style="font-weight:400">TOTAL LKR</text>`,
+        `<text class="t table" x="1410" y="${y}" text-anchor="end" style="opacity:0.65;text-decoration:line-through">${totalText}</text>`,
+        `<text class="t table" x="1475" y="${y}" text-anchor="end" style="font-weight:700">0</text>`,
       ].join('');
     },
   );
@@ -127,7 +123,7 @@ export function buildExactInvoiceSvg(
   let svg = buildExactInvoiceSvgBase(baseOrder, settings, sample, pageItems, pageIndex, totalPages);
   svg = normalizeGeneratedByFooter(svg);
   svg = wrapInvoiceItemDescriptions(svg);
-  svg = addFullyPaidBalanceLine(svg, order);
+  svg = makeFullyPaidTotalZero(svg, order);
   if (!district) return svg;
 
   const marker = '<!-- Waybill: no redundant courier name -->';
