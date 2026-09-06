@@ -82,24 +82,54 @@ const wrapInvoiceItemDescriptions = (svg: string) => {
   );
 };
 
-// FULLY PAID invoices must not look like the courier still has money to collect.
-// Keep the real order total visible for reference, strike it out, and show 0 as the
-// actual TOTAL LKR. Normal COD / advance invoices remain untouched.
-const makeFullyPaidTotalZero = (svg: string, order: Order) => {
-  const snapshotLabel = String((order as any)?.invoice_payment_label_snapshot || '').trim().toUpperCase();
-  const isFullyPaid = snapshotLabel === 'FULLY PAID'
-    || ((order as any)?.payment_paid_type === 'Full' && (order as any)?.payment_status === 'Paid');
-  if (!isFullyPaid) return svg;
+const invoiceMoneyText = (value: unknown) => Math.max(0, Math.round(Number(value || 0))).toLocaleString('en-US');
 
+// Payment display only. This does not change the order total, stock, invoice number,
+// waybill or courier data. It only makes the amount the courier should collect clear.
+// FULLY PAID: original invoice total is struck out and payable TOTAL LKR is 0.
+// ADVANCE: show original total, the amount already paid, and the remaining COD balance.
+// Normal COD invoices are returned byte-for-byte unchanged.
+const applyInvoicePaymentSummary = (svg: string, order: Order) => {
+  const snapshotLabel = String((order as any)?.invoice_payment_label_snapshot || '').trim().toUpperCase();
+  const paidType = String((order as any)?.payment_paid_type || '').trim().toLowerCase();
+  const paymentStatus = String((order as any)?.payment_status || '').trim().toLowerCase();
+  const total = Math.max(0, Number((order as any)?.total_amount || 0));
+  const receivedRaw = Number((order as any)?.payment_received_amount || (order as any)?.advance_amount || 0);
+  const received = Math.min(total, Math.max(0, receivedRaw));
+  const isFullyPaid = snapshotLabel === 'FULLY PAID'
+    || (paidType === 'full' && paymentStatus === 'paid');
+  const isAdvancePaid = snapshotLabel.includes('ADVANCE PAID')
+    || (paidType === 'advance' && received > 0);
+  if (!isFullyPaid && !isAdvancePaid) return svg;
+
+  // Match the final TOTAL LKR label + amount after Invoice Design overrides have
+  // already been applied. Do not depend on exact class/style attributes.
   return svg.replace(
-    /<text class="t value" x="1005" y="([0-9.]+)" style="font-weight:400">TOTAL LKR<\/text>\s*<text class="t table" x="1475" y="\1" text-anchor="end">([^<]*)<\/text>/,
-    (_full, yText: string, totalText: string) => {
-      const y = Number(yText);
+    /(<text\b[^>]*>TOTAL LKR<\/text>)\s*(<text\b([^>]*)>([^<]*)<\/text>)/,
+    (_full, totalLabel: string, _amountTag: string, amountAttrs: string, totalText: string) => {
+      const yMatch = String(amountAttrs || '').match(/\by="([^"]+)"/);
+      const y = Number(yMatch?.[1]);
       if (!Number.isFinite(y)) return _full;
+
+      if (isFullyPaid) {
+        return [
+          totalLabel,
+          `<text class="t table" data-payment-summary="full-original" x="1408" y="${y}" text-anchor="end" style="opacity:0.60;text-decoration:line-through">${totalText}</text>`,
+          `<text class="t table" data-payment-summary="full-payable" x="1475" y="${y}" text-anchor="end" style="font-weight:700">0</text>`,
+        ].join('');
+      }
+
+      const balance = Math.max(0, total - received);
+      const totalY = y - 30;
+      const paidY = y - 4;
+      const balanceY = y + 22;
       return [
-        `<text class="t value" x="1005" y="${y}" style="font-weight:400">TOTAL LKR</text>`,
-        `<text class="t table" x="1410" y="${y}" text-anchor="end" style="opacity:0.65;text-decoration:line-through">${totalText}</text>`,
-        `<text class="t table" x="1475" y="${y}" text-anchor="end" style="font-weight:700">0</text>`,
+        `<text class="t value" data-payment-summary="advance-total-label" x="1005" y="${totalY}" style="font-weight:400">TOTAL LKR</text>`,
+        `<text class="t table" data-payment-summary="advance-total" x="1475" y="${totalY}" text-anchor="end">${totalText}</text>`,
+        `<text class="t value" data-payment-summary="advance-paid-label" x="1005" y="${paidY}" style="font-weight:400">ADVANCE PAID</text>`,
+        `<text class="t table" data-payment-summary="advance-paid" x="1475" y="${paidY}" text-anchor="end">- ${invoiceMoneyText(received)}</text>`,
+        `<text class="t value" data-payment-summary="advance-balance-label" x="1005" y="${balanceY}" style="font-weight:700">COD / BALANCE</text>`,
+        `<text class="t table" data-payment-summary="advance-balance" x="1475" y="${balanceY}" text-anchor="end" style="font-weight:700">${invoiceMoneyText(balance)}</text>`,
       ].join('');
     },
   );
@@ -123,7 +153,7 @@ export function buildExactInvoiceSvg(
   let svg = buildExactInvoiceSvgBase(baseOrder, settings, sample, pageItems, pageIndex, totalPages);
   svg = normalizeGeneratedByFooter(svg);
   svg = wrapInvoiceItemDescriptions(svg);
-  svg = makeFullyPaidTotalZero(svg, order);
+  svg = applyInvoicePaymentSummary(svg, order);
   if (!district) return svg;
 
   const marker = '<!-- Waybill: no redundant courier name -->';
