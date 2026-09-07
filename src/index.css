@@ -183,3 +183,37 @@
     max-width: 310px;
   }
 }
+
+/* Mobile scroll performance only.
+   Keep the exact storefront layout and all business logic unchanged; remove
+   expensive live backdrop repainting from elements that stay on-screen while
+   the page moves. */
+@media (max-width: 767px) {
+  .ora-storefront > header.sticky,
+  .ora-storefront > .fixed.bottom-0.left-0.right-0,
+  .ora-storefront .ora-product-card .backdrop-blur-md {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  .ora-storefront > header.sticky,
+  .ora-storefront > .fixed.bottom-0.left-0.right-0 {
+    background-color: rgba(255, 255, 255, 0.99) !important;
+    transform: translateZ(0);
+    will-change: transform;
+  }
+
+  .ora-storefront > header .animate-pulse {
+    animation: none !important;
+  }
+}
+
+@media (max-width: 639px) {
+  .ora-storefront {
+    text-rendering: auto;
+  }
+
+  .ora-storefront svg {
+    shape-rendering: auto;
+  }
+}
