@@ -7,10 +7,20 @@ export const comboPackManualContentPatch = () => ({
 
     let text = code;
 
-    const autoEffect = `  useEffect(() => {\n    if (!showEditor || editingCombo || manualEnglishContent) return;\n    if (form.components.filter((component) => component.product_id).length < 2) return;\n    const timer = window.setTimeout(() => { void generateComboContent(form.components); }, 700);\n    return () => window.clearTimeout(timer);\n    // Auto-fill only while the admin has not manually edited English Combo content.\n    // eslint-disable-next-line react-hooks/exhaustive-deps\n  }, [showEditor, editingCombo?.id, manualEnglishContent, form.components.map((component) => \`${component.product_id}:${component.variant_id || 'base'}:${component.quantity}\`).join('|')]);\n\n`;
+    const autoEffect = [
+      '  useEffect(() => {',
+      '    if (!showEditor || editingCombo || manualEnglishContent) return;',
+      '    if (form.components.filter((component) => component.product_id).length < 2) return;',
+      '    const timer = window.setTimeout(() => { void generateComboContent(form.components); }, 700);',
+      '    return () => window.clearTimeout(timer);',
+      '    // Auto-fill only while the admin has not manually edited English Combo content.',
+      '    // eslint-disable-next-line react-hooks/exhaustive-deps',
+      "  }, [showEditor, editingCombo?.id, manualEnglishContent, form.components.map((component) => `${component.product_id}:${component.variant_id || 'base'}:${component.quantity}`).join('|')]);",
+      '',
+    ].join('\n') + '\n';
     if (text.includes(autoEffect)) text = text.replace(autoEffect, '');
 
-    const regenerateButton = `<div className="flex items-end justify-end"><button type="button" disabled={comboContentBusy || form.components.filter((component) => component.product_id).length < 2} onClick={() => void generateComboContent(form.components, true)} className={\`inline-flex items-center gap-1.5 rounded-xl border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-[10px] font-black text-violet-300 disabled:opacity-30\`}><Sparkles className="h-3.5 w-3.5" />{comboContentBusy ? 'Generating…' : 'Regenerate Description + Specs'}</button></div>`;
+    const regenerateButton = '<div className="flex items-end justify-end"><button type="button" disabled={comboContentBusy || form.components.filter((component) => component.product_id).length < 2} onClick={() => void generateComboContent(form.components, true)} className={`inline-flex items-center gap-1.5 rounded-xl border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-[10px] font-black text-violet-300 disabled:opacity-30`}><Sparkles className="h-3.5 w-3.5" />{comboContentBusy ? \'Generating…\' : \'Regenerate Description + Specs\'}</button></div>';
     if (text.includes(regenerateButton)) text = text.replace(regenerateButton, '<div />');
 
     text = text.replace(
