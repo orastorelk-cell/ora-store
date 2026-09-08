@@ -8,8 +8,8 @@ export const deliveryCityAcceptancePatch = () => ({
     if (id.endsWith('/src/context/StoreContext.tsx')) {
       const oldAssignGate = "    const resolvedCity = order.fardar_city || resolveFardarCity(order.city).city;\n    if (fardarCities.length > 0 && !resolvedCity) return null;";
       const newAssignGate = "    const resolvedCity = order.fardar_city || resolveFardarCity(order.city).city || String(order.city || '').trim();\n    if (!resolvedCity) return null;";
-      if (!text.includes(oldAssignGate)) throw new Error('[O-RA delivery city patch] assignNextWaybill city gate marker not found');
-      text = text.replace(oldAssignGate, newAssignGate);
+      if (text.includes(oldAssignGate)) text = text.replace(oldAssignGate, newAssignGate);
+      else if (!text.includes(newAssignGate)) throw new Error('[O-RA delivery city patch] assignNextWaybill city gate marker not found');
 
       text = text.replace(
         "fardar_city: resolvedCity || o.fardar_city, city_verified: fardarCities.length ? true : o.city_verified",
@@ -20,8 +20,8 @@ export const deliveryCityAcceptancePatch = () => ({
     if (id.endsWith('/src/components/admin/AdminDashboard.tsx')) {
       const oldUiGate = "                const resolved = order.fardar_city || resolveFardarCity(order.city).city;\n                const needsCity = fardarCities.length > 0 && !resolved;";
       const newUiGate = "                const resolved = order.fardar_city || resolveFardarCity(order.city).city || String(order.city || '').trim();\n                const needsCity = !resolved;";
-      if (!text.includes(oldUiGate)) throw new Error('[O-RA delivery city patch] delivery UI city gate marker not found');
-      text = text.replace(oldUiGate, newUiGate);
+      if (text.includes(oldUiGate)) text = text.replace(oldUiGate, newUiGate);
+      else if (!text.includes(newUiGate)) throw new Error('[O-RA delivery city patch] delivery UI city gate marker not found');
       text = text.replace("{fardarCities.length ? 'Verified / Auto matched' : 'City list not uploaded yet'}", "{order.fardar_city || resolveFardarCity(order.city).city ? 'Verified / Auto matched' : 'Order / CSV city accepted'}");
     }
 
