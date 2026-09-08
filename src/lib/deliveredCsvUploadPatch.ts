@@ -24,13 +24,79 @@ export const deliveredCsvUploadPatch = () => ({
 
     if (!id.endsWith('/src/components/admin/AdminDashboard.tsx')) return null;
 
-    // The pool moves a waybill from Assigned to Used after courier handover.
-    // The dashboard's ASSIGNED figure is intended to show all consumed/assigned
-    // waybills, so include both statuses instead of dropping already-used ones.
+    // WAYBILL POOL SOURCE OF TRUTH
+    // The browser-local pool status can become stale after real orders are updated
+    // from another workflow/browser. Rebuild the dashboard figures from the union of:
+    //   1) waybills actually attached to system orders, and
+    //   2) pool records already marked Assigned/Used.
+    // This keeps TOTAL / ASSIGNED / AVAILABLE mathematically consistent and prevents
+    // the dashboard from showing a lower assigned count than the real order data.
+    if (!text.includes('const waybillPoolStats = useMemo(() => {')) {
+      const statsMarker = "  const [returnMessage, setReturnMessage] = useState('');";
+      if (text.includes(statsMarker)) {
+        const statsBlock = String.raw`
+
+  const waybillPoolStats = useMemo(() => {
+    const normalizeWaybill = (value: unknown) => String(value || '').trim().toLowerCase();
+    const uniquePool = new Map<string, any>();
+    waybillRecords.forEach((record) => {
+      const key = normalizeWaybill(record.waybill_number);
+      if (key && !uniquePool.has(key)) uniquePool.set(key, record);
+    });
+
+    const consumed = new Set<string>();
+
+    // Real order assignments are authoritative, even if the local pool row is stale.
+    orders.forEach((order) => {
+      const key = normalizeWaybill(order.waybill_number);
+      if (key && uniquePool.has(key)) consumed.add(key);
+    });
+
+    // Keep already handed-over / explicitly assigned pool rows protected as well.
+    waybillRecords.forEach((record) => {
+      if (record.status !== 'Assigned' && record.status !== 'Used') return;
+      const key = normalizeWaybill(record.waybill_number);
+      if (key && uniquePool.has(key)) consumed.add(key);
+    });
+
+    const totalImported = uniquePool.size;
+    const assigned = consumed.size;
+    const available = Math.max(0, totalImported - assigned);
+    const preferredCourier = settings.courier_provider || 'Fardar';
+
+    const records = Array.from(uniquePool.entries());
+    const preferredNext = records.find(([, record]) => record.courier_name === preferredCourier && !consumed.has(normalizeWaybill(record.waybill_number)));
+    const fallbackNext = records.find(([, record]) => !consumed.has(normalizeWaybill(record.waybill_number)));
+    const nextWaybill = (preferredNext?.[1] || fallbackNext?.[1])?.waybill_number || '';
+
+    return { totalImported, assigned, available, nextWaybill };
+  }, [waybillRecords, orders, settings.courier_provider]);`;
+        text = text.replace(statsMarker, statsMarker + statsBlock);
+      }
+    }
+
+    const oldNextWaybill = "{waybillRecords.find((w) => w.status === 'Available' && w.courier_name === (settings.courier_provider || 'Fardar'))?.waybill_number || waybillRecords.find((w) => w.status === 'Available')?.waybill_number || 'NO AVAILABLE WAYBILL'}";
+    if (text.includes(oldNextWaybill)) {
+      text = text.split(oldNextWaybill).join("{waybillPoolStats.nextWaybill || 'NO AVAILABLE WAYBILL'}");
+    }
+
+    const oldAvailableCount = "{waybillRecords.filter((w) => w.status === 'Available').length}";
+    if (text.includes(oldAvailableCount)) {
+      text = text.split(oldAvailableCount).join('{waybillPoolStats.available}');
+    }
+
+    const oldTotalImported = '{waybillRecords.length}';
+    if (text.includes(oldTotalImported)) {
+      text = text.split(oldTotalImported).join('{waybillPoolStats.totalImported}');
+    }
+
     const oldAssignedCount = "{waybillRecords.filter((w) => w.status === 'Assigned').length}";
-    const newAssignedCount = "{waybillRecords.filter((w) => w.status === 'Assigned' || w.status === 'Used').length}";
+    const oldAssignedAndUsedCount = "{waybillRecords.filter((w) => w.status === 'Assigned' || w.status === 'Used').length}";
     if (text.includes(oldAssignedCount)) {
-      text = text.split(oldAssignedCount).join(newAssignedCount);
+      text = text.split(oldAssignedCount).join('{waybillPoolStats.assigned}');
+    }
+    if (text.includes(oldAssignedAndUsedCount)) {
+      text = text.split(oldAssignedAndUsedCount).join('{waybillPoolStats.assigned}');
     }
 
     // Keep this feature isolated from the large AdminDashboard runtime.
