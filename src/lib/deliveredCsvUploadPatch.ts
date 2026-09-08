@@ -85,6 +85,12 @@ export const deliveredCsvUploadPatch = () => ({
       text = text.split(oldAvailableCount).join('{waybillPoolStats.available}');
     }
 
+    // Sidebar uses the compact no-space version of the same expression.
+    const compactAvailableCount = "{waybillRecords.filter((w)=>w.status==='Available').length}";
+    if (text.includes(compactAvailableCount)) {
+      text = text.split(compactAvailableCount).join('{waybillPoolStats.available}');
+    }
+
     const oldTotalImported = '{waybillRecords.length}';
     if (text.includes(oldTotalImported)) {
       text = text.split(oldTotalImported).join('{waybillPoolStats.totalImported}');
