@@ -7,13 +7,13 @@ export const stockReportingExportsPatch = () => ({
 
     let text = code;
 
-    // PDF dependency already exists in the app; add the named import only when needed.
+    // jsPDF is already a project dependency. Add the named import only when needed.
     if (!text.includes("import { jsPDF } from 'jspdf';")) {
       const marker = "import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';";
       if (text.includes(marker)) text = text.replace(marker, marker + "\nimport { jsPDF } from 'jspdf';");
     }
 
-    // Exact adjustment helper used by the signed stock report balance.
+    // Signed stock report balance. Sellable stock elsewhere remains safely clamped to >= 0.
     if (!text.includes('const stockReportAdjustmentNetForSku=')) {
       const marker = '  const stockItemReportRows = useMemo(() => {';
       if (text.includes(marker)) {
@@ -43,8 +43,6 @@ export const stockReportingExportsPatch = () => ({
       }
     }
 
-    // Show true ledger shortage as a negative balance in the report while normal
-    // sellable stock remains clamped safely elsewhere in the app.
     if (!text.includes('const reportAvailable=purchases.length')) {
       const from = [
         '      const movement=stockMovementBySku.get(row.sku) || {totalPacked:0,todayPacked:0,todayPurchased:0};',
@@ -67,8 +65,8 @@ export const stockReportingExportsPatch = () => ({
       if (text.includes(from)) text = text.replace(from, to);
     }
 
-    // Export helpers. This insertion is deliberately non-fatal so unrelated UI
-    // patches can never make the production build fail because of spacing changes.
+    // Export helpers. Every insertion is optional/non-fatal so another UI patch can
+    // never break the production build just because whitespace or layout changed.
     if (!text.includes('const packedProfitRows = useMemo(')) {
       const marker = [
         '  const selectedStockMovementRows = useMemo(',
@@ -76,6 +74,7 @@ export const stockReportingExportsPatch = () => ({
         '    [selectedStockDailyReport]',
         '  );',
       ].join('\n');
+
       if (text.includes(marker)) {
         const block = [
           marker,
@@ -90,7 +89,12 @@ export const stockReportingExportsPatch = () => ({
           '        const revenue=Math.max(0,Number(item.unit_price||0))*qty;',
           '        const cost=Math.max(0,Number(item.buying_price||0))*qty;',
           "        const current=grouped.get(sku)||{sku,name:String(item.product_name||sku),qty:0,revenue:0,cost:0,profit:0,orders:new Set<string>()};",
-          '        current.qty+=qty;current.revenue+=revenue;current.cost+=cost;current.profit+=revenue-cost;current.orders.add(String(order.order_number||order.id));grouped.set(sku,current);',
+          '        current.qty+=qty;',
+          '        current.revenue+=revenue;',
+          '        current.cost+=cost;',
+          '        current.profit+=revenue-cost;',
+          '        current.orders.add(String(order.order_number||order.id));',
+          '        grouped.set(sku,current);',
           '      });',
           '    });',
           "    return Array.from(grouped.values()).map((row)=>({...row,orderCount:row.orders.size})).sort((a,b)=>a.sku.localeCompare(b.sku,undefined,{numeric:true,sensitivity:'base'}));",
@@ -102,7 +106,14 @@ export const stockReportingExportsPatch = () => ({
           '    const rows=stockItemReportRows.map((row)=>[row.sku,row.name,row.variant||row.type,row.todayPurchased,row.todayPacked,row.totalPurchased,row.totalPacked,row.packing,row.available,Math.max(0,Number((row as any).shortage||0)),row.currentPhysical,row.stockHealth]);',
           "    const csv='\\uFEFF'+[headers,...rows].map((row)=>row.map(csvEscape).join(',')).join('\\r\\n');",
           "    const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});",
-          "    const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download='O-RA_Stock_Report_'+new Date().toISOString().slice(0,10)+'.csv';document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);",
+          "    const url=URL.createObjectURL(blob);",
+          "    const link=document.createElement('a');",
+          '    link.href=url;',
+          "    link.download='O-RA_Stock_Report_'+new Date().toISOString().slice(0,10)+'.csv';",
+          '    document.body.appendChild(link);',
+          '    link.click();',
+          '    link.remove();',
+          '    URL.revokeObjectURL(url);',
           '  };',
           '',
           '  const downloadPackedProfitPdf=()=>{',
@@ -115,18 +126,24 @@ export const stockReportingExportsPatch = () => ({
           '    const totalProfit=totalRevenue-totalCost;',
           '    let y=16;',
           "    doc.setFont('helvetica','bold');doc.setFontSize(17);doc.text('O-RA STORE - PACKED ITEM EXPENSE & PROFIT REPORT',14,y);",
-          "    doc.setFont('helvetica','normal');doc.setFontSize(9);y+=7;doc.text('Grouped by Item Code | Non-cancelled stock-allocated orders.',14,y);y+=5;doc.text('Generated: '+new Date().toLocaleString(),14,y);",
-          "    y+=8;doc.setFont('helvetica','bold');doc.text('Packed Qty: '+totalQty+'    Sales: Rs. '+money(totalRevenue)+'    Item Cost: Rs. '+money(totalCost)+'    Profit/Loss: Rs. '+money(totalProfit),14,y);y+=9;",
+          "    doc.setFont('helvetica','normal');doc.setFontSize(9);y+=7;doc.text('Grouped by Item Code | Non-cancelled stock-allocated orders.',14,y);",
+          "    y+=5;doc.text('Generated: '+new Date().toLocaleString(),14,y);",
+          "    y+=8;doc.setFont('helvetica','bold');doc.text('Packed Qty: '+totalQty+'    Sales: Rs. '+money(totalRevenue)+'    Item Cost: Rs. '+money(totalCost)+'    Profit/Loss: Rs. '+money(totalProfit),14,y);",
+          '    y+=9;',
           "    const columns=[['Code',14],['Item',36],['Orders',126],['Qty',150],['Sales',169],['Cost',204],['Profit/Loss',237],['Margin',273]] as Array<[string,number]>;",
-          "    const drawHeader=()=>{doc.setFont('helvetica','bold');doc.setFontSize(8);columns.forEach(([label,x])=>doc.text(label,x,y));y+=2;doc.line(14,y,287,y);y+=5;};drawHeader();",
+          "    const drawHeader=()=>{doc.setFont('helvetica','bold');doc.setFontSize(8);columns.forEach(([label,x])=>doc.text(label,x,y));y+=2;doc.line(14,y,287,y);y+=5;};",
+          '    drawHeader();',
           '    packedProfitRows.forEach((row)=>{',
           '      if(y>194){doc.addPage();y=16;drawHeader();}',
           '      const margin=row.revenue>0?(row.profit/row.revenue)*100:0;',
           "      const itemName=String(row.name||'').length>42?String(row.name).slice(0,39)+'...':String(row.name||'');",
-          "      doc.setFont('helvetica','normal');doc.setFontSize(7.5);doc.text(row.sku,14,y);doc.text(itemName,36,y);doc.text(String(row.orderCount),132,y,{align:'right'});doc.text(String(row.qty),158,y,{align:'right'});",
-          "      doc.text('Rs. '+money(row.revenue),199,y,{align:'right'});doc.text('Rs. '+money(row.cost),232,y,{align:'right'});doc.text('Rs. '+money(row.profit),270,y,{align:'right'});doc.text(margin.toFixed(1)+'%',287,y,{align:'right'});y+=6;",
+          "      doc.setFont('helvetica','normal');doc.setFontSize(7.5);",
+          "      doc.text(row.sku,14,y);doc.text(itemName,36,y);doc.text(String(row.orderCount),132,y,{align:'right'});doc.text(String(row.qty),158,y,{align:'right'});",
+          "      doc.text('Rs. '+money(row.revenue),199,y,{align:'right'});doc.text('Rs. '+money(row.cost),232,y,{align:'right'});doc.text('Rs. '+money(row.profit),270,y,{align:'right'});doc.text(margin.toFixed(1)+'%',287,y,{align:'right'});",
+          '      y+=6;',
           '    });',
-          "    if(y>185){doc.addPage();y=16;}y+=4;doc.line(14,y,287,y);y+=6;doc.setFont('helvetica','bold');doc.setFontSize(9);doc.text('TOTAL',14,y);doc.text(String(totalQty),158,y,{align:'right'});doc.text('Rs. '+money(totalRevenue),199,y,{align:'right'});doc.text('Rs. '+money(totalCost),232,y,{align:'right'});doc.text('Rs. '+money(totalProfit),270,y,{align:'right'});",
+          "    if(y>185){doc.addPage();y=16;}y+=4;doc.line(14,y,287,y);y+=6;doc.setFont('helvetica','bold');doc.setFontSize(9);",
+          "    doc.text('TOTAL',14,y);doc.text(String(totalQty),158,y,{align:'right'});doc.text('Rs. '+money(totalRevenue),199,y,{align:'right'});doc.text('Rs. '+money(totalCost),232,y,{align:'right'});doc.text('Rs. '+money(totalProfit),270,y,{align:'right'});",
           "    doc.save('O-RA_Packed_Expense_Profit_By_Item_'+new Date().toISOString().slice(0,10)+'.pdf');",
           '  };',
         ].join('\n');
@@ -134,24 +151,32 @@ export const stockReportingExportsPatch = () => ({
       }
     }
 
-    // Add export controls without wrapping/restructuring the existing Add Purchase
-    // button. This avoids brittle closing-tag matching with other dashboard patches.
+    // Put the two export buttons inside the stock report card header, not beside
+    // the Add Purchase button. This location is plain JSX and cannot be trapped
+    // inside another patch's conditional/button expression.
     if (!text.includes('Download Stock CSV')) {
-      const marker = '            <button\n              onClick={() => {';
+      const marker = [
+        '              <p className="mt-2 text-[10px] text-neutral-500">',
+        "                Showing {stockItemReportRows.length} of {stockByItemCodeRows.length} item code{stockByItemCodeRows.length===1?'':'s'}",
+        '              </p>',
+      ].join('\n');
       if (text.includes(marker)) {
         const controls = [
-          '            <button type="button" onClick={downloadStockReportCsv} className="px-4 py-2 rounded-xl border border-sky-500/30 bg-sky-500/10 text-sky-300 font-bold text-xs flex items-center gap-2 hover:bg-sky-500/20">',
-          '              <Download className="w-4 h-4"/> Download Stock CSV',
-          '            </button>',
-          '            <button type="button" onClick={downloadPackedProfitPdf} className="px-4 py-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 font-bold text-xs flex items-center gap-2 hover:bg-emerald-500/20">',
-          '              <FileText className="w-4 h-4"/> Packed Profit PDF',
-          '            </button>',
           marker,
+          '              <div className="mt-3 flex flex-wrap gap-2">',
+          '                <button type="button" onClick={downloadStockReportCsv} className="inline-flex items-center gap-2 rounded-xl border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-[10px] font-black text-sky-300 hover:bg-sky-500/20">',
+          '                  <Download className="h-3.5 w-3.5"/> Download Stock CSV',
+          '                </button>',
+          '                <button type="button" onClick={downloadPackedProfitPdf} className="inline-flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-[10px] font-black text-emerald-300 hover:bg-emerald-500/20">',
+          '                  <FileText className="h-3.5 w-3.5"/> Packed Profit PDF',
+          '                </button>',
+          '              </div>',
         ].join('\n');
         text = text.replace(marker, controls);
       }
     }
 
+    // Negative balance visual cue in the stock table/report.
     if (!text.includes("row.stockHealth==='SHORTAGE'?'bg-red-600 text-white'")) {
       text = text.replace(
         "(row.stockHealth==='OUT OF STOCK'?'bg-red-500/15 text-red-300':row.stockHealth==='LOW STOCK'?'bg-amber-500/15 text-amber-300':'bg-emerald-500/15 text-emerald-300')",
