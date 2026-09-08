@@ -26,15 +26,6 @@ export const deliveredCsvUploadPatch = () => ({
       text = text.replace("| 'delivery' | 'dispatch' | 'cod_payments'", "| 'delivery' | 'dispatch' | 'delivered_csv_upload' | 'cod_payments'");
     }
 
-    // Refresh full order objects after durable server updates so delivery fee/tracking
-    // changes become visible immediately without a browser reload.
-    if (!text.includes('    refreshOrdersFromServer,\n    setIsAdminView,')) {
-      text = text.replace(
-        '    fullLiveStartReset,\n    setIsAdminView,',
-        '    fullLiveStartReset,\n    refreshOrdersFromServer,\n    setIsAdminView,'
-      );
-    }
-
     // Staff permission catalog.
     if (!text.includes("'dispatch','delivered_csv_upload','returns'")) {
       text = text.replace(
@@ -49,22 +40,19 @@ export const deliveredCsvUploadPatch = () => ({
       );
     }
 
-    // Sidebar entry under ORDERS.
-    if (!text.includes("{ id:'delivered_csv_upload', label:'Delivered CSV Upload'")) {
-      const sidebarMarker = "      { id:'dispatch', label:`Dispatch Scan (${orders.filter((o)=>o.dispatch_status==='Handed Over').length})`, icon:ScanLine },";
-      if (text.includes(sidebarMarker)) {
-        text = text.replace(
-          sidebarMarker,
-          sidebarMarker + "\n      { id:'delivered_csv_upload', label:'Delivered CSV Upload', icon:CheckCircle2 },"
-        );
-      }
-    }
-
     // Fardar Delivered report CSV importer. It uses the exact report fields:
     // WAYBILL ID, DELIVERY STATUS, LAST SCAN DATE, ORDER ID and DELIVERY FEE.
-    if (!text.includes('const chooseDeliveredCsvStatusUpload=')) {
-      const functionMarker = '  const csvEscape = (value: unknown) => {';
-      if (text.includes(functionMarker)) {
+    // IMPORTANT: the UI is only injected after this handler is confirmed to exist.
+    // This prevents a broken sidebar page from crashing the full Admin Dashboard.
+    let deliveredHandlerReady = text.includes('const chooseDeliveredCsvStatusUpload=');
+    if (!deliveredHandlerReady) {
+      const functionMarkers = [
+        '  const csvEscape = (value: unknown) => {',
+        '  const downloadStockReportCsv=()=>{',
+        '  const saveBrandingChanges = () => {',
+      ];
+      const functionMarker = functionMarkers.find((marker) => text.includes(marker));
+      if (functionMarker) {
         const functions = [
           '  const applyDeliveredCsvStatusFile=async(file:File)=>{',
           "    const raw=await file.text();",
@@ -122,9 +110,9 @@ export const deliveredCsvUploadPatch = () => ({
           '      }catch(error:any){failed+=1;failedRows.push(String(row[waybillI]||wb)+\' (\'+order.order_number+\'): \'+String(error?.message||\'Update failed\'));}',
           '    }',
           '',
-          '    if(updated>0){try{await refreshOrdersFromServer();}catch{}}',
           "    const details=[notFoundWaybills.length?'Not found: '+notFoundWaybills.slice(0,8).join(', '):'',statusSkipped.length?'Not Shipped: '+statusSkipped.slice(0,6).join(', '):'',mismatchRows.length?'Order ID mismatch: '+mismatchRows.slice(0,6).join(', '):'',failedRows.length?'Failed: '+failedRows.slice(0,6).join(', '):''].filter(Boolean).join('\\n');",
           "    alert('Delivered CSV processed.\\n\\nDelivered rows: '+uniqueRows.size+'\\nUpdated Shipped → Delivered: '+updated+'\\nAlready Delivered: '+alreadyDelivered+'\\nWaybill Not Found: '+notFound+'\\nSkipped (not Shipped): '+notShipped+'\\nOrder ID mismatch: '+orderIdMismatch+'\\nFailed: '+failed+(details?'\\n\\n'+details:''));",
+          '    if(updated>0)window.setTimeout(()=>window.location.reload(),100);',
           '  };',
           '',
           '  const chooseDeliveredCsvStatusUpload=()=>{',
@@ -134,14 +122,25 @@ export const deliveredCsvUploadPatch = () => ({
           '    picker.click();',
           '  };',
           '',
-          functionMarker,
         ].join('\n');
-        text = text.replace(functionMarker, functions);
+        text = text.replace(functionMarker, functions + functionMarker);
+        deliveredHandlerReady = text.includes('const chooseDeliveredCsvStatusUpload=');
       }
     }
 
-    // Sidebar page UI.
-    if (!text.includes("activeTab === 'delivered_csv_upload'")) {
+    // Sidebar entry under ORDERS. Only expose the page if its handler exists.
+    if (deliveredHandlerReady && !text.includes("{ id:'delivered_csv_upload', label:'Delivered CSV Upload'")) {
+      const sidebarMarker = "      { id:'dispatch', label:`Dispatch Scan (${orders.filter((o)=>o.dispatch_status==='Handed Over').length})`, icon:ScanLine },";
+      if (text.includes(sidebarMarker)) {
+        text = text.replace(
+          sidebarMarker,
+          sidebarMarker + "\n      { id:'delivered_csv_upload', label:'Delivered CSV Upload', icon:CheckCircle2 },"
+        );
+      }
+    }
+
+    // Sidebar page UI. Never inject a reference to an undefined click handler.
+    if (deliveredHandlerReady && !text.includes("activeTab === 'delivered_csv_upload'")) {
       const panelMarker = "      {activeTab === 'invoices' && (";
       if (text.includes(panelMarker)) {
         const panel = [
