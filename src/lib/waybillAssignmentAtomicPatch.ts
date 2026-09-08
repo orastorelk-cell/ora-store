@@ -36,8 +36,8 @@ export const waybillAssignmentAtomicPatch = () => ({
     const order = orders.find((o) => o.id === orderId);
     if (!order) return null;
     if (order.waybill_number) return order.waybill_number;
-    const resolvedCity = order.fardar_city || resolveFardarCity(order.city).city;
-    if (fardarCities.length > 0 && !resolvedCity) return null;
+    const resolvedCity = order.fardar_city || resolveFardarCity(order.city).city || String(order.city || '').trim();
+    if (!resolvedCity) return null;
 
     const alreadyOnOrders = new Set(
       orders
@@ -70,9 +70,9 @@ export const waybillAssignmentAtomicPatch = () => ({
         waybillAssignmentReservationsRef.current.delete(reservedKey);
         return prev;
       }
-      return prev.map((o) => o.id === orderId ? { ...o, courier_name: courierName, waybill_number: next.waybill_number, fardar_city: resolvedCity || o.fardar_city, city_verified: fardarCities.length ? true : o.city_verified, shipment_mode: 'manual', tracking_status: 'Waybill Assigned', delivery_status: 'Ready to Ship' } : o);
+      return prev.map((o) => o.id === orderId ? { ...o, courier_name: courierName, waybill_number: next.waybill_number, fardar_city: resolvedCity || o.fardar_city, city_verified: Boolean(resolvedCity) ? true : o.city_verified, shipment_mode: 'manual', tracking_status: 'Waybill Assigned', delivery_status: 'Ready to Ship' } : o);
     });
-    logActivity({ action: 'Waybill Assigned', module: 'Delivery', target_id: orderId, target_label: order.order_number, details: `${next.waybill_number} (${courierName})` });
+    logActivity({ action: 'Waybill Assigned', module: 'Delivery', target_id: orderId, target_label: order.order_number, details: String(next.waybill_number) + ' (' + courierName + ')' });
     return next.waybill_number;
   };
 
