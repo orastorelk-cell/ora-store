@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Delivered CSV Upload</title>
+  <style>
+    :root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    *{box-sizing:border-box}
+    body{margin:0;background:#0a0a0a;color:#fff}
+    .wrap{max-width:1050px;margin:0 auto;padding:18px}
+    .card{background:#111;border:1px solid #262626;border-radius:18px;padding:18px;margin-bottom:14px}
+    .title{font-size:22px;font-weight:900;margin:0 0 6px}
+    .sub{font-size:13px;line-height:1.6;color:#a3a3a3;margin:0}
+    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:16px}
+    .stat{background:#090909;border:1px solid #262626;border-radius:14px;padding:14px}
+    .label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#737373;font-weight:800}
+    .value{font-size:24px;font-weight:900;margin-top:5px}
+    .blue{color:#7dd3fc}.green{color:#6ee7b7}.white{color:#fff}
+    .drop{display:block;border:1px dashed #3f3f46;border-radius:16px;padding:22px;text-align:center;background:#0b0b0b;cursor:pointer;transition:.15s}
+    .drop:hover{border-color:#34d399;background:#0d1512}
+    input[type=file]{display:none}
+    .btn{appearance:none;border:0;border-radius:12px;padding:12px 16px;font-size:14px;font-weight:900;cursor:pointer;background:#34d399;color:#052e20}
+    .btn:disabled{opacity:.45;cursor:not-allowed}
+    .muted{font-size:11px;color:#737373;line-height:1.55}
+    .notice{margin-top:14px;border:1px solid #92400e55;background:#451a031f;color:#fde68a;border-radius:12px;padding:12px;font-size:11px;line-height:1.6}
+    .ok{border-color:#065f4655;background:#064e3b22;color:#a7f3d0}
+    .error{border-color:#991b1b66;background:#7f1d1d22;color:#fecaca}
+    .result{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.6;max-height:280px;overflow:auto}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px}
+    .file{font-size:12px;color:#d4d4d4;overflow-wrap:anywhere}
+    @media(max-width:700px){.grid{grid-template-columns:1fr}.wrap{padding:12px}.title{font-size:19px}}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="card">
+      <h1 class="title">Delivered CSV Upload</h1>
+      <p class="sub">Upload the Fardar delivery report. Only report rows with <b>DELIVERY STATUS = Delivered</b> are considered. The system matches each row by <b>WAYBILL ID</b> and only changes orders that are currently <b>Shipped</b>.</p>
+      <div class="grid">
+        <div class="stat"><div class="label">System Shipped</div><div id="shippedCount" class="value blue">—</div></div>
+        <div class="stat"><div class="label">System Delivered</div><div id="deliveredCount" class="value green">—</div></div>
+        <div class="stat"><div class="label">Match Key</div><div class="value white" style="font-size:16px">WAYBILL ID</div></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <label class="drop" for="csvFile">
+        <div style="font-weight:900;font-size:15px">Choose Fardar Delivered CSV</div>
+        <div class="muted" style="margin-top:6px">Required: WAYBILL ID + DELIVERY STATUS. Optional but supported: LAST SCAN DATE, ORDER ID, DELIVERY FEE.</div>
+      </label>
+      <input id="csvFile" type="file" accept=".csv,text/csv" />
+      <div class="row">
+        <button id="uploadBtn" class="btn" type="button" disabled>Process Delivered Orders</button>
+        <span id="fileName" class="file">No CSV selected</span>
+      </div>
+      <div class="notice">Safety rules: non-Delivered rows are ignored. Already Delivered orders are not changed. Orders that are not currently Shipped are skipped. If the CSV contains an O-RA order number (FB/TK/WEB/MAN) that does not match the system order attached to that waybill, that row is blocked.</div>
+    </section>
+
+    <section id="messageCard" class="card" style="display:none">
+      <div id="message" class="result"></div>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      const $ = (id) => document.getElementById(id);
+      const token = localStorage.getItem('ora_staff_session_token') || '';
+      let orders = [];
+      let selectedFile = null;
+
+      const setMessage = (text, type = '') => {
+        const card = $('messageCard');
+        card.style.display = 'block';
+        card.className = 'card' + (type ? ' ' + type : '');
+        $('message').textContent = text;
+      };
+
+      const key = (value) => String(value ?? '').trim().replace(/^'+|'+$/g, '').toLowerCase();
+      const statusKey = (value) => String(value ?? '').trim().toLowerCase();
+      const parseMoney = (value) => {
+        const n = Number(String(value ?? '').replace(/,/g, '').replace(/[^0-9.-]/g, ''));
+        return Number.isFinite(n) ? Math.max(0, n) : undefined;
+      };
+      const parseDateIso = (value) => {
+        const raw = String(value ?? '').trim();
+        if (!raw) return new Date().toISOString();
+        let d = new Date(raw);
+        if (Number.isNaN(d.getTime())) d = new Date(raw.replace(' ', 'T'));
+        return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+      };
+      const normalizeHeader = (value) => String(value ?? '')
+        .replace(/^\uFEFF/, '')
+        .trim()
+        .toUpperCase()
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ');
+
+      const parseCsv = (raw) => {
+        const rows = [];
+        let row = [];
+        let cell = '';
+        let quoted = false;
+        for (let i = 0; i < raw.length; i += 1) {
+          const ch = raw[i];
+          if (ch === '"') {
+            if (quoted && raw[i + 1] === '"') { cell += '"'; i += 1; }
+            else quoted = !quoted;
+          } else if (ch === ',' && !quoted) {
+            row.push(cell.trim()); cell = '';
+          } else if ((ch === '\n' || ch === '\r') && !quoted) {
+            if (ch === '\r' && raw[i + 1] === '\n') i += 1;
+            row.push(cell.trim()); cell = '';
+            if (row.some((v) => String(v).trim() !== '')) rows.push(row);
+            row = [];
+          } else {
+            cell += ch;
+          }
+        }
+        row.push(cell.trim());
+        if (row.some((v) => String(v).trim() !== '')) rows.push(row);
+        return rows;
+      };
+
+      const api = async (url, options = {}) => {
+        const headers = { ...(options.headers || {}), ...(token ? { Authorization: 'Bearer ' + token } : {}) };
+        const response = await fetch(url, { ...options, headers, cache: 'no-store' });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data?.error || ('Request failed: ' + response.status));
+        return data;
+      };
+
+      const refreshOrders = async () => {
+        if (!token) {
+          $('shippedCount').textContent = '—';
+          $('deliveredCount').textContent = '—';
+          setMessage('Admin login session not found. Open this page from the O-RA Admin System after logging in.', 'error');
+          return;
+        }
+        try {
+          const data = await api('/api/orders');
+          orders = Array.isArray(data?.orders) ? data.orders : [];
+          $('shippedCount').textContent = String(orders.filter((o) => statusKey(o.order_status) === 'shipped').length);
+          $('deliveredCount').textContent = String(orders.filter((o) => statusKey(o.order_status) === 'delivered').length);
+        } catch (error) {
+          setMessage('Could not load system orders. ' + (error?.message || error), 'error');
+        }
+      };
+
+      const processFile = async () => {
+        if (!selectedFile) return;
+        $('uploadBtn').disabled = true;
+        $('uploadBtn').textContent = 'Processing...';
+        try {
+          await refreshOrders();
+          if (!orders.length) throw new Error('No system orders are available to match.');
+
+          const raw = await selectedFile.text();
+          const rows = parseCsv(raw);
+          if (rows.length < 2) throw new Error('CSV is empty or has no data rows.');
+
+          const header = rows[0].map(normalizeHeader);
+          const findColumn = (names) => header.findIndex((name) => names.includes(name));
+          const waybillI = findColumn(['WAYBILL ID','WAYBILL','WAYBILL NO','WAYBILL NUMBER','AWB','AWB NO','AWB NUMBER']);
+          const statusI = findColumn(['DELIVERY STATUS','STATUS']);
+          const scanI = findColumn(['LAST SCAN DATE','LAST SCAN','DELIVERED DATE','DELIVERY DATE']);
+          const orderIdI = findColumn(['ORDER ID','ORDER NUMBER']);
+          const deliveryFeeI = findColumn(['DELIVERY FEE','DELIVERY COST','COURIER FEE']);
+          if (waybillI < 0 || statusI < 0) throw new Error('Invalid Fardar report. WAYBILL ID and DELIVERY STATUS columns are required.');
+
+          const deliveredRows = rows.slice(1).filter((row) => statusKey(row[statusI]) === 'delivered');
+          if (!deliveredRows.length) throw new Error('This CSV has no rows where DELIVERY STATUS = Delivered. Nothing was changed.');
+
+          const unique = new Map();
+          deliveredRows.forEach((row) => {
+            const wb = key(row[waybillI]);
+            if (wb && !unique.has(wb)) unique.set(wb, row);
+          });
+
+          let updated = 0;
+          let alreadyDelivered = 0;
+          let notFound = 0;
+          let notShipped = 0;
+          let mismatch = 0;
+          let failed = 0;
+          const details = [];
+
+          for (const [wb, row] of unique.entries()) {
+            const order = orders.find((candidate) => key(candidate?.waybill_number) === wb);
+            if (!order) {
+              notFound += 1;
+              if (details.length < 20) details.push('NOT FOUND: ' + String(row[waybillI] || wb));
+              continue;
+            }
+
+            const csvOrderId = orderIdI >= 0 ? String(row[orderIdI] || '').trim() : '';
+            if (/^(FB|TK|WEB|MAN)-/i.test(csvOrderId) && key(csvOrderId) !== key(order.order_number)) {
+              mismatch += 1;
+              if (details.length < 20) details.push('ORDER ID MISMATCH: ' + String(row[waybillI] || wb) + ' | CSV ' + csvOrderId + ' | System ' + String(order.order_number || ''));
+              continue;
+            }
+
+            const currentStatus = statusKey(order.order_status);
+            if (currentStatus === 'delivered') {
+              alreadyDelivered += 1;
+              continue;
+            }
+            if (currentStatus !== 'shipped') {
+              notShipped += 1;
+              if (details.length < 20) details.push('SKIPPED NOT SHIPPED: ' + String(order.order_number || '') + ' | ' + String(order.order_status || ''));
+              continue;
+            }
+
+            const at = scanI >= 0 ? parseDateIso(row[scanI]) : new Date().toISOString();
+            const actualDeliveryFee = deliveryFeeI >= 0 ? parseMoney(row[deliveryFeeI]) : undefined;
+            const history = Array.isArray(order.fardar_tracking_history) ? order.fardar_tracking_history : [];
+            const updatedOrder = {
+              ...order,
+              order_status: 'Delivered',
+              delivery_status: 'Delivered',
+              tracking_status: 'Delivered',
+              fardar_tracking_updated_at: at,
+              ...(actualDeliveryFee !== undefined ? { internal_delivery_fee: actualDeliveryFee } : {}),
+              fardar_tracking_history: [...history, { status: 'Delivered', at, note: 'Fardar Delivered CSV Upload' }],
+            };
+
+            try {
+              await api('/api/orders/' + encodeURIComponent(order.id), {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ order: updatedOrder }),
+              });
+              order.order_status = 'Delivered';
+              order.delivery_status = 'Delivered';
+              order.tracking_status = 'Delivered';
+              order.fardar_tracking_updated_at = at;
+              order.fardar_tracking_history = updatedOrder.fardar_tracking_history;
+              if (actualDeliveryFee !== undefined) order.internal_delivery_fee = actualDeliveryFee;
+              updated += 1;
+            } catch (error) {
+              failed += 1;
+              if (details.length < 20) details.push('FAILED: ' + String(order.order_number || '') + ' | ' + (error?.message || error));
+            }
+          }
+
+          await refreshOrders();
+          const summary = [
+            'Delivered CSV processed safely.',
+            '',
+            'Delivered report rows (unique waybills): ' + unique.size,
+            'Updated Shipped → Delivered: ' + updated,
+            'Already Delivered: ' + alreadyDelivered,
+            'Waybill Not Found: ' + notFound,
+            'Skipped (not Shipped): ' + notShipped,
+            'Order ID mismatch blocked: ' + mismatch,
+            'Failed updates: ' + failed,
+            details.length ? '\nDetails:\n' + details.join('\n') : '',
+          ].filter(Boolean).join('\n');
+          setMessage(summary, failed ? 'error' : 'ok');
+        } catch (error) {
+          setMessage(String(error?.message || error), 'error');
+        } finally {
+          $('uploadBtn').disabled = !selectedFile;
+          $('uploadBtn').textContent = 'Process Delivered Orders';
+        }
+      };
+
+      $('csvFile').addEventListener('change', (event) => {
+        selectedFile = event.target.files?.[0] || null;
+        $('fileName').textContent = selectedFile ? selectedFile.name : 'No CSV selected';
+        $('uploadBtn').disabled = !selectedFile;
+      });
+      $('uploadBtn').addEventListener('click', processFile);
+      refreshOrders();
+    })();
+  </script>
+</body>
+</html>
