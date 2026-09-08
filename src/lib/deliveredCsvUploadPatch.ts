@@ -24,6 +24,15 @@ export const deliveredCsvUploadPatch = () => ({
 
     if (!id.endsWith('/src/components/admin/AdminDashboard.tsx')) return null;
 
+    // The pool moves a waybill from Assigned to Used after courier handover.
+    // The dashboard's ASSIGNED figure is intended to show all consumed/assigned
+    // waybills, so include both statuses instead of dropping already-used ones.
+    const oldAssignedCount = "{waybillRecords.filter((w) => w.status === 'Assigned').length}";
+    const newAssignedCount = "{waybillRecords.filter((w) => w.status === 'Assigned' || w.status === 'Used').length}";
+    if (text.includes(oldAssignedCount)) {
+      text = text.split(oldAssignedCount).join(newAssignedCount);
+    }
+
     // Keep this feature isolated from the large AdminDashboard runtime.
     // The actual CSV parser/updater lives in public/delivered-upload.html.
     // This avoids any page crash from an injected click-handler function.
