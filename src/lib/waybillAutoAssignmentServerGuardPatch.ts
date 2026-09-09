@@ -3,6 +3,14 @@ export const waybillAutoAssignmentServerGuardPatch = () => ({
   enforce: 'pre' as const,
   transform(code: string, rawId: string) {
     const id = rawId.split('?')[0].replace(/\\/g, '/');
+
+    if (id.endsWith('/src/components/admin/AdminDashboard.tsx')) {
+      const from = "        settings.fardar_parcel_type || '',";
+      const to = "        1,";
+      if (!code.includes(from)) return null;
+      return { code: code.replace(from, to), map: null };
+    }
+
     if (!id.endsWith('/src/context/StoreContext.tsx')) return null;
     if (code.includes('WAYBILL AUTO ASSIGN SERVER GUARD')) return null;
 
