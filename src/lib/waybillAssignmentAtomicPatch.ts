@@ -155,34 +155,39 @@ export const waybillAssignmentAtomicPatch = () => ({
     }
 
     // Background FIFO allocation also mirrors order updates. If another browser
-    // already claimed the same waybill, the DB rejects it. Immediately quarantine
-    // that stale local pool number and reload authoritative orders so the allocator
-    // can move on to a fresh number instead of leaving a duplicate in the UI.
-    const mirrorOld = String.raw`  const mirrorOrderUpdate = (order: Order) => {
-    if (!getStaffSessionToken()) return;
-    sharedStaffRequest(`/api/orders/${encodeURIComponent(order.id)}`, {
-      method:'PUT',
-      body:JSON.stringify({order}),
-    }).catch(err=>console.warn('Order mirror update failed:',err?.message||err));
-  };`;
-    const mirrorNew = String.raw`  const mirrorOrderUpdate = (order: Order) => {
-    if (!getStaffSessionToken()) return;
-    sharedStaffRequest(`/api/orders/${encodeURIComponent(order.id)}`, {
-      method:'PUT',
-      body:JSON.stringify({order}),
-    }).catch(async (err) => {
-      const message = String(err?.message || err || '');
-      const waybillKey = String(order.waybill_number || '').trim().toLowerCase();
-      const duplicateConflict = Boolean(waybillKey) && /duplicate key|unique constraint|23505|order_snapshots_unique_waybill_idx/i.test(message);
-      if (duplicateConflict) {
-        setWaybillRecords((prev) => prev.map((w) => String(w.waybill_number || '').trim().toLowerCase() === waybillKey ? { ...w, status:'Used' } : w));
-        waybillAssignmentReservationsRef.current.add(waybillKey);
-        try { await refreshOrdersFromServer(); } catch (refreshError: any) { console.warn('Waybill conflict refresh failed:', refreshError?.message || refreshError); }
-        return;
-      }
-      console.warn('Order mirror update failed:', message);
-    });
-  };`;
+    // already claimed the same waybill, the DB rejects it. Quarantine that stale
+    // local pool number and reload authoritative orders so the allocator can retry.
+    const mirrorOld = [
+      "  const mirrorOrderUpdate = (order: Order) => {",
+      "    if (!getStaffSessionToken()) return;",
+      "    sharedStaffRequest(`/api/orders/${encodeURIComponent(order.id)}`, {",
+      "      method:'PUT',",
+      "      body:JSON.stringify({order}),",
+      "    }).catch(err=>console.warn('Order mirror update failed:',err?.message||err));",
+      "  };",
+    ].join('\n');
+
+    const mirrorNew = [
+      "  const mirrorOrderUpdate = (order: Order) => {",
+      "    if (!getStaffSessionToken()) return;",
+      "    sharedStaffRequest(`/api/orders/${encodeURIComponent(order.id)}`, {",
+      "      method:'PUT',",
+      "      body:JSON.stringify({order}),",
+      "    }).catch(async (err) => {",
+      "      const message = String(err?.message || err || '');",
+      "      const waybillKey = String(order.waybill_number || '').trim().toLowerCase();",
+      "      const duplicateConflict = Boolean(waybillKey) && /duplicate key|unique constraint|23505|order_snapshots_unique_waybill_idx/i.test(message);",
+      "      if (duplicateConflict) {",
+      "        setWaybillRecords((prev) => prev.map((w) => String(w.waybill_number || '').trim().toLowerCase() === waybillKey ? { ...w, status:'Used' } : w));",
+      "        waybillAssignmentReservationsRef.current.add(waybillKey);",
+      "        try { await refreshOrdersFromServer(); } catch (refreshError: any) { console.warn('Waybill conflict refresh failed:', refreshError?.message || refreshError); }",
+      "        return;",
+      "      }",
+      "      console.warn('Order mirror update failed:', message);",
+      "    });",
+      "  };",
+    ].join('\n');
+
     if (text.includes(mirrorOld)) text = text.replace(mirrorOld, mirrorNew);
 
     return { code: text, map: null };
