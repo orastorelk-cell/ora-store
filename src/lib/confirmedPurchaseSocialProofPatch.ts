@@ -26,37 +26,20 @@ export const confirmedPurchaseSocialProofPatch = () => ({
         'ProductCard state',
       );
 
-      const cardEffectMarker = String.raw`  React.useEffect(() => {
-    const sync = () => setWishlisted(isInWishlist(product.id));`;
-      const cardEffectInsert = String.raw`  React.useEffect(() => {
-    let cancelled = false;
-    confirmedPurchaseCountForSku(product.sku).then((count) => {
-      if (!cancelled) setConfirmedPurchaseCount(count);
-    });
-    return () => { cancelled = true; };
-  }, [product.sku]);
+      text = replaceRequired(
+        text,
+        "  React.useEffect(() => {\n    const sync = () => setWishlisted(isInWishlist(product.id));",
+        "  React.useEffect(() => {\n    let cancelled = false;\n    confirmedPurchaseCountForSku(product.sku).then((count) => {\n      if (!cancelled) setConfirmedPurchaseCount(count);\n    });\n    return () => { cancelled = true; };\n  }, [product.sku]);\n\n  React.useEffect(() => {\n    const sync = () => setWishlisted(isInWishlist(product.id));",
+        'ProductCard count effect',
+      );
 
-  React.useEffect(() => {
-    const sync = () => setWishlisted(isInWishlist(product.id));`;
-      text = replaceRequired(text, cardEffectMarker, cardEffectInsert, 'ProductCard count effect');
+      text = replaceRequired(
+        text,
+        "            <span>{deliveryLabel}</span>\n          </p>\n        </div>",
+        "            <span>{deliveryLabel}</span>\n          </p>\n          {confirmedPurchaseCount > 0 && (\n            <p className=\"mt-1 flex items-center gap-1 text-[9px] font-bold leading-tight text-gray-500\">\n              <span aria-hidden=\"true\">👥</span>\n              <span>{language === 'si' ? ('පාරිභෝගිකයින් ' + confirmedPurchaseCount + ' දෙනෙක් මෙම භාණ්ඩය ඇණවුම් කර ඇත') : (confirmedPurchaseCount + ' customer' + (confirmedPurchaseCount === 1 ? '' : 's') + ' ordered this item')}</span>\n            </p>\n          )}\n        </div>",
+        'ProductCard social proof UI',
+      );
 
-      const cardUiOld = String.raw`          <p className={`ora-product-card-delivery mt-1 flex items-center gap-1 whitespace-nowrap text-[9px] font-black leading-tight ${settings.free_delivery_enabled ? 'text-emerald-600' : 'text-gray-500'}`}>
-            <span aria-hidden="true">🚚</span>
-            <span>{deliveryLabel}</span>
-          </p>
-        </div>`;
-      const cardUiNew = String.raw`          <p className={`ora-product-card-delivery mt-1 flex items-center gap-1 whitespace-nowrap text-[9px] font-black leading-tight ${settings.free_delivery_enabled ? 'text-emerald-600' : 'text-gray-500'}`}>
-            <span aria-hidden="true">🚚</span>
-            <span>{deliveryLabel}</span>
-          </p>
-          {confirmedPurchaseCount > 0 && (
-            <p className="mt-1 flex items-center gap-1 text-[9px] font-bold leading-tight text-gray-500">
-              <span aria-hidden="true">👥</span>
-              <span>{language === 'si' ? `පාරිභෝගිකයින් ${confirmedPurchaseCount} දෙනෙක් මෙම භාණ්ඩය ඇණවුම් කර ඇත` : `${confirmedPurchaseCount} customer${confirmedPurchaseCount === 1 ? '' : 's'} ordered this item`}</span>
-            </p>
-          )}
-        </div>`;
-      text = replaceRequired(text, cardUiOld, cardUiNew, 'ProductCard social proof UI');
       return { code: text, map: null };
     }
 
@@ -75,35 +58,20 @@ export const confirmedPurchaseSocialProofPatch = () => ({
         'ProductDetail state',
       );
 
-      const detailEffectMarker = String.raw`  useEffect(() => {
-    if (!selectedProduct) {`;
-      const detailEffectInsert = String.raw`  useEffect(() => {
-    if (!selectedProduct) {
-      setConfirmedPurchaseCount(0);
-      return;
-    }
-    let cancelled = false;
-    confirmedPurchaseCountForSku(selectedProduct.sku).then((count) => {
-      if (!cancelled) setConfirmedPurchaseCount(count);
-    });
-    return () => { cancelled = true; };
-  }, [selectedProduct?.sku]);
+      text = replaceRequired(
+        text,
+        "  useEffect(() => {\n    if (!selectedProduct) {",
+        "  useEffect(() => {\n    if (!selectedProduct) {\n      setConfirmedPurchaseCount(0);\n      return;\n    }\n    let cancelled = false;\n    confirmedPurchaseCountForSku(selectedProduct.sku).then((count) => {\n      if (!cancelled) setConfirmedPurchaseCount(count);\n    });\n    return () => { cancelled = true; };\n  }, [selectedProduct?.sku]);\n\n  useEffect(() => {\n    if (!selectedProduct) {",
+        'ProductDetail count effect',
+      );
 
-  useEffect(() => {
-    if (!selectedProduct) {`;
-      text = replaceRequired(text, detailEffectMarker, detailEffectInsert, 'ProductDetail count effect');
+      text = replaceRequired(
+        text,
+        "<span>{deliveryLabel}</span></p>\n              {(forcedOutOfStock || allVariantsForcedOut) && (",
+        "<span>{deliveryLabel}</span></p>\n              {confirmedPurchaseCount > 0 && (\n                <div className=\"mt-3 inline-flex items-center gap-2 rounded-full border border-orange-100 bg-white px-3 py-1.5 text-[11px] font-black text-gray-700 shadow-sm\">\n                  <span aria-hidden=\"true\">👥</span>\n                  <span>{language === 'si' ? ('පාරිභෝගිකයින් ' + confirmedPurchaseCount + ' දෙනෙක් මෙම භාණ්ඩය ඇණවුම් කර ඇත') : (confirmedPurchaseCount + ' customer' + (confirmedPurchaseCount === 1 ? '' : 's') + ' ordered this item')}</span>\n                </div>\n              )}\n              {(forcedOutOfStock || allVariantsForcedOut) && (",
+        'ProductDetail social proof UI',
+      );
 
-      const detailUiOld = String.raw`              <p className={`mt-1.5 flex items-center gap-1 text-[11px] font-black ${settings.free_delivery_enabled ? 'text-emerald-600' : 'text-gray-600'}`}><span aria-hidden="true">🚚</span><span>{deliveryLabel}</span></p>
-              {(forcedOutOfStock || allVariantsForcedOut) && (`;
-      const detailUiNew = String.raw`              <p className={`mt-1.5 flex items-center gap-1 text-[11px] font-black ${settings.free_delivery_enabled ? 'text-emerald-600' : 'text-gray-600'}`}><span aria-hidden="true">🚚</span><span>{deliveryLabel}</span></p>
-              {confirmedPurchaseCount > 0 && (
-                <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-orange-100 bg-white px-3 py-1.5 text-[11px] font-black text-gray-700 shadow-sm">
-                  <span aria-hidden="true">👥</span>
-                  <span>{language === 'si' ? `පාරිභෝගිකයින් ${confirmedPurchaseCount} දෙනෙක් මෙම භාණ්ඩය ඇණවුම් කර ඇත` : `${confirmedPurchaseCount} customer${confirmedPurchaseCount === 1 ? '' : 's'} ordered this item`}</span>
-                </div>
-              )}
-              {(forcedOutOfStock || allVariantsForcedOut) && (`;
-      text = replaceRequired(text, detailUiOld, detailUiNew, 'ProductDetail social proof UI');
       return { code: text, map: null };
     }
 
