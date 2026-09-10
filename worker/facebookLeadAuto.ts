@@ -196,8 +196,31 @@ const parseQuantity = (value: string) => {
   return Number.isFinite(qty) ? Math.min(99, Math.max(0, qty)) : 0;
 };
 
-const detectItemCode = (formName: unknown) => {
-  const match = String(formName || '').toUpperCase().match(/(?:^|[^A-Z0-9])(R\d{4,})(?=$|[^A-Z0-9])/);
+const detectItemCode = (formName: unknown, products: Product[] = []) => {
+  const name = String(formName || '').trim().toUpperCase();
+  if (!name) return '';
+
+  // Resolve the real O-RA catalog SKU first. Longest-first is critical because
+  // combo SKUs contain component codes, e.g. CB-R0010-R0044 contains R0010/R0044.
+  const catalogCodes = Array.from(new Set(
+    products.flatMap((product) => [
+      String(product?.sku || '').trim().toUpperCase(),
+      ...(product?.variants || []).map((variant) => String(variant?.sku || '').trim().toUpperCase()),
+    ]).filter(Boolean)
+  )).sort((a, b) => b.length - a.length);
+
+  for (const catalogCode of catalogCodes) {
+    if (name === catalogCode) return catalogCode;
+    const escaped = catalogCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp('(?:^|[^A-Z0-9])' + escaped + '(?=$|[^A-Z0-9])').test(name)) return catalogCode;
+  }
+
+  // Preserve combo codes even when called only for logging before catalog lookup.
+  const combo = name.match(/(?:^|[^A-Z0-9])(CB(?:-R\d{4,}){2,})(?=$|[^A-Z0-9])/);
+  if (combo?.[1]) return combo[1];
+
+  // Normal single-item forms remain supported exactly as before.
+  const match = name.match(/(?:^|[^A-Z0-9])(R\d{4,})(?=$|[^A-Z0-9])/);
   return match?.[1] || '';
 };
 
@@ -302,8 +325,8 @@ const buildFacebookOrder = async (
   event: LeadEvent,
 ): Promise<Order> => {
   const { products, settings } = await readStorefront(runtime);
-  const code = detectItemCode(form?.name);
-  if (!code) throw new Error(`Form name "${String(form?.name || '')}" does not start with a valid R item code.`);
+  const code = detectItemCode(form?.name, products);
+  if (!code) throw new Error(`Form name "${String(form?.name || '')}" does not contain a valid O-RA catalog item code.`);
 
   const fields = metaFieldMap(lead?.field_data);
   const customerName = pickField(fields, ['full_name', 'customer_name', 'name']);
