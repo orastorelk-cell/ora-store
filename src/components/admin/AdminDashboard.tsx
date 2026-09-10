@@ -5265,7 +5265,7 @@ Suitable For:
             {/* Google Apps Script Snippet Box */}
             <div className="bg-neutral-950 p-4 rounded-xl border border-neutral-800 space-y-2">
               <div className="flex items-center justify-between text-xs">
-                <span className="font-bold text-white">Google Apps Script Webhook Code (Free Tier):</span>
+                <div><span className="font-bold text-white">Google Apps Script Webhook Code (Free Tier):</span><p className="mt-0.5 text-[9px] font-bold text-emerald-400">LATEST FULL CODE • OFFER PRICE FIX INCLUDED</p></div>
                 <button
                   onClick={() => {
                     navigator.clipboard.writeText(GOOGLE_APPS_SCRIPT_CODE);
@@ -5275,7 +5275,7 @@ Suitable For:
                   className="px-2.5 py-1 rounded-lg bg-neutral-800 text-amber-400 text-[10px] font-semibold flex items-center space-x-1"
                 >
                   {copiedScript ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                  <span>{copiedScript ? 'Copied' : 'Copy Script Code'}</span>
+                  <span>{copiedScript ? 'Copied' : 'Copy Latest Full Code'}</span>
                 </button>
               </div>
 
