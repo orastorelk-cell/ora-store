@@ -13,13 +13,14 @@ import { useStore } from '../context/StoreContext';
 import { displayUnitPrice } from '../lib/productVariants';
 import { formatLkr } from '../lib/currency';
 import { HeroBannerSlide } from '../types';
+import { mainCategorySlugForCategory } from '../lib/mainCategory';
 
 interface HeroBannerProps {
   onBrowseAll: () => void;
 }
 
 export const HeroBanner: React.FC<HeroBannerProps> = ({ onBrowseAll }) => {
-  const { language, setSelectedCategorySlug, products, settings, setSelectedProduct } = useStore();
+  const { language, setSelectedCategorySlug, products, categories, settings, setSelectedProduct } = useStore();
   const [slideIndex, setSlideIndex] = useState(0);
   const [paused, setPaused] = useState(false);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -91,7 +92,14 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ onBrowseAll }) => {
     if (slide?.type === 'product' && slideProduct) { setSelectedProduct(slideProduct); return; }
     const type=slide?.link_type || 'products'; const value=slide?.link_value || '';
     if (type === 'product') { const target=products.find((product)=>product.id===value); if(target){setSelectedProduct(target);return;} }
-    if (type === 'category') { setSelectedCategorySlug(value || null); window.setTimeout(()=>document.getElementById('products-section')?.scrollIntoView({behavior:'smooth'}),50); return; }
+    if (type === 'category') {
+      const targetValue=value && !value.startsWith('main:') && value!=='combo-pack'
+        ? 'main:' + mainCategorySlugForCategory(categories.find((category)=>category.slug===value) || { slug:value, name_en:value })
+        : value;
+      setSelectedCategorySlug(targetValue || null);
+      window.setTimeout(()=>document.getElementById('products-section')?.scrollIntoView({behavior:'smooth'}),50);
+      return;
+    }
     if (type === 'url' && value) { if(/^https:\/\//i.test(value)||value.startsWith('/')) window.location.assign(value); return; }
     onBrowseAll();
   };
