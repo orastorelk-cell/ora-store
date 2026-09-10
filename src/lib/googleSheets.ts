@@ -136,9 +136,10 @@ const catalogProductsForSheet = (products:any[]) => {
         discount_enabled:false,
         stock_quantity:available,
         status:available>0?'Active':'Out of Stock',
+        sheet_inherited_combo_variant:true,
       };
     });
-    return {...p,variants:sheetVariants};
+    return {...p,variants:sheetVariants,sheet_has_inherited_combo_variants:true};
   });
 };
 
