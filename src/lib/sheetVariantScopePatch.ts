@@ -51,7 +51,7 @@ export const sheetVariantScopePatch = () => ({
     text = replaceRequired(
       text,
       "  const catalogProducts = catalogProductsWithOfferMeta(products, settings);\n  const posted = await postToAppsScript(webhookUrl, { action: 'catalog_sync', products: catalogProducts });",
-      "  const catalogProductsWithMeta = catalogProductsWithOfferMeta(products, settings);\n  const catalogProducts = catalogProductsWithMeta.map((product:any) => {\n    const explicitType = String(product?.product_type || '').trim().toLowerCase();\n    const hasVariants = Array.isArray(product?.variants) && product.variants.length > 0;\n    const isVariant = explicitType ? explicitType === 'variant' : hasVariants;\n    return isVariant ? product : { ...product, variants: [] };\n  });\n  const posted = await postToAppsScript(webhookUrl, { action: 'catalog_sync', products: catalogProducts });",
+      "  const catalogProductsWithMeta = catalogProductsWithOfferMeta(products, settings);\n  const catalogProducts = catalogProductsWithMeta.map((product:any) => {\n    const explicitType = String(product?.product_type || '').trim().toLowerCase();\n    const hasVariants = Array.isArray(product?.variants) && product.variants.length > 0;\n    const isVariant = explicitType ? (explicitType === 'variant' || (explicitType === 'bundle' && product?.sheet_has_inherited_combo_variants === true)) : hasVariants;\n    return isVariant ? product : { ...product, variants: [] };\n  });\n  const posted = await postToAppsScript(webhookUrl, { action: 'catalog_sync', products: catalogProducts });",
       'catalog sync sanitization',
     );
 
