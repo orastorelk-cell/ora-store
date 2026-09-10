@@ -271,6 +271,51 @@ const applyFacebookDisplayOfferSnapshot = (
   };
 };
 
+const applyFacebookBundleOfferSnapshot = (
+  product: Product,
+  products: Product[],
+  settings: StoreSettings,
+  item: Order['items'][number],
+): Order['items'][number] => {
+  if (normalizedProductType(product) !== 'bundle') return item;
+  const unitPrice = Math.max(0, Number(item.unit_price || 0));
+  if (!(unitPrice > 0)) return item;
+
+  let referencePrice = 0;
+  for (const component of product.bundle_components || []) {
+    const child = products.find((row) => row.id === component.product_id);
+    if (!child || normalizedProductType(child) === 'bundle') return item;
+    const childVariant = component.variant_id
+      ? (child.variants || []).find((variant) => variant.id === component.variant_id)
+      : undefined;
+    if (normalizedProductType(child) === 'variant' && !childVariant) return item;
+
+    const childQty = Math.max(1, Number(component.quantity || 1));
+    const current = Math.max(0, Number(displayUnitPrice(child, settings, childVariant) || 0));
+    const savedRegular = Math.max(current, Number(regularDisplayUnitPrice(child, settings, childVariant) || 0));
+    const hasSavedDiscount = savedRegular > current + 0.001;
+    let childReference = hasSavedDiscount ? savedRegular : current;
+
+    if (!hasSavedDiscount) {
+      const automatic = calculateRoundSpecialOffer({
+        currentPrice: current,
+        enabled: roundSpecialOfferEnabledForProduct(child),
+        percent: roundSpecialOfferPercentForSelection(child, childVariant),
+        freeDeliveryEnabled: Boolean(settings.free_delivery_enabled),
+        hasExistingDiscount: false,
+      });
+      if (automatic.active) childReference = automatic.regularPrice;
+    }
+    referencePrice += childReference * childQty;
+  }
+
+  referencePrice = Math.max(unitPrice, Math.round(referencePrice * 100) / 100);
+  const savingPerUnit = Math.max(0, Math.round((referencePrice - unitPrice) * 100) / 100);
+  return savingPerUnit > 0
+    ? { ...item, regular_unit_price: referencePrice, supplier_offer_discount_per_unit: savingPerUnit }
+    : item;
+};
+
 const buildPendingLeadItem = (
   products: Product[],
   settings: StoreSettings,
@@ -310,6 +355,9 @@ const buildPendingLeadItem = (
     selection.variant as ProductVariant | undefined,
     products,
   );
+  if (normalizedProductType(selection.product) === 'bundle') {
+    return applyFacebookBundleOfferSnapshot(selection.product, products, settings, item);
+  }
   return applyFacebookDisplayOfferSnapshot(
     selection.product,
     settings,
