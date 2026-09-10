@@ -2683,8 +2683,24 @@ useEffect(() => {
   };
 
   const syncAllUnsyncedOrders = async (): Promise<number> => {
-    const unsynced = orders.filter((o) => o.order_source !== 'Manual Admin' && !o.is_synced_google_sheets && !(o.order_source === 'Website' && o.payment_method === 'Bank Payment' && o.payment_verification_status !== 'Approved'));
-    if(!unsynced.length || !settings.google_sheet_webhook_url) return 0;
+    if(!settings.google_sheet_webhook_url) return 0;
+
+    // Never trust a stale browser/localStorage sync flag for a bulk re-sync.
+    // Refresh from the durable server first so rows that are already confirmed
+    // as synced are not rewritten and Call Center Sheet display text is preserved.
+    let syncSourceOrders = orders;
+    try {
+      if(getStaffSessionToken()){
+        const serverData = await sharedStaffRequest('/api/orders');
+        const serverOrders: Order[] = Array.isArray(serverData?.orders) ? serverData.orders : [];
+        if(serverOrders.length) syncSourceOrders = serverOrders;
+      }
+    } catch (error:any) {
+      console.warn('Google Sheet bulk sync durable refresh failed; using current order cache:', error?.message || error);
+    }
+
+    const unsynced = syncSourceOrders.filter((o) => o.order_source !== 'Manual Admin' && !o.is_synced_google_sheets && !(o.order_source === 'Website' && o.payment_method === 'Bank Payment' && o.payment_verification_status !== 'Approved'));
+    if(!unsynced.length) return 0;
     let count=0;
     for(let i=0;i<unsynced.length;i+=SHEET_BATCH_SIZE){
       const batch=unsynced.slice(i,i+SHEET_BATCH_SIZE);
