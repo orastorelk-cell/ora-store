@@ -197,58 +197,6 @@ const storageUsageHandler = async (request:Request, envValue:unknown):Promise<Re
 };
 
 
-const confirmedPurchaseCountsHandler = async (request:Request, envValue:unknown):Promise<Response|null> => {
-  const url = new URL(request.url);
-  if (request.method !== 'GET' || url.pathname !== '/api/public/confirmed-purchase-counts') return null;
-
-  const env = (envValue || {}) as Record<string, any>;
-  const supabaseUrl = String(env.VITE_SUPABASE_URL || '').replace(/\/$/, '');
-  const supabaseKey = String(env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-  if (!supabaseUrl || !supabaseKey) {
-    return new Response(JSON.stringify({ ok:false, counts:{} }), {
-      status:503,
-      headers:{'content-type':'application/json; charset=utf-8','cache-control':'public, max-age=30'},
-    });
-  }
-
-  try {
-    const response = await fetch(`${supabaseUrl}/rest/v1/rpc/ora_public_confirmed_purchase_counts`, {
-      method:'POST',
-      headers:{
-        apikey:supabaseKey,
-        authorization:`Bearer ${supabaseKey}`,
-        'content-type':'application/json',
-        accept:'application/json',
-      },
-      body:'{}',
-    });
-    const rows:any[] = await response.json().catch(()=>[]);
-    if (!response.ok) throw new Error('Confirmed purchase counts unavailable.');
-
-    const counts:Record<string,number> = {};
-    const units:Record<string,number> = {};
-    for (const row of rows) {
-      const sku = String(row?.sku || '').trim().toUpperCase();
-      if (!sku) continue;
-      counts[sku] = Math.max(0, Number(row?.customers || 0));
-      units[sku] = Math.max(0, Number(row?.units || 0));
-    }
-
-    return new Response(JSON.stringify({ ok:true, counts, units, updated_at:new Date().toISOString() }), {
-      status:200,
-      headers:{
-        'content-type':'application/json; charset=utf-8',
-        'cache-control':'public, max-age=60, stale-while-revalidate=300',
-      },
-    });
-  } catch {
-    return new Response(JSON.stringify({ ok:false, counts:{} }), {
-      status:200,
-      headers:{'content-type':'application/json; charset=utf-8','cache-control':'public, max-age=30'},
-    });
-  }
-};
-
 export default {
   async fetch(request:Request, env:unknown, ctx:unknown) {
     const leadResponse = await facebookLeadAutoHandler(request, env, ctx, fastWorker);
@@ -256,9 +204,6 @@ export default {
 
     const storageResponse = await storageUsageHandler(request, env);
     if (storageResponse) return storageResponse;
-
-    const purchaseCountResponse = await confirmedPurchaseCountsHandler(request, env);
-    if (purchaseCountResponse) return purchaseCountResponse;
 
     const url = new URL(request.url);
     const requestCopy = request.clone();
