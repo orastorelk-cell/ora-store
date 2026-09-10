@@ -10,7 +10,7 @@ export const GOOGLE_APPS_SCRIPT_ORDER_CROSS_PRICE_FIX = String.raw`
 // Existing orders can be repaired safely with repairExistingOrderPricingOnly().
 // No order rows are deleted/reordered and stock/status/waybill fields are untouched.
 // ============================================================
-ORA_VERSION = 'O-RA Store Google Sheets Clean V1 + Order Cross Price V2';
+ORA_VERSION = 'O-RA Store Google Sheets Clean V1 + Order Cross Price V3 Offer Math';
 
 function oraOrderPricingKey_(code, variant) {
   return oraKey_(oraStr_(code).trim() + '|' + oraStr_(variant).trim());
@@ -114,13 +114,12 @@ function oraQtyOfferRateFromRules_(rules, totalQty) {
   return rate;
 }
 
-function oraOfferLabelFromParts_(specialDiscount, qtyDiscount, totalQty) {
-  var parts = [];
-  specialDiscount = Math.max(0, oraRound_(specialDiscount));
-  qtyDiscount = Math.max(0, oraRound_(qtyDiscount));
-  if (specialDiscount > 0) parts.push('Special Offer Rs. ' + specialDiscount);
-  if (qtyDiscount > 0) parts.push('Qty Offer Rs. ' + qtyDiscount + ' (' + totalQty + ' items)');
-  return parts.length ? parts.join(' + ') : 'No Offer';
+function oraOfferLabelFromParts_(normalTotal, combinedDiscount) {
+  normalTotal = Math.max(0, oraRound_(normalTotal));
+  combinedDiscount = Math.max(0, oraRound_(combinedDiscount));
+  if (!(combinedDiscount > 0)) return 'No Offer';
+  var offerPrice = Math.max(0, oraRound_(normalTotal - combinedDiscount));
+  return oraStr_(normalTotal) + ' - ' + oraStr_(combinedDiscount) + ' = ' + oraStr_(offerPrice);
 }
 
 var oraNormalizeOrdersCrossPriceBase_ = oraNormalizeOrders_;
@@ -187,7 +186,7 @@ oraNormalizeOrders_ = function(body) {
 
     order.normalTotal = normalTotal;
     order.discount = combinedDiscount;
-    order.offer = oraOfferLabelFromParts_(specialDiscount, qtyDiscount, totalQty);
+    order.offer = oraOfferLabelFromParts_(normalTotal, combinedDiscount);
     rules.actual_prices = actualPrices;
     rules.reference_prices = referencePrices;
     order.qtyOfferRules = JSON.stringify(rules);
@@ -265,7 +264,7 @@ oraRecalcOrder_ = function(sh, orderId) {
   var wrapping = oraYes_(giftWrap) ? wrapCost : 0;
   var finalTotal = Math.max(0, oraRound_(normalTotal - combinedDiscount + delivery + wrapping));
 
-  if (hm['Offer']) sh.getRange(firstRow, hm['Offer']).setValue(oraOfferLabelFromParts_(specialDiscount, qtyDiscount, totalQty));
+  if (hm['Offer']) sh.getRange(firstRow, hm['Offer']).setValue(oraOfferLabelFromParts_(normalTotal, combinedDiscount));
   if (hm['Discount (Rs)']) sh.getRange(firstRow, hm['Discount (Rs)']).setValue(combinedDiscount);
   if (hm['Normal Total (Rs)']) sh.getRange(firstRow, hm['Normal Total (Rs)']).setValue(normalTotal);
   if (hm['Final Total (Rs)']) sh.getRange(firstRow, hm['Final Total (Rs)']).setValue(finalTotal);
