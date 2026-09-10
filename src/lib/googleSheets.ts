@@ -80,6 +80,68 @@ const sheetWrappingFee = (order:any, settings:Record<string,any>) => {
   return settings?.gift_wrap_enabled ? Math.max(0,roundMoney(settings?.gift_wrap_fee || 0)) : 0;
 };
 
+/**
+ * Google Sheets needs selectable Variant / Color rows for a combo when exactly
+ * one component is a variant product (for example R0010 inside CB-R0010-R0044).
+ * Keep those rows catalog-only: the real bundle stored in the website/database
+ * remains unchanged and the selected child variant is resolved at confirm/import
+ * time. Using the combo main SKU as the catalog variant code also means the Sheet
+ * never replaces the combo Item Code with the component SKU.
+ */
+const catalogProductsForSheet = (products:any[]) => {
+  const all = Array.isArray(products) ? products : [];
+  const byId = new Map(all.map((p:any) => [String(p?.id || ''), p]));
+  const typeOf = (p:any) => String(p?.product_type || ((p?.variants?.length || 0) ? 'variant' : (p?.bundle_components?.length || 0) ? 'bundle' : 'normal'));
+  const stockFor = (p:any, variantId?:string) => {
+    if (!p) return 0;
+    if (variantId) {
+      const v=(Array.isArray(p.variants)?p.variants:[]).find((x:any)=>String(x?.id||'')===String(variantId||''));
+      return Math.max(0,Number(v?.stock_quantity||0));
+    }
+    if (typeOf(p)==='variant') return 0;
+    return Math.max(0,Number(p.stock_quantity||0));
+  };
+
+  return all.map((p:any) => {
+    if (typeOf(p)!=='bundle' || (Array.isArray(p?.variants) && p.variants.length)) return p;
+    const components=Array.isArray(p?.bundle_components)?p.bundle_components:[];
+    const unresolved=components
+      .map((c:any,index:number)=>({c,index,child:byId.get(String(c?.product_id||'')) as any}))
+      .filter((row:any)=>!row.c?.variant_id && row.child && typeOf(row.child)==='variant');
+    if (unresolved.length!==1) return p;
+
+    const target=unresolved[0];
+    const childVariants=(Array.isArray(target.child?.variants)?target.child.variants:[]).filter((v:any)=>String(v?.status||'')!=='Draft');
+    if (!childVariants.length) return p;
+    const comboPrice=roundMoney(p?.discount_enabled!==false && Number(p?.discount_price||0)>0 ? p.discount_price : p?.selling_price||0);
+
+    const sheetVariants=childVariants.map((v:any) => {
+      const possible=components.map((c:any,index:number) => {
+        const child=byId.get(String(c?.product_id||'')) as any;
+        const per=Math.max(1,Number(c?.quantity||1));
+        if (!child) return 0;
+        if (index===target.index) return Math.floor(Math.max(0,Number(v?.stock_quantity||0))/per);
+        return Math.floor(stockFor(child,c?.variant_id)/per);
+      });
+      const available=possible.length?Math.min(...possible):0;
+      return {
+        id:`sheet-${String(p?.id||p?.sku||'bundle')}-${String(v?.id||v?.option_value||'variant')}`,
+        sku:String(p?.sku||''),
+        option_name:String(v?.option_name||'Variant'),
+        option_value:String(v?.option_value||''),
+        image:v?.image || p?.images?.[0],
+        buying_price:Number(p?.buying_price||0),
+        selling_price:comboPrice,
+        discount_price:comboPrice,
+        discount_enabled:false,
+        stock_quantity:available,
+        status:available>0?'Active':'Out of Stock',
+      };
+    });
+    return {...p,variants:sheetVariants};
+  });
+};
+
 const buildOrderSheetRow = (order: any, item: any, isFirst: boolean, settings:Record<string,any>) => {
   const qty = Math.max(1, Number(item?.quantity ?? 1));
   const unitPrice = roundMoney(item?.unit_price ?? 0);
@@ -203,7 +265,7 @@ export async function syncProductCatalogToGoogleSheets(
   webhookUrl: string,
   _settings?: Record<string, any>,
 ): Promise<SheetActionResult> {
-  const posted = await postToAppsScript(webhookUrl, { action: 'catalog_sync', products });
+  const posted = await postToAppsScript(webhookUrl, { action: 'catalog_sync', products: catalogProductsForSheet(products) });
   if (!posted.ok) return { success: false, message: posted.error || 'Google Sheet catalog sync failed.' };
   const err = expectStatus(posted.result, ['catalog_synced']);
   if (err) return { success: false, message: err };
