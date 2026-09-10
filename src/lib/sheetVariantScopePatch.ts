@@ -7,7 +7,9 @@ const replaceRequired = (text: string, from: string, to: string, label: string) 
 /**
  * Google Sheet variant safety only.
  *
- * - A normal/combo order row never exports a stale Variant / Color value.
+ * - A normal order never exports a stale Variant / Color value.
+ * - A combo order may export Variant / Color only when the combo actually carries
+ *   a selected inherited component variant (for example Single Tub / Twin Tub / Front Load).
  * - Product Catalog sync strips stale variants[] from products explicitly saved as
  *   non-variant, without mutating the real in-memory product catalog.
  *
@@ -25,7 +27,7 @@ export const sheetVariantScopePatch = () => ({
     text = replaceRequired(
       text,
       "const buildOrderSheetRow = (order: any, item: any, isFirst: boolean, settings:Record<string,any>) => {",
-      "const sheetVariantValue = (item:any) => {\n  const type = String(item?.product_type || '').trim().toLowerCase();\n  const isVariant = type ? type === 'variant' : Boolean(item?.variant_id);\n  return isVariant ? String(item?.variant_name || '') : '';\n};\n\nconst buildOrderSheetRow = (order: any, item: any, isFirst: boolean, settings:Record<string,any>) => {",
+      "const sheetVariantValue = (item:any) => {\n  const type = String(item?.product_type || '').trim().toLowerCase();\n  const value = String(item?.variant_name || '').trim();\n  if (type === 'bundle') return value;\n  const isVariant = type ? type === 'variant' : Boolean(item?.variant_id);\n  return isVariant ? value : '';\n};\n\nconst buildOrderSheetRow = (order: any, item: any, isFirst: boolean, settings:Record<string,any>) => {",
       'row helper',
     );
 
