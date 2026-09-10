@@ -247,6 +247,38 @@ export const variantByOption = (product: Product, option?: string) => {
   });
 };
 
+/**
+ * Resolve a customer-selected option into a bundle component only when the
+ * bundle has exactly one variant component that is not already pinned to an
+ * exact variant. This keeps all existing fixed-variant and normal bundles
+ * unchanged while allowing Facebook/Google-Sheet rows to carry a simple
+ * Variant / Color value such as "Twin Tub" for a combo containing R0010.
+ */
+const bundleWithInheritedVariant = (
+  products: Product[],
+  product: Product,
+  variantValue?: string,
+): Product | null => {
+  if (normalizedProductType(product) !== 'bundle') return null;
+  const wanted = String(variantValue || '').trim();
+  if (!wanted) return null;
+  const components = product.bundle_components || [];
+  const unresolved = components
+    .map((component, index) => ({ component, index, child: products.find(p => p.id === component.product_id) }))
+    .filter(row => !row.component.variant_id && row.child && normalizedProductType(row.child) === 'variant');
+  if (unresolved.length !== 1) return null;
+  const row = unresolved[0];
+  const child = row.child as Product;
+  const matched = variantByOption(child, wanted) || variantBySku(child, wanted);
+  if (!matched) return null;
+  return {
+    ...product,
+    bundle_components: components.map((component, index) =>
+      index === row.index ? { ...component, variant_id: matched.id } : component
+    ),
+  };
+};
+
 export const findProductSelection = (
   products: Product[],
   code: string,
@@ -265,6 +297,10 @@ export const findProductSelection = (
   if (normalizedProductType(product) === 'variant') {
     const variant = variantByOption(product, variantValue) || variantBySku(product, variantValue);
     return { product, variant };
+  }
+  if (normalizedProductType(product) === 'bundle') {
+    const resolvedBundle = bundleWithInheritedVariant(products, product, variantValue);
+    if (resolvedBundle) return { product: resolvedBundle };
   }
   return { product };
 };
@@ -433,6 +469,43 @@ export const buildCatalogRows = (products: Product[], settings?: StoreSettings) 
       }
       continue;
     }
+
+    // A bundle with exactly one unresolved variant component inherits that
+    // component's option list in the Google Sheet catalog. The combo keeps its
+    // own Main/Item Code; only Variant / Color changes. This is intentionally
+    // conservative so bundles containing two selectable variant products are
+    // not guessed or cross-linked automatically.
+    if (type === 'bundle') {
+      const components = product.bundle_components || [];
+      const unresolved = components
+        .map((component, index) => ({ component, index, child: products.find(p => p.id === component.product_id) }))
+        .filter(row => !row.component.variant_id && row.child && normalizedProductType(row.child) === 'variant');
+      if (unresolved.length === 1) {
+        const row = unresolved[0];
+        const child = row.child as Product;
+        for (const childVariant of activeVariants(child)) {
+          const resolved: Product = {
+            ...product,
+            bundle_components: components.map((component, index) =>
+              index === row.index ? { ...component, variant_id: childVariant.id } : component
+            ),
+          };
+          rows.push({
+            main_sku: normalizeSku(product.sku),
+            variant_sku: normalizeSku(product.sku),
+            name: product.name_en,
+            variant_name: childVariant.option_value,
+            type: 'Combo Pack',
+            unit_price: displayUnitPrice(product, settings),
+            stock_quantity: productDisplayStock(resolved, products),
+            image: childVariant.image || product.images?.[0] || '',
+            active: product.status !== 'Draft' && childVariant.status !== 'Draft',
+          });
+        }
+        continue;
+      }
+    }
+
     rows.push({
       main_sku: normalizeSku(product.sku),
       variant_sku: normalizeSku(product.sku),
