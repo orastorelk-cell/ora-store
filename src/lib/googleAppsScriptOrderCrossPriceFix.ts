@@ -10,7 +10,7 @@ export const GOOGLE_APPS_SCRIPT_ORDER_CROSS_PRICE_FIX = String.raw`
 // Existing orders can be repaired safely with repairExistingOrderPricingOnly().
 // No order rows are deleted/reordered and stock/status/waybill fields are untouched.
 // ============================================================
-ORA_VERSION = 'O-RA Store Google Sheets Clean V1 + Order Cross Price V3 Offer Math';
+ORA_VERSION = 'O-RA Store Google Sheets Clean V1 + Order Cross Price V4 Offer Price';
 
 function oraOrderPricingKey_(code, variant) {
   return oraKey_(oraStr_(code).trim() + '|' + oraStr_(variant).trim());
@@ -117,9 +117,8 @@ function oraQtyOfferRateFromRules_(rules, totalQty) {
 function oraOfferLabelFromParts_(normalTotal, combinedDiscount) {
   normalTotal = Math.max(0, oraRound_(normalTotal));
   combinedDiscount = Math.max(0, oraRound_(combinedDiscount));
-  if (!(combinedDiscount > 0)) return 'No Offer';
   var offerPrice = Math.max(0, oraRound_(normalTotal - combinedDiscount));
-  return oraStr_(normalTotal) + ' - ' + oraStr_(combinedDiscount) + ' = ' + oraStr_(offerPrice);
+  return 'OFFER PRICE = ' + oraStr_(offerPrice);
 }
 
 var oraNormalizeOrdersCrossPriceBase_ = oraNormalizeOrders_;
