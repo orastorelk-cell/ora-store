@@ -6,9 +6,10 @@ const replaceRange = (text: string, startMarker: string, endMarker: string, repl
 };
 
 /**
- * Direct FB/TikTok lead CSV compatibility only.
+ * Meta lead compatibility for both direct CSV import and the live Facebook webhook.
  *
- * - Keeps manually typed O-RA Item Code as the only product authority.
+ * - Keeps manually typed O-RA Item Code as the only product authority for direct CSV uploads.
+ * - Resolves live Facebook form names against the full O-RA catalog SKU before any R-code fallback.
  * - Accepts Meta UTF-16 tab-separated exports as well as normal UTF-8 comma CSV.
  * - Accepts the current Sinhala-only Color / Quantity questions and future
  *   bilingual headers containing Color / Quantity.
@@ -20,6 +21,65 @@ export const leadMetaCsvCompatibilityPatch = () => ({
   enforce: 'pre' as const,
   transform(code: string, rawId: string) {
     const id = rawId.split('?')[0].replace(/\\/g, '/');
+
+    // LIVE FACEBOOK AUTO LEAD SKU RESOLVER
+    // Old logic extracted the first R#### token from the form name. Therefore a
+    // combo form such as CB-R0010-R0044 was incorrectly imported as R0010.
+    // Resolve the longest exact catalog SKU first, including bundle / combo SKUs.
+    if (id.endsWith('/worker/facebookLeadAuto.ts')) {
+      let text = code;
+      const oldDetector = String.raw`const detectItemCode = (formName: unknown) => {
+  const match = String(formName || '').toUpperCase().match(/(?:^|[^A-Z0-9])(R\d{4,})(?=$|[^A-Z0-9])/);
+  return match?.[1] || '';
+};`;
+      const newDetector = String.raw`const detectItemCode = (formName: unknown, products: Product[] = []) => {
+  const name = String(formName || '').trim().toUpperCase();
+  if (!name) return '';
+
+  // Prefer the actual catalog SKU. Longest-first is important because combo SKUs
+  // contain component R-codes (for example CB-R0010-R0044 contains R0010/R0044).
+  const catalogCodes = Array.from(new Set(
+    products.flatMap((product) => [
+      String(product?.sku || '').trim().toUpperCase(),
+      ...(product?.variants || []).map((variant) => String(variant?.sku || '').trim().toUpperCase()),
+    ]).filter(Boolean)
+  )).sort((a, b) => b.length - a.length);
+
+  for (const catalogCode of catalogCodes) {
+    if (name === catalogCode) return catalogCode;
+    const escaped = catalogCode.replace(/[.*+?^$\{\}()|[\]\\]/g, '\\$&');
+    if (new RegExp('(?:^|[^A-Z0-9])' + escaped + '(?=$|[^A-Z0-9])').test(name)) return catalogCode;
+  }
+
+  // Keep combo-form logging accurate even when the caller does not already have
+  // the catalog loaded.
+  const combo = name.match(/(?:^|[^A-Z0-9])(CB(?:-R\d{4,}){2,})(?=$|[^A-Z0-9])/);
+  if (combo?.[1]) return combo[1];
+
+  // Backward compatibility for the normal single-item Facebook forms.
+  const match = name.match(/(?:^|[^A-Z0-9])(R\d{4,})(?=$|[^A-Z0-9])/);
+  return match?.[1] || '';
+};`;
+
+      if (!text.includes(oldDetector)) {
+        if (!text.includes('LIVE FACEBOOK AUTO LEAD SKU RESOLVER')) {
+          throw new Error('[O-RA Meta lead] Facebook item-code detector marker not found');
+        }
+        return null;
+      }
+      text = text.replace(oldDetector, newDetector);
+
+      const buildMarker = '  const code = detectItemCode(form?.name);';
+      if (!text.includes(buildMarker)) throw new Error('[O-RA Meta lead] Facebook build-order code marker not found');
+      // Only the first occurrence is inside buildFacebookOrder, where products are loaded.
+      text = text.replace(buildMarker, '  const code = detectItemCode(form?.name, products);');
+
+      const oldError = 'does not start with a valid R item code.';
+      if (text.includes(oldError)) text = text.replace(oldError, 'does not contain a valid O-RA catalog item code.');
+
+      return { code: text, map: null };
+    }
+
     if (!id.endsWith('/src/components/admin/AdminDashboard.tsx')) return null;
 
     let text = code;
