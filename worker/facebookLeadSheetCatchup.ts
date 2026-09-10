@@ -274,6 +274,26 @@ const run = async (envValue: unknown) => {
         await persistOrder(runtime, prepared.order);
       }
       if (prepared.changed) repairedOffers.push(orderNumber);
+
+      // If the order is already physically present in Google Sheets and the
+      // pricing snapshot did not change, do NOT rewrite the row just because an
+      // old/stale is_synced_google_sheets flag says false. Rewriting existing
+      // rows can overwrite Call Center-facing display text/edits.
+      if (!prepared.changed) {
+        const expectedRows = Math.max(1, Array.isArray(prepared.order?.items) ? prepared.order.items.length : 1);
+        try {
+          const physical = await postAppsScript(runtime.webhook, { action: 'read_order', orderId: orderNumber });
+          if (physical?.found === true && Number(physical?.rows || 0) >= expectedRows) {
+            await markSynced(runtime, prepared.order);
+            synced += 1;
+            continue;
+          }
+        } catch {
+          // Fall through to the normal repair sync when physical verification
+          // is unavailable.
+        }
+      }
+
       await syncAndVerifyOrder(runtime, prepared.order);
       synced += 1;
     } catch (error: any) {
