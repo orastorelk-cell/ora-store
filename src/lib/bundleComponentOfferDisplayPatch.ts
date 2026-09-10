@@ -34,8 +34,11 @@ export const bundleComponentOfferDisplayPatch = () => ({
         'ProductCard products access',
       );
 
-      const calcMarker = `  const autoReferencePrice = !manualProductOut && !hasDiscount && range.min === range.max\n    ? (autoRoundOffers.find((offer) => offer.active && Math.abs(offer.offerPrice - range.min) < 0.01)?.regularPrice || 0)\n    : 0;\n  const needsSelection = type === 'variant';`;
-      const calcReplacement = `  const autoReferencePrice = !manualProductOut && !hasDiscount && range.min === range.max\n    ? (autoRoundOffers.find((offer) => offer.active && Math.abs(offer.offerPrice - range.min) < 0.01)?.regularPrice || 0)\n    : 0;\n  const bundleOffer = type === 'bundle'\n    ? bundleComponentOfferDisplay(product, products, settings)\n    : { active: false, referencePrice: 0, customerPrice: range.min, saving: 0, percent: 0 };\n  const hasBundleOffer = !manualProductOut && type === 'bundle' && bundleOffer.active;\n  const needsSelection = type === 'variant';`;
+      // Insert bundle offer calculation immediately after autoReferencePrice.
+      // Do not include `needsSelection` in the marker because the combo-variant
+      // guard intentionally rewrites that line before this patch runs.
+      const calcMarker = `  const autoReferencePrice = !manualProductOut && !hasDiscount && range.min === range.max\n    ? (autoRoundOffers.find((offer) => offer.active && Math.abs(offer.offerPrice - range.min) < 0.01)?.regularPrice || 0)\n    : 0;`;
+      const calcReplacement = `${calcMarker}\n  const bundleOffer = type === 'bundle'\n    ? bundleComponentOfferDisplay(product, products, settings)\n    : { active: false, referencePrice: 0, customerPrice: range.min, saving: 0, percent: 0 };\n  const hasBundleOffer = !manualProductOut && type === 'bundle' && bundleOffer.active;`;
       text = replaceRequired(text, calcMarker, calcReplacement, 'ProductCard combo calculation');
 
       const crossedBlock = `            {hasDiscount && type !== 'variant' && (\n              <div className="ora-product-card-regular-price text-xs sm:text-sm text-gray-400 line-through font-bold">Rs. {formatLkr(regularPrice)}</div>\n            )}\n            {!hasDiscount && autoReferencePrice > 0 && (\n              <div className="ora-product-card-regular-price text-xs sm:text-sm text-gray-400 line-through font-bold">Rs. {formatLkr(autoReferencePrice)}</div>\n            )}`;
