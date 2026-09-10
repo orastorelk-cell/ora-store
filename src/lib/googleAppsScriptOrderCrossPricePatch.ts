@@ -12,9 +12,6 @@ export const googleAppsScriptOrderCrossPricePatch = () => ({
     if (!id.endsWith('/src/lib/googleSheets.ts')) return null;
     let text = code;
 
-    // googleSheets.ts now includes this fix directly so the Settings copy box is always current.
-    if (text.includes('${GOOGLE_APPS_SCRIPT_ORDER_CROSS_PRICE_FIX}')) return null;
-
     const importMarker = "import { GOOGLE_APPS_SCRIPT_CATALOG_IMAGE } from './googleAppsScriptCatalogImage';\n";
     if (!text.includes("from './googleAppsScriptOrderCrossPriceFix'")) {
       text = replaceRequired(
