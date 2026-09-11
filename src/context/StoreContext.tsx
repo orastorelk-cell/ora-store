@@ -193,7 +193,7 @@ interface StoreContextType {
   markInvoiceBatchDownloaded: (orderIds: string[], downloadedBy?: string, downloadSet?: { date: string; number: number }) => Promise<void>;
   markFardarCsvExported: (orderIds: string[], exportedBy?: string) => Promise<void>;
   scanDispatchBarcode: (barcode: string, scannedBy?: string) => Promise<{ success: boolean; message: string; order?: Order }>;
-  recordCodPayments: (entries: { waybill: string; amount?: number; received_at?: string; reference?: string; source?: 'Fardar CSV' | 'Manual' | 'System' }[], recordedBy?: string) => Promise<{ updatedCount: number; notFound: string[] }>;
+  recordCodPayments: (entries: { waybill: string; amount?: number; delivery_fee?: number; received_at?: string; reference?: string; source?: 'Fardar CSV' | 'Manual' | 'System' }[], recordedBy?: string) => Promise<{ updatedCount: number; notFound: string[] }>;
   syncOrderToSheet: (orderId: string) => Promise<boolean>;
   syncAllUnsyncedOrders: () => Promise<number>;
   createWebsiteTestOrder: (itemCount?: 1 | 5) => Promise<Order | null>;
@@ -2534,7 +2534,7 @@ useEffect(() => {
 
 
   const recordCodPayments = async (
-    entries: { waybill: string; amount?: number; received_at?: string; reference?: string; source?: 'Fardar CSV' | 'Manual' | 'System' }[],
+    entries: { waybill: string; amount?: number; delivery_fee?: number; received_at?: string; reference?: string; source?: 'Fardar CSV' | 'Manual' | 'System' }[],
     recordedBy = adminUser?.name || 'Admin'
   ): Promise<{ updatedCount: number; notFound: string[] }> => {
     const normalize = (value: string) => String(value || '').replace(/\s+/g, '').toLowerCase();
@@ -2561,6 +2561,7 @@ useEffect(() => {
         payment_paid_type: 'COD',
         cod_payment_received: true,
         cod_payment_amount: Number.isFinite(Number(entry.amount)) && Number(entry.amount) > 0 ? Number(entry.amount) : Number(order.total_amount || 0),
+        ...(Number.isFinite(Number(entry.delivery_fee)) && Number(entry.delivery_fee) >= 0 ? { fardar_delivery_fee: Number(entry.delivery_fee) } : {}),
         cod_payment_received_at: parsedDate,
         cod_payment_source: entry.source || 'Manual',
         cod_payment_reference: String(entry.reference || '').trim() || undefined,
