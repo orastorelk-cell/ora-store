@@ -190,6 +190,65 @@ const pickField = (map: Map<string, string>, names: string[]) => {
   return '';
 };
 
+const normalizeVariantAnswer = (value: unknown) =>
+  String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+const findBundleCustomerVariant = (product: Product, products: Product[], rawValue: unknown) => {
+  if (normalizedProductType(product) !== 'bundle') return null;
+  const wanted = normalizeVariantAnswer(rawValue);
+  if (!wanted) return null;
+
+  for (const component of product.bundle_components || []) {
+    const child = products.find((row) => row.id === component.product_id);
+    if (!child || normalizedProductType(child) !== 'variant') continue;
+    for (const variant of child.variants || []) {
+      const candidates = [
+        variant.option_value,
+        variant.sku,
+        ...(Array.isArray((variant as any).options) ? (variant as any).options.map((row: any) => row?.value) : []),
+      ].map(normalizeVariantAnswer).filter(Boolean);
+      const matched = candidates.some((value) =>
+        wanted === value ||
+        (value.length >= 3 && wanted.includes(value)) ||
+        (wanted.length >= 3 && value.includes(wanted))
+      );
+      if (matched) return { child, variant };
+    }
+  }
+  return null;
+};
+
+const pickLeadVariantValue = (fields: Map<string, string>, product: Product, products: Product[]) => {
+  const named = pickField(fields, [
+    'product_description',
+    'washing_machine_type',
+    'machine_type',
+    'washing_machine',
+    'selected_color',
+    'color',
+    'colour',
+    'variant',
+    'option',
+    'size',
+    'length',
+    'design',
+    'pattern',
+    'model',
+    'type',
+    'style',
+  ]);
+
+  if (normalizedProductType(product) !== 'bundle') return named;
+  if (named && findBundleCustomerVariant(product, products, named)) return named;
+
+  // Meta custom-question keys can change. For customer-select bundles, fall back
+  // to matching the submitted answer itself against real child-variant values.
+  for (const value of fields.values()) {
+    if (findBundleCustomerVariant(product, products, value)) return value;
+  }
+  return named;
+};
+
 const parseQuantity = (value: string) => {
   const match = String(value || '').match(/\d+/);
   const qty = match ? Number(match[0]) : 0;
@@ -356,7 +415,21 @@ const buildPendingLeadItem = (
     products,
   );
   if (normalizedProductType(selection.product) === 'bundle') {
-    return applyFacebookBundleOfferSnapshot(selection.product, products, settings, item);
+    const selected = findBundleCustomerVariant(selection.product, products, variantValue);
+    const comboItem: Order['items'][number] = {
+      ...item,
+      ...(selected?.variant ? { variant_name: String(selected.variant.option_value || variantValue || '').trim() || undefined } : (variantValue ? { variant_name: variantValue } : {})),
+      bundle_components: (item.bundle_components || []).map((component) => {
+        if (!selected?.variant || !selected?.child || component.product_id !== selected.child.id) return component;
+        return {
+          ...component,
+          variant_id: selected.variant.id,
+          variant_name: selected.variant.option_value,
+          sku: selected.variant.sku || component.sku,
+        };
+      }),
+    };
+    return applyFacebookBundleOfferSnapshot(selection.product, products, settings, comboItem);
   }
   return applyFacebookDisplayOfferSnapshot(
     selection.product,
@@ -383,20 +456,9 @@ const buildFacebookOrder = async (
   const address = pickField(fields, ['full_address', 'customer_address', 'address', 'street_address']);
   const city = pickField(fields, ['city', 'town']);
   const district = pickField(fields, ['district']);
-  const variantValue = pickField(fields, [
-    'selected_color',
-    'color',
-    'colour',
-    'variant',
-    'option',
-    'size',
-    'length',
-    'design',
-    'pattern',
-    'model',
-    'type',
-    'style',
-  ]);
+  const leadSelection = findProductSelection(products, code);
+  if (!leadSelection) throw new Error(`Product ${code} was not found in the O-RA catalog.`);
+  const variantValue = pickLeadVariantValue(fields, leadSelection.product, products);
   const quantityRaw = pickField(fields, ['quantity', 'qty']);
   const quantity = parseQuantity(quantityRaw);
   const note = pickField(fields, ['notes', 'note', 'message', 'comment']);
@@ -523,6 +585,56 @@ const processLead = async (
   const runtime = getRuntime(env);
   const existing = await readExistingLeadOrder(runtime, event.leadgen_id);
   if (existing) {
+    const existingItem = Array.isArray(existing?.items) ? existing.items[0] : null;
+    const needsComboVariantRepair =
+      existing.call_center_status === 'Pending' &&
+      existing.order_status !== 'Cancelled' &&
+      existingItem?.product_type === 'bundle' &&
+      !String(existingItem?.variant_name || '').trim();
+
+    if (needsComboVariantRepair) {
+      try {
+        const lead = await graphGet(env, event.leadgen_id, 'id,created_time,field_data,form_id');
+        const formId = String(event.form_id || lead?.form_id || '').trim();
+        const form = formId ? await graphGet(env, formId, 'id,name') : null;
+        if (form) {
+          const rebuilt = await buildFacebookOrder(runtime, lead, form, event);
+          const rebuiltItem = rebuilt?.items?.[0];
+          if (rebuiltItem && String(rebuiltItem.variant_name || '').trim()) {
+            const repaired: Order = {
+              ...existing,
+              items: (existing.items || []).map((item: any, index: number) => index === 0 ? {
+                ...item,
+                variant_name: rebuiltItem.variant_name,
+                bundle_components: rebuiltItem.bundle_components || item.bundle_components,
+              } : item),
+              is_synced_google_sheets: false,
+              synced_at: undefined,
+              sheet_sync_verified_at: undefined,
+            };
+            const saved = await callOrderSave(baseWorker, request, env, ctx, repaired);
+            await appendLog(runtime, {
+              lead_id: event.leadgen_id,
+              form_id: formId,
+              form_name: String(form?.name || ''),
+              result: 'combo_variant_repaired',
+              order_number: existing.order_number || '',
+              variant: rebuiltItem.variant_name || '',
+              sheet_ok: saved?.sheet_sync?.ok !== false,
+            });
+            return;
+          }
+        }
+      } catch (error: any) {
+        await appendLog(runtime, {
+          lead_id: event.leadgen_id,
+          result: 'combo_variant_repair_failed',
+          order_number: existing.order_number || '',
+          error: String(error?.message || error || 'Combo variant repair failed.').slice(0, 500),
+        });
+      }
+    }
+
     const retry = await retryExistingUnsyncedOrder(baseWorker, request, env, ctx, existing);
     await appendLog(runtime, {
       lead_id: event.leadgen_id,
