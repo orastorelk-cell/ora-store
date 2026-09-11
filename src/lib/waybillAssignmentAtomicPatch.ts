@@ -93,10 +93,27 @@ export const waybillAssignmentAtomicPatch = () => ({
       try {
         // Durable write FIRST. The database unique-waybill constraint is the final
         // authority across all browsers / PCs. Only update the local UI after success.
-        await sharedStaffRequest('/api/orders/' + encodeURIComponent(order.id), {
+        const saved = await sharedStaffRequest('/api/orders/' + encodeURIComponent(order.id), {
           method: 'PUT',
           body: JSON.stringify({ order: updatedOrder }),
         });
+        const authoritativeOrder = (saved?.order || updatedOrder) as Order;
+        const authoritativeWaybill = String(authoritativeOrder.waybill_number || '').trim();
+
+        // If the server protected an already-issued/exported waybill, do NOT let
+        // this stale browser claim the new candidate locally.
+        if (authoritativeWaybill && authoritativeWaybill !== String(candidate.waybill_number || '').trim()) {
+          waybillAssignmentReservationsRef.current.delete(reservedKey);
+          setOrders((prev) => prev.map((o) => o.id === orderId ? authoritativeOrder : o));
+          setWaybillRecords((prev) => prev.map((w) => {
+            const key = String(w.waybill_number || '').trim();
+            if (w.id === candidate.id) return { ...w, status:'Available', assigned_order_id:undefined, assigned_order_number:undefined, assigned_at:undefined };
+            if (key === authoritativeWaybill) return { ...w, status:'Assigned', assigned_order_id:order.id, assigned_order_number:order.order_number, assigned_at:w.assigned_at || now };
+            return w;
+          }));
+          waybillAssignmentReservationsRef.current.add(authoritativeWaybill.toLowerCase());
+          return authoritativeWaybill;
+        }
 
         setWaybillRecords((prev) => prev.map((w) => w.id === candidate.id ? {
           ...w,
@@ -105,15 +122,15 @@ export const waybillAssignmentAtomicPatch = () => ({
           assigned_order_number: order.order_number,
           assigned_at: now,
         } : w));
-        setOrders((prev) => prev.map((o) => o.id === orderId ? updatedOrder : o));
+        setOrders((prev) => prev.map((o) => o.id === orderId ? authoritativeOrder : o));
         logActivity({
           action: 'Waybill Assigned',
           module: 'Delivery',
           target_id: orderId,
           target_label: order.order_number,
-          details: String(candidate.waybill_number) + ' (' + courierName + ')',
+          details: String(authoritativeWaybill || candidate.waybill_number) + ' (' + courierName + ')',
         });
-        return candidate.waybill_number;
+        return authoritativeWaybill || candidate.waybill_number;
       } catch (error: any) {
         const message = String(error?.message || error || '');
         const duplicateConflict = /duplicate key|unique constraint|23505|order_snapshots_unique_waybill_idx/i.test(message);
