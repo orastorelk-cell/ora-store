@@ -18,8 +18,10 @@ export const CodPaymentsPanel: React.FC = () => {
 
   const codOrders = useMemo(() => orders.filter((o) => o.payment_method === 'COD' && o.waybill_number), [orders]);
   const received = codOrders.filter((o) => o.cod_payment_received);
-  const systemDeliveryTotal = received.reduce((sum,o)=>sum + Math.max(0, Number(o.internal_delivery_fee ?? o.delivery_fee ?? 0)), 0);
-  const fardarDeliveryTotal = received.reduce((sum,o)=>sum + Math.max(0, Number(o.fardar_delivery_fee || 0)), 0);
+  const deliveryCompared = received.filter((o) => o.fardar_delivery_fee != null);
+  // delivery_fee = what O-RA charged the customer; fardar_delivery_fee = actual courier cost.
+  const systemDeliveryTotal = deliveryCompared.reduce((sum,o)=>sum + Math.max(0, Number(o.delivery_fee || 0)), 0);
+  const fardarDeliveryTotal = deliveryCompared.reduce((sum,o)=>sum + Math.max(0, Number(o.fardar_delivery_fee || 0)), 0);
   const deliveryProfit = systemDeliveryTotal - fardarDeliveryTotal;
 
   const loadCsv = async (file: File | undefined) => {
