@@ -3,9 +3,9 @@ import { BarChart3, Download, FileUp, Trash2 } from 'lucide-react';
 import { useStore } from '../../context/StoreContext';
 import { autoMapHeader, downloadCsv, parseCsv, parseFlexibleDate, toNumber } from '../../lib/csv';
 
-type AdRow = { id: string; date: string; code: string; amount_spent: number; cost_per_result: number; results: number };
-type Mapping = { date: string; code: string; amount: string; cpr: string; results: string };
-const emptyMapping: Mapping = { date: '', code: '', amount: '', cpr: '', results: '' };
+type AdRow = { id: string; date: string; end_date?: string; code: string; amount_spent: number; cost_per_result: number; results: number };
+type Mapping = { date: string; endDate: string; code: string; amount: string; cpr: string; results: string };
+const emptyMapping: Mapping = { date: '', endDate: '', code: '', amount: '', cpr: '', results: '' };
 const token = () => localStorage.getItem('ora_staff_session_token') || '';
 const headers = () => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` });
 const dayKey = (value: Date) => `${value.getFullYear()}-${String(value.getMonth()+1).padStart(2,'0')}-${String(value.getDate()).padStart(2,'0')}`;
@@ -21,6 +21,11 @@ const dateInside = (iso: string | undefined, from: string, to: string) => {
   if (!iso) return false;
   const key = dayKey(new Date(iso));
   return key >= from && key <= to;
+};
+const adInside = (row: AdRow, from: string, to: string) => {
+  const start = row.date;
+  const end = row.end_date || row.date;
+  return start <= to && end >= from;
 };
 
 export const ReportsPanel: React.FC = () => {
@@ -66,6 +71,7 @@ export const ReportsPanel: React.FC = () => {
     setCsvHeaders(parsed.headers); setCsvRows(parsed.rows);
     setMapping({
       date: autoMapHeader(parsed.headers, ['date','day','reporting starts','reporting start']),
+      endDate: autoMapHeader(parsed.headers, ['reporting ends','reporting end','end date']),
       code: autoMapHeader(parsed.headers, ['item code','product code','sku','code','ad name','campaign name','campaign']),
       amount: autoMapHeader(parsed.headers, ['amount spent','spend','amount']),
       cpr: autoMapHeader(parsed.headers, ['cost per result','cost/result','cpr']),
@@ -78,9 +84,13 @@ export const ReportsPanel: React.FC = () => {
     if (!mapping.date || !mapping.amount) { setMessage('Map at least Date and Amount Spent.'); return; }
     const normalized = csvRows.map((row, index) => {
       const parsedDate = parseFlexibleDate(row[mapping.date]);
+      const parsedEndDate = mapping.endDate ? parseFlexibleDate(row[mapping.endDate]) : '';
+      const start = parsedDate ? dayKey(new Date(parsedDate)) : '';
+      const end = parsedEndDate ? dayKey(new Date(parsedEndDate)) : start;
       return {
         id: `${Date.now()}-${index}`,
-        date: parsedDate ? dayKey(new Date(parsedDate)) : '',
+        date: start,
+        end_date: end >= start ? end : start,
         code: mapping.code ? extractCampaignCode(row[mapping.code]) : 'UNMAPPED',
         amount_spent: toNumber(row[mapping.amount]),
         cost_per_result: mapping.cpr ? toNumber(row[mapping.cpr]) : 0,
@@ -88,7 +98,7 @@ export const ReportsPanel: React.FC = () => {
       } as AdRow;
     }).filter((row) => row.date && row.amount_spent >= 0);
     const dedupe = new Map<string,AdRow>();
-    [...adRows, ...normalized].forEach((row) => dedupe.set(`${row.date}|${row.code}|${row.amount_spent}|${row.cost_per_result}|${row.results}`, row));
+    [...adRows, ...normalized].forEach((row) => dedupe.set(`${row.date}|${row.end_date || row.date}|${row.code}|${row.amount_spent}|${row.cost_per_result}|${row.results}`, row));
     const next = [...dedupe.values()].slice(-10000);
     try { await saveAds(next); setMessage(`Imported ${normalized.length} normalized ad row(s). Raw CSV was not stored.`); }
     catch (error:any) { setMessage(error?.message || 'Could not save Ads Manager data.'); }
@@ -96,7 +106,7 @@ export const ReportsPanel: React.FC = () => {
 
   const filteredOrders = useMemo(() => orders.filter((o) => dateInside(o.created_at, from, to)), [orders,from,to]);
   const salesOrders = filteredOrders.filter((o) => o.order_status !== 'Cancelled' && !o.is_test_order && !o.is_duplicate_order);
-  const filteredAds = adRows.filter((row) => row.date >= from && row.date <= to);
+  const filteredAds = adRows.filter((row) => adInside(row, from, to));
   const codCollectedOrders = orders.filter((o) => o.cod_payment_received && dateInside(o.cod_payment_received_at, from, to));
   const orderedRevenue = salesOrders.reduce((sum,o)=>sum+Number(o.total_amount||0),0);
   const cogs = salesOrders.reduce((sum,o)=>sum+o.items.reduce((s,i)=>s+Number(i.buying_price||0)*Number(i.quantity||0),0),0);
@@ -155,8 +165,8 @@ export const ReportsPanel: React.FC = () => {
       <div className="rounded-2xl bg-white border border-gray-100 p-5 space-y-4">
         <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><FileUp className="w-5 h-5 text-orange-600"/><div><h3 className="font-black">Facebook Ads Manager CSV</h3><p className="text-xs text-gray-500">Flexible mapping works even before you know the exact Ads Manager export format.</p></div></div><button onClick={clearAds} className="text-xs font-bold text-red-600 inline-flex items-center gap-1"><Trash2 className="w-4 h-4"/>Clear Imported</button></div>
         <input type="file" accept=".csv,text/csv" onChange={(e)=>loadCsv(e.target.files?.[0])} className="block w-full text-xs"/>
-        {csvHeaders.length>0&&<><div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">{([['date','Date *'],['code','Item/Product Code'],['amount','Amount Spent *'],['cpr','Cost Per Result'],['results','Results']] as [keyof Mapping,string][]).map(([key,label])=><label key={key} className="text-xs font-bold text-gray-600">{label}<select value={mapping[key]} onChange={(e)=>setMapping({...mapping,[key]:e.target.value})} className="mt-1 w-full rounded-xl border border-gray-200 px-2 py-2 text-xs font-normal"><option value="">Not mapped</option>{csvHeaders.map((h)=><option key={h}>{h}</option>)}</select></label>)}</div><button onClick={importAds} className="rounded-xl bg-orange-600 text-white px-4 py-2.5 text-xs font-bold">Import Normalized Data</button></>}
-        <p className="text-[11px] text-gray-400">Storage saver: the original CSV file is never stored. Only the small normalized Date / Code / Spend / Cost-per-result / Results rows are kept.</p>
+        {csvHeaders.length>0&&<><div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">{([['date','Start Date *'],['endDate','End Date'],['code','Item/Product Code'],['amount','Amount Spent *'],['cpr','Cost Per Result'],['results','Results']] as [keyof Mapping,string][]).map(([key,label])=><label key={key} className="text-xs font-bold text-gray-600">{label}<select value={mapping[key]} onChange={(e)=>setMapping({...mapping,[key]:e.target.value})} className="mt-1 w-full rounded-xl border border-gray-200 px-2 py-2 text-xs font-normal"><option value="">Not mapped</option>{csvHeaders.map((h)=><option key={h}>{h}</option>)}</select></label>)}</div><button onClick={importAds} className="rounded-xl bg-orange-600 text-white px-4 py-2.5 text-xs font-bold">Import Normalized Data</button></>}
+        <p className="text-[11px] text-gray-400">Storage saver: the original CSV file is never stored. Only the small normalized date range / code / spend / cost-per-result / results rows are kept.</p>
         {message&&<p className="text-xs font-semibold text-orange-700">{message}</p>}
       </div>
 
