@@ -511,62 +511,6 @@ function oraGetActions_(orderId) {
   return { ok: true, status: 'actions_read', order_id: orderId, rows: result };
 }
 
-function oraConfirmedStockPreview_() {
-  var ss = oraTarget_(), grouped = {}, orderKeys = [];
-  for (var s = 0; s < ORA_ORDER_SHEETS.length; s++) {
-    var sh = ss.getSheetByName(ORA_ORDER_SHEETS[s]);
-    if (!sh || sh.getLastRow() < 2) continue;
-    var hm = oraHeaderMap_(sh);
-    if (!hm['Order ID']) continue;
-    var vals = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getDisplayValues();
-
-    for (var r = 0; r < vals.length; r++) {
-      var row = vals[r], orderId = oraStr_(row[hm['Order ID'] - 1]).trim();
-      if (!orderId) continue;
-      var key = ORA_ORDER_SHEETS[s] + '::' + oraKey_(orderId);
-      if (!grouped[key]) {
-        grouped[key] = {
-          order_id: orderId,
-          sheet: ORA_ORDER_SHEETS[s],
-          order_action: '',
-          items: []
-        };
-        orderKeys.push(key);
-      }
-      var group = grouped[key];
-      var orderAction = hm['Order Action'] ? oraStr_(row[hm['Order Action'] - 1]).trim() : '';
-      if (orderAction) group.order_action = orderAction;
-
-      var itemCode = hm['Item Code'] ? oraStr_(row[hm['Item Code'] - 1]).trim() : '';
-      var mainCode = hm['Main Code'] ? oraStr_(row[hm['Main Code'] - 1]).trim() : '';
-      var itemName = hm['Item Name'] ? oraStr_(row[hm['Item Name'] - 1]).trim() : '';
-      var itemAction = hm['Item Action'] ? oraStr_(row[hm['Item Action'] - 1]).trim() : '';
-      var qty = hm['Qty'] ? Math.max(0, oraNum_(row[hm['Qty'] - 1])) : 0;
-      if (itemCode || mainCode) {
-        group.items.push({
-          item_code: itemCode,
-          main_code: mainCode,
-          item_name: itemName,
-          variant: hm['Variant / Color'] ? oraStr_(row[hm['Variant / Color'] - 1]).trim() : '',
-          qty: qty,
-          item_action: itemAction || 'KEEP ITEM'
-        });
-      }
-    }
-  }
-
-  var orders = [];
-  for (var i = 0; i < orderKeys.length; i++) {
-    var order = grouped[orderKeys[i]];
-    if (oraKey_(order.order_action) !== 'CONFIRM ORDER') continue;
-    order.items = order.items.filter(function(item) {
-      return oraKey_(item.item_action) !== 'CANCEL ITEM' && Number(item.qty || 0) > 0;
-    });
-    if (order.items.length) orders.push(order);
-  }
-  return { ok: true, status: 'confirmed_stock_preview', orders: orders, version: ORA_VERSION };
-}
-
 function oraFindOrderFirstRow_(sh, orderId) {
   var hm = oraHeaderMap_(sh), idCol = hm['Order ID'];
   if (!idCol || sh.getLastRow() < 2) return 0;
@@ -711,7 +655,6 @@ function doPost(e) {
     }
     if (action === 'order_exists' || action === 'read_order') return oraJson_(oraOrderExists_(oraStr_(body.orderId || body.order_id || body.order_number)));
     if (action === 'get_actions') return oraJson_(oraGetActions_(oraStr_(body.orderId || body.order_id || body.order_number)));
-    if (action === 'confirmed_stock_preview') return oraJson_(oraConfirmedStockPreview_());
     return oraJson_({ ok: false, status: 'error', version: ORA_VERSION, message: 'Unknown action: ' + action });
   } catch (err) {
     return oraJson_({ ok: false, status: 'error', version: ORA_VERSION, message: err && err.message ? err.message : String(err) });
