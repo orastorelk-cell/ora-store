@@ -3,8 +3,8 @@ import { CheckCircle2, FileUp, WalletCards } from 'lucide-react';
 import { useStore } from '../../context/StoreContext';
 import { autoMapHeader, parseCsv, parseFlexibleDate, toNumber } from '../../lib/csv';
 
-interface Mapping { waybill: string; status: string; amount: string; date: string; reference: string; }
-const blankMapping: Mapping = { waybill: '', status: '', amount: '', date: '', reference: '' };
+interface Mapping { waybill: string; status: string; amount: string; deliveryFee: string; date: string; reference: string; }
+const blankMapping: Mapping = { waybill: '', status: '', amount: '', deliveryFee: '', date: '', reference: '' };
 const paidWords = /paid|received|collected|settled|success|remit|complete/i;
 
 export const CodPaymentsPanel: React.FC = () => {
@@ -18,6 +18,9 @@ export const CodPaymentsPanel: React.FC = () => {
 
   const codOrders = useMemo(() => orders.filter((o) => o.payment_method === 'COD' && o.waybill_number), [orders]);
   const received = codOrders.filter((o) => o.cod_payment_received);
+  const systemDeliveryTotal = received.reduce((sum,o)=>sum + Math.max(0, Number(o.internal_delivery_fee ?? o.delivery_fee ?? 0)), 0);
+  const fardarDeliveryTotal = received.reduce((sum,o)=>sum + Math.max(0, Number(o.fardar_delivery_fee || 0)), 0);
+  const deliveryProfit = systemDeliveryTotal - fardarDeliveryTotal;
 
   const loadCsv = async (file: File | undefined) => {
     if (!file) return;
@@ -29,6 +32,7 @@ export const CodPaymentsPanel: React.FC = () => {
       waybill: autoMapHeader(parsed.headers, ['waybill','way bill','tracking','awb','barcode','consignment']),
       status: autoMapHeader(parsed.headers, ['payment status','cod status','status','payment']),
       amount: autoMapHeader(parsed.headers, ['cod amount','amount','collected amount','payment amount','net amount']),
+      deliveryFee: autoMapHeader(parsed.headers, ['delivery fee','courier fee','shipping fee']),
       date: autoMapHeader(parsed.headers, ['payment date','received date','settlement date','date']),
       reference: autoMapHeader(parsed.headers, ['reference','ref','transaction','settlement id']),
     });
@@ -45,6 +49,7 @@ export const CodPaymentsPanel: React.FC = () => {
         .map((row) => ({
           waybill: String(row[mapping.waybill] || '').trim(),
           amount: mapping.amount ? toNumber(row[mapping.amount]) : undefined,
+          delivery_fee: mapping.deliveryFee ? toNumber(row[mapping.deliveryFee]) : undefined,
           received_at: mapping.date ? parseFlexibleDate(row[mapping.date]) : undefined,
           reference: mapping.reference ? String(row[mapping.reference] || '').trim() : undefined,
           source: 'Fardar CSV' as const,
@@ -79,6 +84,9 @@ export const CodPaymentsPanel: React.FC = () => {
         <div className="rounded-2xl bg-white border border-gray-100 p-4"><p className="text-[11px] font-bold text-gray-400 uppercase">COD Waybills</p><p className="text-2xl font-black mt-1">{codOrders.length}</p></div>
         <div className="rounded-2xl bg-white border border-gray-100 p-4"><p className="text-[11px] font-bold text-gray-400 uppercase">Payment Received</p><p className="text-2xl font-black mt-1 text-emerald-600">{received.length}</p></div>
         <div className="rounded-2xl bg-white border border-gray-100 p-4"><p className="text-[11px] font-bold text-gray-400 uppercase">Recorded Amount</p><p className="text-2xl font-black mt-1">Rs. {received.reduce((s,o)=>s+Number(o.cod_payment_amount||0),0).toLocaleString()}</p></div>
+        <div className="rounded-2xl bg-white border border-gray-100 p-4"><p className="text-[11px] font-bold text-gray-400 uppercase">Our System Delivery Total</p><p className="text-2xl font-black mt-1">Rs. {systemDeliveryTotal.toLocaleString()}</p></div>
+        <div className="rounded-2xl bg-white border border-gray-100 p-4"><p className="text-[11px] font-bold text-gray-400 uppercase">Fardar Delivery Total</p><p className="text-2xl font-black mt-1">Rs. {fardarDeliveryTotal.toLocaleString()}</p></div>
+        <div className="rounded-2xl bg-white border border-gray-100 p-4"><p className="text-[11px] font-bold text-gray-400 uppercase">Delivery Profit</p><p className={`text-2xl font-black mt-1 ${deliveryProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>Rs. {deliveryProfit.toLocaleString()}</p></div>
       </div>
 
       <div className="rounded-2xl bg-white border border-gray-100 p-5 space-y-4">
@@ -86,9 +94,9 @@ export const CodPaymentsPanel: React.FC = () => {
         <input type="file" accept=".csv,text/csv" onChange={(e)=>loadCsv(e.target.files?.[0])} className="block w-full text-xs" />
         {headers.length > 0 && (
           <>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
               {([
-                ['waybill','Waybill *'],['status','Payment Status'],['amount','Amount'],['date','Payment Date'],['reference','Reference']
+                ['waybill','Waybill *'],['status','Payment Status'],['amount','Amount'],['deliveryFee','Fardar Delivery Fee'],['date','Payment Date'],['reference','Reference']
               ] as [keyof Mapping,string][]).map(([key,label]) => (
                 <label key={key} className="text-xs font-bold text-gray-600">{label}
                   <select value={mapping[key]} onChange={(e)=>setMapping({...mapping,[key]:e.target.value})} className="mt-1 w-full rounded-xl border border-gray-200 px-2 py-2 text-xs font-normal">
@@ -118,7 +126,7 @@ export const CodPaymentsPanel: React.FC = () => {
 
       <div className="rounded-2xl bg-white border border-gray-100 overflow-hidden">
         <div className="p-4 border-b border-gray-100"><h3 className="font-black text-sm">Recorded COD Payments</h3></div>
-        <div className="overflow-x-auto"><table className="w-full text-xs"><thead className="bg-gray-50 text-gray-500"><tr><th className="text-left p-3">Waybill</th><th className="text-left p-3">Order</th><th className="text-left p-3">Customer</th><th className="text-right p-3">Amount</th><th className="text-left p-3">Date</th><th className="text-left p-3">Source</th></tr></thead><tbody>{received.slice().sort((a,b)=>new Date(b.cod_payment_received_at||0).getTime()-new Date(a.cod_payment_received_at||0).getTime()).map((o)=><tr key={o.id} className="border-t border-gray-50"><td className="p-3 font-mono font-bold">{o.waybill_number}</td><td className="p-3">{o.order_number}</td><td className="p-3">{o.customer_name}</td><td className="p-3 text-right font-bold">Rs. {Number(o.cod_payment_amount||0).toLocaleString()}</td><td className="p-3">{o.cod_payment_received_at?new Date(o.cod_payment_received_at).toLocaleDateString():'-'}</td><td className="p-3">{o.cod_payment_source||'-'}</td></tr>)}</tbody></table></div>
+        <div className="overflow-x-auto"><table className="w-full text-xs"><thead className="bg-gray-50 text-gray-500"><tr><th className="text-left p-3">Waybill</th><th className="text-left p-3">Order</th><th className="text-left p-3">Customer</th><th className="text-right p-3">Amount</th><th className="text-left p-3">Date</th><th className="text-left p-3">Fardar Delivery</th><th className="text-left p-3">Source</th></tr></thead><tbody>{received.slice().sort((a,b)=>new Date(b.cod_payment_received_at||0).getTime()-new Date(a.cod_payment_received_at||0).getTime()).map((o)=><tr key={o.id} className="border-t border-gray-50"><td className="p-3 font-mono font-bold">{o.waybill_number}</td><td className="p-3">{o.order_number}</td><td className="p-3">{o.customer_name}</td><td className="p-3 text-right font-bold">Rs. {Number(o.cod_payment_amount||0).toLocaleString()}</td><td className="p-3">{o.cod_payment_received_at?new Date(o.cod_payment_received_at).toLocaleDateString():'-'}</td><td className="p-3 font-bold">{o.fardar_delivery_fee != null ? `Rs. ${Number(o.fardar_delivery_fee||0).toLocaleString()}` : '-'}</td><td className="p-3">{o.cod_payment_source||'-'}</td></tr>)}</tbody></table></div>
       </div>
     </div>
   );
