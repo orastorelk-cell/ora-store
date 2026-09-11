@@ -201,6 +201,8 @@ export interface Order {
   subtotal: number;
   delivery_fee: number;
   internal_delivery_fee?: number;
+  /** Actual courier delivery fee reported by Fardar COD/payment CSV. */
+  fardar_delivery_fee?: number;
   delivery_included_in_item_price?: boolean;
   special_offer_discount?: number;
   call_center_status?: 'Pending' | 'Confirmed' | 'No Answer' | 'Cancelled' | 'Reschedule';
