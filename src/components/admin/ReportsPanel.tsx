@@ -17,6 +17,13 @@ const extractCampaignCode = (value: unknown) => {
   const code = text.match(/\bR\d{3,}\b/i)?.[0];
   return code ? code.toUpperCase() : text;
 };
+const reportCode = (value: unknown) => {
+  const text = String(value || '').trim().toUpperCase();
+  if (!text) return 'NO-SKU';
+  if (/^CB-R\d+(?:-R\d+)+$/.test(text)) return text;
+  const main = text.match(/^R\d{3,}/)?.[0];
+  return main || text;
+};
 const dateInside = (iso: string | undefined, from: string, to: string) => {
   if (!iso) return false;
   const key = dayKey(new Date(iso));
@@ -124,12 +131,12 @@ export const ReportsPanel: React.FC = () => {
   const productRows = useMemo(() => {
     const map = new Map<string,{code:string;product:string;qty:number;orders:Set<string>;revenue:number;cogs:number;adSpend:number;results:number;cprTotal:number;cprCount:number}>();
     salesOrders.forEach((order) => order.items.forEach((item) => {
-      const code=String(item.sku||'NO-SKU').toUpperCase();
+      const code=reportCode(item.sku);
       const row=map.get(code)||{code,product:item.product_name,qty:0,orders:new Set<string>(),revenue:0,cogs:0,adSpend:0,results:0,cprTotal:0,cprCount:0};
       row.qty+=Number(item.quantity||0); row.orders.add(order.id); row.revenue+=Number(item.subtotal||0); row.cogs+=Number(item.buying_price||0)*Number(item.quantity||0); map.set(code,row);
     }));
     filteredAds.forEach((ad)=>{
-      const code=String(ad.code||'UNMAPPED').toUpperCase();
+      const code=reportCode(ad.code||'UNMAPPED');
       const row=map.get(code)||{code,product:'No matching system product',qty:0,orders:new Set<string>(),revenue:0,cogs:0,adSpend:0,results:0,cprTotal:0,cprCount:0};
       row.adSpend+=Number(ad.amount_spent||0); row.results+=Number(ad.results||0); if(ad.cost_per_result>0){row.cprTotal+=ad.cost_per_result;row.cprCount+=1;} map.set(code,row);
     });
