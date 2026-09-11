@@ -2203,10 +2203,70 @@ app.post('/api/orders/:id/dispatch-scan', requireAdminSession, async (req,res)=>
 });
 app.put('/api/orders/:id', requireAdminSession, async (req,res)=>{
   try{
-    const order=req.body?.order;
-    if(!order || String(order.id)!==String(req.params.id)) return res.status(400).json({error:'Order ID mismatch.'});
+    const incoming=req.body?.order;
+    const id=String(req.params.id || '').trim();
+    if(!incoming || String(incoming.id)!==id) return res.status(400).json({error:'Order ID mismatch.'});
+
+    // The durable snapshot is authoritative for one-way fulfilment fields.
+    // A stale browser/tab must never erase or replace a waybill that was already
+    // invoice-locked / exported to Fardar, nor roll allocated stock backwards.
+    const current=await getOrderSnapshots();
+    const existing=current.find((candidate:any)=>String(candidate?.id || '')===id);
+    let order={...incoming};
+    let waybillPreserved=false;
+
+    if(existing){
+      const existingWaybill=String(existing.waybill_number || '').trim();
+      const waybillProtected=Boolean(
+        existingWaybill && (
+          existing.waybill_protection_locked === true ||
+          existing.invoice_locked === true ||
+          Boolean(existing.fardar_csv_exported_at) ||
+          Boolean(existing.fardar_csv_exported_waybill) ||
+          existing.dispatch_status === 'Handed Over' ||
+          existing.order_status === 'Shipped' ||
+          existing.order_status === 'Delivered'
+        )
+      );
+
+      if(waybillProtected){
+        const incomingWaybill=String(order.waybill_number || '').trim();
+        waybillPreserved=incomingWaybill !== existingWaybill;
+        const protectedWaybillFields=[
+          'waybill_number','courier_name','shipment_mode','tracking_status','delivery_status',
+          'fardar_city','city_verified',
+          'fardar_csv_exported_at','fardar_csv_exported_by','fardar_csv_export_batch_id','fardar_csv_exported_waybill',
+          'waybill_protection_locked','waybill_protection_reason'
+        ];
+        for(const field of protectedWaybillFields){
+          if(existing[field] !== undefined) order[field]=existing[field];
+        }
+        order.waybill_number=existingWaybill;
+      }
+
+      if(existing.stock_allocated === true){
+        order.stock_allocated=true;
+        if(existing.stock_status !== undefined) order.stock_status=existing.stock_status;
+        if(existing.stock_allocated_at !== undefined) order.stock_allocated_at=existing.stock_allocated_at;
+        if(existing.stock_allocated_by !== undefined) order.stock_allocated_by=existing.stock_allocated_by;
+      }
+
+      if(existing.invoice_locked === true){
+        const protectedInvoiceFields=[
+          'invoice_locked','invoice_number','invoice_generated_at','invoice_generated_by',
+          'invoice_pack_batch_id','invoice_pack_downloaded_at','invoice_pack_downloaded_by',
+          'invoice_pack_download_set_date','invoice_pack_download_set_number',
+          'invoice_payment_label_snapshot','invoice_advance_percentage_snapshot'
+        ];
+        for(const field of protectedInvoiceFields){
+          if(existing[field] !== undefined) order[field]=existing[field];
+        }
+        order.invoice_locked=true;
+      }
+    }
+
     await saveOrderSnapshot(order);
-    return res.json({ok:true});
+    return res.json({ok:true,order,waybill_preserved:waybillPreserved});
   }catch(e:any){return res.status(500).json({error:e?.message||'Order update failed.'});}
 });
 app.delete('/api/orders/:id', requireSuperAdmin, async (req,res)=>{
