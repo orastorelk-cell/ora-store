@@ -82,7 +82,7 @@ import {
   StoreSettings,
 } from '../../types';
 import { generateOrderInvoicePDF, generateBatchInvoicesPDF, generateA4FourUpInvoicesPDF, getInvoicePageCount, validateInvoiceOrder } from '../../lib/pdfGenerator';
-import { GOOGLE_APPS_SCRIPT_CODE, syncProductCatalogToGoogleSheets, getGoogleSheetConfirmedStockPreview } from '../../lib/googleSheets';
+import { GOOGLE_APPS_SCRIPT_CODE, syncProductCatalogToGoogleSheets } from '../../lib/googleSheets';
 import { InvoiceDesignPanel } from './InvoiceDesignPanel';
 import { CameraBarcodeScanner } from './CameraBarcodeScanner';
 import { CodPaymentsPanel } from './CodPaymentsPanel';
@@ -225,10 +225,6 @@ export const AdminDashboard: React.FC = () => {
   const [newOrderToast, setNewOrderToast] = useState<string>('');
   const [assistantNeedsCount, setAssistantNeedsCount] = useState(0);
   const [complaintOpenCount, setComplaintOpenCount] = useState(0);
-  const [sheetConfirmedPreviewOrders, setSheetConfirmedPreviewOrders] = useState<any[]>([]);
-  const [sheetConfirmedPreviewLoading, setSheetConfirmedPreviewLoading] = useState(false);
-  const [sheetConfirmedPreviewError, setSheetConfirmedPreviewError] = useState('');
-  const [sheetConfirmedPreviewRefresh, setSheetConfirmedPreviewRefresh] = useState(0);
   const previousAssistantNeedsRef = useRef<number | null>(null);
   const previousComplaintOpenRef = useRef<number | null>(null);
   const [returnScanValue, setReturnScanValue] = useState('');
@@ -2673,56 +2669,6 @@ Suitable For:
     URL.revokeObjectURL(url);
   };
 
-  // Read-only preview of rows marked CONFIRM ORDER in Google Sheets but not yet
-  // processed by Confirm / Cancel Upload. This NEVER allocates/deducts stock.
-  useEffect(() => {
-    if (activeTab !== 'out_of_stock') return;
-    let cancelled = false;
-    let timer: number | undefined;
-
-    const loadSheetConfirmedPreview = async () => {
-      const webhookUrl = String(settings.google_sheet_webhook_url || '').trim();
-      if (!webhookUrl) {
-        if (!cancelled) {
-          setSheetConfirmedPreviewOrders([]);
-          setSheetConfirmedPreviewError('Google Sheets Webhook URL is not configured.');
-          setSheetConfirmedPreviewLoading(false);
-        }
-        return;
-      }
-
-      if (!cancelled) {
-        setSheetConfirmedPreviewLoading(true);
-        setSheetConfirmedPreviewError('');
-      }
-      try {
-        const result = await getGoogleSheetConfirmedStockPreview(webhookUrl);
-        if (cancelled) return;
-        if (!result.success) {
-          setSheetConfirmedPreviewOrders([]);
-          setSheetConfirmedPreviewError(result.message || 'Could not read confirmed Sheet orders.');
-        } else {
-          setSheetConfirmedPreviewOrders(result.orders || []);
-          setSheetConfirmedPreviewError('');
-        }
-      } catch (error: any) {
-        if (!cancelled) {
-          setSheetConfirmedPreviewOrders([]);
-          setSheetConfirmedPreviewError(error?.message || 'Could not read confirmed Sheet orders.');
-        }
-      } finally {
-        if (!cancelled) setSheetConfirmedPreviewLoading(false);
-      }
-    };
-
-    void loadSheetConfirmedPreview();
-    timer = window.setInterval(() => { void loadSheetConfirmedPreview(); }, 60000);
-    return () => {
-      cancelled = true;
-      if (timer !== undefined) window.clearInterval(timer);
-    };
-  }, [activeTab, settings.google_sheet_webhook_url, sheetConfirmedPreviewRefresh]);
-
   // ONLY zero-stock products that are currently blocking at least one Confirmed waiting order.
   const outOfStockNeeds = (() => {
     const activeUnallocatedOrders = orders.filter((o) =>
@@ -2753,113 +2699,6 @@ Suitable For:
       })
       .filter((row) => row.pendingOrders > 0)
       .sort((x,y) => y.pendingOrders - x.pendingOrders || y.neededQty - x.neededQty);
-  })();
-
-  // Separate forecast: exact physical Item Codes needed by Sheet-confirmed orders
-  // that have NOT been processed through Confirm / Cancel Upload yet.
-  const sheetConfirmedOutOfStockNeeds = (() => {
-    type PreviewDemand = { product: Product; variant?: ProductVariant; itemCode: string; itemLabel: string; neededQty: number; orderIds: Set<string> };
-    const productById = new Map(products.map((product) => [String(product.id), product] as [string, Product]));
-    const productByMainSku = new Map(products.map((product) => [String(product.sku || '').trim().toUpperCase(), product] as [string, Product]));
-    const localByOrderNumber = new Map(orders.map((order) => [String(order.order_number || '').trim().toUpperCase(), order] as [string, Order]));
-    const demand = new Map<string, PreviewDemand>();
-
-    const addPhysicalDemand = (product: Product | undefined, variant: ProductVariant | undefined, qty: number, orderId: string) => {
-      if (!product || !(qty > 0) || normalizedProductType(product) === 'bundle') return;
-      if (normalizedProductType(product) === 'variant' && !variant) return;
-      const key = String(product.id) + '::' + String(variant?.id || 'base');
-      const optionLabel = variant ? (variantOptions(variant).map((row) => row.value).join(' / ') || String(variant.option_value || '').trim()) : '';
-      const current = demand.get(key) || {
-        product,
-        variant,
-        itemCode: String(variant?.sku || product.sku || ''),
-        itemLabel: optionLabel ? product.name_en + ' — ' + optionLabel : product.name_en,
-        neededQty: 0,
-        orderIds: new Set<string>(),
-      };
-      current.neededQty += qty;
-      current.orderIds.add(orderId);
-      demand.set(key, current);
-    };
-
-    (sheetConfirmedPreviewOrders || []).forEach((sheetOrder: any) => {
-      const orderKey = String(sheetOrder?.order_id || '').trim().toUpperCase();
-      const localOrder = localByOrderNumber.get(orderKey);
-
-      // If system already says Confirmed/Cancelled, Confirm Upload has already handled it.
-      if (!localOrder) return;
-      if (localOrder.call_center_status === 'Confirmed' || localOrder.call_center_status === 'Cancelled' || localOrder.order_status === 'Cancelled') return;
-      if (localOrder.is_duplicate_order || localOrder.is_test_order) return;
-
-      (Array.isArray(sheetOrder?.items) ? sheetOrder.items : []).forEach((sheetItem: any) => {
-        if (String(sheetItem?.item_action || '').trim().toUpperCase() === 'CANCEL ITEM') return;
-        const qty = Math.max(0, Number(sheetItem?.qty || 0));
-        if (!(qty > 0)) return;
-
-        const mainSku = String(sheetItem?.main_code || '').trim().toUpperCase();
-        const itemSku = String(sheetItem?.item_code || '').trim().toUpperCase();
-        const bundle = products.find((product) =>
-          normalizedProductType(product) === 'bundle' &&
-          (String(product.sku || '').trim().toUpperCase() === mainSku || String(product.sku || '').trim().toUpperCase() === itemSku)
-        );
-
-        if (bundle) {
-          (bundle.bundle_components || []).forEach((component) => {
-            const child = productById.get(String(component.product_id || ''));
-            if (!child) return;
-            const perBundle = Math.max(1, Number(component.quantity || 1));
-            let childVariant = component.variant_id ? variantById(child, component.variant_id) : undefined;
-
-            // Customer-select combo: resolve the physical child variant from the
-            // Variant / Color selected in the Sheet row.
-            if (!childVariant && normalizedProductType(child) === 'variant') {
-              const wanted = String(sheetItem?.variant || '').trim().toUpperCase();
-              if (wanted) {
-                childVariant = (child.variants || []).find((candidate) => {
-                  const values = [
-                    String(candidate.option_value || ''),
-                    ...variantOptions(candidate).map((row) => String(row.value || '')),
-                  ].map((value) => value.trim().toUpperCase());
-                  return values.includes(wanted);
-                });
-              }
-            }
-            addPhysicalDemand(child, childVariant, qty * perBundle, String(sheetOrder.order_id || ''));
-          });
-          return;
-        }
-
-        let product = productByMainSku.get(mainSku) || productByMainSku.get(itemSku);
-        let exactVariant: ProductVariant | undefined;
-        if (!product) {
-          for (const candidate of products) {
-            const matched = (candidate.variants || []).find((variant) => String(variant.sku || '').trim().toUpperCase() === itemSku);
-            if (matched) { product = candidate; exactVariant = matched; break; }
-          }
-        } else if (normalizedProductType(product) === 'variant') {
-          exactVariant = (product.variants || []).find((variant) =>
-            String(variant.sku || '').trim().toUpperCase() === itemSku ||
-            String(variant.option_value || '').trim().toUpperCase() === String(sheetItem?.variant || '').trim().toUpperCase()
-          );
-        }
-        addPhysicalDemand(product, exactVariant, qty, String(sheetOrder.order_id || ''));
-      });
-    });
-
-    return Array.from(demand.values())
-      .map((row) => {
-        const currentStock = row.variant
-          ? Math.max(0, Number(row.variant.stock_quantity || 0))
-          : Math.max(0, Number(row.product.stock_quantity || 0));
-        return {
-          ...row,
-          currentStock,
-          pendingOrders: row.orderIds.size,
-          shortageQty: Math.max(0, row.neededQty - currentStock),
-        };
-      })
-      .filter((row) => row.shortageQty > 0)
-      .sort((a,b) => b.shortageQty - a.shortageQty || b.pendingOrders - a.pendingOrders);
   })();
 
   const lastSeenOrderAt = Number(localStorage.getItem('ora_admin_last_seen_order_at') || 0);
@@ -4998,84 +4837,6 @@ Suitable For:
               </div>
             </>
           )}
-
-          <div className="rounded-2xl border border-sky-500/25 bg-sky-500/5 overflow-hidden">
-            <div className="flex flex-col gap-3 border-b border-sky-500/20 p-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h3 className="text-sm font-black text-sky-200">Sheet Confirmed — Not Uploaded Yet</h3>
-                <p className="mt-1 text-[11px] leading-5 text-sky-100/70">
-                  Orders already marked CONFIRM ORDER in Google Sheets, but not yet processed by Confirm / Cancel Upload. Preview only — stock is NOT deducted here.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={()=>setSheetConfirmedPreviewRefresh((value)=>value+1)}
-                disabled={sheetConfirmedPreviewLoading}
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-2 text-[10px] font-black text-sky-200 disabled:opacity-50"
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${sheetConfirmedPreviewLoading ? 'animate-spin' : ''}`}/>
-                Refresh Sheet Check
-              </button>
-            </div>
-
-            {sheetConfirmedPreviewLoading && sheetConfirmedPreviewOrders.length === 0 ? (
-              <div className="p-5 text-center text-xs font-bold text-sky-200">Checking confirmed Sheet orders…</div>
-            ) : sheetConfirmedPreviewError ? (
-              <div className="m-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-[11px] font-bold text-amber-200">
-                {sheetConfirmedPreviewError}
-              </div>
-            ) : sheetConfirmedOutOfStockNeeds.length === 0 ? (
-              <div className="p-5 text-center text-xs font-bold text-emerald-300">
-                No additional stock shortage from Sheet-confirmed orders waiting for upload.
-              </div>
-            ) : (
-              <>
-                <div className="space-y-3 p-3 sm:hidden">
-                  {sheetConfirmedOutOfStockNeeds.map((row) => (
-                    <div key={`sheet-preview-${row.product.id}-${row.variant?.id || row.itemCode}`} className="overflow-hidden rounded-xl border border-neutral-800 bg-neutral-950">
-                      <div className="border-b border-neutral-800 px-3 py-2.5">
-                        <div className="font-mono text-xs font-black text-sky-300">{row.itemCode}</div>
-                        <div className="mt-1 text-xs font-bold text-white">{row.itemLabel}</div>
-                      </div>
-                      <div className="grid grid-cols-4 divide-x divide-neutral-800">
-                        <div className="p-2 text-center"><div className="text-[8px] uppercase text-neutral-500">Stock</div><div className="mt-1 font-black text-red-300">{row.currentStock}</div></div>
-                        <div className="p-2 text-center"><div className="text-[8px] uppercase text-neutral-500">Orders</div><div className="mt-1 font-black text-white">{row.pendingOrders}</div></div>
-                        <div className="p-2 text-center"><div className="text-[8px] uppercase text-neutral-500">Confirm Qty</div><div className="mt-1 font-black text-sky-300">{row.neededQty}</div></div>
-                        <div className="p-2 text-center"><div className="text-[8px] uppercase text-neutral-500">Shortage</div><div className="mt-1 font-black text-amber-300">{row.shortageQty}</div></div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="hidden overflow-x-auto sm:block">
-                  <table className="w-full min-w-[760px] text-left text-xs">
-                    <thead className="bg-neutral-950 text-[10px] uppercase text-neutral-500">
-                      <tr>
-                        <th className="p-3">Item Code</th>
-                        <th className="p-3">Item</th>
-                        <th className="p-3 text-center">Current Stock</th>
-                        <th className="p-3 text-center">Sheet Confirmed Orders</th>
-                        <th className="p-3 text-center">Confirmed Qty</th>
-                        <th className="p-3 text-center">Shortage Qty</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-neutral-800">
-                      {sheetConfirmedOutOfStockNeeds.map((row) => (
-                        <tr key={`sheet-preview-table-${row.product.id}-${row.variant?.id || row.itemCode}`}>
-                          <td className="p-3 font-mono font-bold text-sky-300">{row.itemCode}</td>
-                          <td className="p-3 text-neutral-300">{row.itemLabel}</td>
-                          <td className="p-3 text-center font-black text-red-300">{row.currentStock}</td>
-                          <td className="p-3 text-center font-bold text-white">{row.pendingOrders}</td>
-                          <td className="p-3 text-center font-bold text-sky-300">{row.neededQty}</td>
-                          <td className="p-3 text-center font-black text-amber-300">{row.shortageQty}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            )}
-          </div>
 
           <p className="text-[11px] text-neutral-500">
             Purchase/stock refill clears eligible waiting orders using the existing FIFO rule. When an item is no longer stock 0 or no longer blocks a waiting order, it disappears from this page automatically.
