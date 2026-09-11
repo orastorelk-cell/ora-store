@@ -273,36 +273,6 @@ export async function syncProductCatalogToGoogleSheets(
   return { success: true, message: 'Product catalog synced to Google Sheet.', rows: Number(posted.result?.rows || 0), status: posted.result?.status, version: posted.result?.version };
 }
 
-export type GoogleSheetConfirmedStockPreviewOrder = {
-  order_id: string;
-  sheet: string;
-  order_action: string;
-  items: Array<{
-    item_code: string;
-    main_code: string;
-    item_name: string;
-    variant: string;
-    qty: number;
-    item_action: string;
-  }>;
-};
-
-export async function getGoogleSheetConfirmedStockPreview(webhookUrl: string): Promise<{
-  success: boolean;
-  message: string;
-  orders: GoogleSheetConfirmedStockPreviewOrder[];
-}> {
-  const posted = await postToAppsScript(webhookUrl, { action: 'confirmed_stock_preview' });
-  if (!posted.ok) return { success:false, message:posted.error || 'Could not read confirmed Google Sheet orders.', orders:[] };
-  const err = expectStatus(posted.result, ['confirmed_stock_preview']);
-  if (err) return { success:false, message:err, orders:[] };
-  return {
-    success:true,
-    message:'Confirmed Google Sheet orders loaded.',
-    orders:Array.isArray(posted.result?.orders) ? posted.result.orders : [],
-  };
-}
-
 export async function clearGoogleSheetTestData(webhookUrl: string): Promise<SheetActionResult> {
   const posted = await postToAppsScript(webhookUrl, { action: 'clear_test_orders' });
   if (!posted.ok) return { success: false, message: posted.error || 'Could not clear test orders from Google Sheet.' };
