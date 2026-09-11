@@ -3,184 +3,69 @@ import { BarChart3, Download, FileUp, Trash2 } from 'lucide-react';
 import { useStore } from '../../context/StoreContext';
 import { autoMapHeader, downloadCsv, parseCsv, parseFlexibleDate, toNumber } from '../../lib/csv';
 
-type AdRow = { id: string; date: string; end_date?: string; code: string; amount_spent: number; cost_per_result: number; results: number };
-type Mapping = { date: string; endDate: string; code: string; amount: string; cpr: string; results: string };
-const emptyMapping: Mapping = { date: '', endDate: '', code: '', amount: '', cpr: '', results: '' };
-const token = () => localStorage.getItem('ora_staff_session_token') || '';
-const headers = () => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` });
-const dayKey = (value: Date) => `${value.getFullYear()}-${String(value.getMonth()+1).padStart(2,'0')}-${String(value.getDate()).padStart(2,'0')}`;
-const extractCampaignCode = (value: unknown) => {
-  const text = String(value || '').trim().toUpperCase();
-  if (!text) return 'UNMAPPED';
-  const combo = text.match(/\bCB-R\d+(?:-R\d+)+\b/i)?.[0];
-  if (combo) return combo.toUpperCase();
-  const code = text.match(/\bR\d{3,}\b/i)?.[0];
-  return code ? code.toUpperCase() : text;
-};
-const reportCode = (value: unknown) => {
-  const text = String(value || '').trim().toUpperCase();
-  if (!text) return 'NO-SKU';
-  if (/^CB-R\d+(?:-R\d+)+$/.test(text)) return text;
-  const main = text.match(/^R\d{3,}/)?.[0];
-  return main || text;
-};
-const dateInside = (iso: string | undefined, from: string, to: string) => {
-  if (!iso) return false;
-  const key = dayKey(new Date(iso));
-  return key >= from && key <= to;
-};
-const adInside = (row: AdRow, from: string, to: string) => {
-  const start = row.date;
-  const end = row.end_date || row.date;
-  return start <= to && end >= from;
-};
+type AdRow={id:string;date:string;end_date?:string;code:string;amount_spent:number;cost_per_result:number;results:number};
+type Mapping={date:string;endDate:string;code:string;amount:string;cpr:string;results:string};
+const emptyMapping:Mapping={date:'',endDate:'',code:'',amount:'',cpr:'',results:''};
+const token=()=>localStorage.getItem('ora_staff_session_token')||'';
+const headers=()=>({'Content-Type':'application/json',Authorization:`Bearer ${token()}`});
+const dayKey=(d:Date)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+const extractCampaignCode=(v:unknown)=>{const t=String(v||'').trim().toUpperCase();if(!t)return'UNMAPPED';const c=t.match(/\bCB-R\d+(?:-R\d+)+\b/i)?.[0];if(c)return c.toUpperCase();return t.match(/\bR\d{3,}\b/i)?.[0]?.toUpperCase()||t};
+const reportCode=(v:unknown)=>{const t=String(v||'').trim().toUpperCase();if(!t)return'NO-SKU';if(/^CB-R\d+(?:-R\d+)+$/.test(t))return t;return t.match(/^R\d{3,}/)?.[0]||t};
+const dateInside=(iso:string|undefined,from:string,to:string)=>{if(!iso)return false;const k=dayKey(new Date(iso));return k>=from&&k<=to};
+const adInside=(r:AdRow,from:string,to:string)=>r.date<=to&&(r.end_date||r.date)>=from;
+const money=(n:number)=>`Rs. ${Number(n||0).toLocaleString(undefined,{maximumFractionDigits:2})}`;
 
-export const ReportsPanel: React.FC = () => {
-  const { orders, returnRecords } = useStore();
-  const now = new Date();
-  const weekStart = new Date(now); weekStart.setDate(now.getDate() - 6);
-  const [mode, setMode] = useState<'weekly'|'monthly'|'custom'>('weekly');
-  const [from, setFrom] = useState(dayKey(weekStart));
-  const [to, setTo] = useState(dayKey(now));
-  const [adRows, setAdRows] = useState<AdRow[]>([]);
-  const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
-  const [csvRows, setCsvRows] = useState<Record<string,string>[]>([]);
-  const [mapping, setMapping] = useState<Mapping>(emptyMapping);
-  const [message, setMessage] = useState('');
+export const ReportsPanel:React.FC=()=>{
+ const{orders,returnRecords}=useStore();
+ const now=new Date(),weekStart=new Date(now);weekStart.setDate(now.getDate()-6);
+ const[mode,setMode]=useState<'weekly'|'monthly'|'custom'>('weekly');
+ const[from,setFrom]=useState(dayKey(weekStart));const[to,setTo]=useState(dayKey(now));
+ const[adRows,setAdRows]=useState<AdRow[]>([]);const[csvHeaders,setCsvHeaders]=useState<string[]>([]);const[csvRows,setCsvRows]=useState<Record<string,string>[]>([]);const[mapping,setMapping]=useState<Mapping>(emptyMapping);const[message,setMessage]=useState('');
+ useEffect(()=>{fetch('/api/admin-data/ads-report-rows',{headers:headers()}).then(async r=>{const d=await r.json().catch(()=>({}));if(r.ok)setAdRows(Array.isArray(d?.payload)?d.payload:[])}).catch(()=>{})},[]);
+ useEffect(()=>{if(mode==='weekly'){const e=new Date(),s=new Date(e);s.setDate(e.getDate()-6);setFrom(dayKey(s));setTo(dayKey(e))}else if(mode==='monthly'){const e=new Date(),s=new Date(e.getFullYear(),e.getMonth(),1);setFrom(dayKey(s));setTo(dayKey(e))}},[mode]);
+ const saveAds=async(next:AdRow[])=>{const r=await fetch('/api/admin-data/ads-report-rows',{method:'PUT',headers:headers(),body:JSON.stringify({payload:next})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d?.error||'Could not save ad report rows.');setAdRows(next)};
+ const loadCsv=async(file?:File)=>{if(!file)return;const p=parseCsv(await file.text());setCsvHeaders(p.headers);setCsvRows(p.rows);setMapping({date:autoMapHeader(p.headers,['date','day','reporting starts','reporting start']),endDate:autoMapHeader(p.headers,['reporting ends','reporting end','end date']),code:autoMapHeader(p.headers,['item code','product code','sku','code','ad name','campaign name','campaign']),amount:autoMapHeader(p.headers,['amount spent','spend','amount']),cpr:autoMapHeader(p.headers,['cost per result','cost/result','cpr']),results:autoMapHeader(p.headers,['results','result','purchases','leads'])});setMessage(`Loaded ${p.rows.length} Ads Manager row(s). Check the mapping before import.`)};
+ const importAds=async()=>{if(!mapping.date||!mapping.amount){setMessage('Map at least Date and Amount Spent.');return}const normalized=csvRows.map((r,i)=>{const a=parseFlexibleDate(r[mapping.date]),b=mapping.endDate?parseFlexibleDate(r[mapping.endDate]):'';const start=a?dayKey(new Date(a)):'',end=b?dayKey(new Date(b)):start;return{id:`${Date.now()}-${i}`,date:start,end_date:end>=start?end:start,code:mapping.code?extractCampaignCode(r[mapping.code]):'UNMAPPED',amount_spent:toNumber(r[mapping.amount]),cost_per_result:mapping.cpr?toNumber(r[mapping.cpr]):0,results:mapping.results?toNumber(r[mapping.results]):0}as AdRow}).filter(r=>r.date&&r.amount_spent>=0);const d=new Map<string,AdRow>();[...adRows,...normalized].forEach(r=>d.set(`${r.date}|${r.end_date||r.date}|${r.code}|${r.amount_spent}|${r.cost_per_result}|${r.results}`,r));try{await saveAds([...d.values()].slice(-10000));setMessage(`Imported ${normalized.length} normalized ad row(s). Raw CSV was not stored.`)}catch(e:any){setMessage(e?.message||'Could not save Ads Manager data.')}};
 
-  useEffect(() => {
-    fetch('/api/admin-data/ads-report-rows', { headers: headers() }).then(async (response) => {
-      const data = await response.json().catch(()=>({}));
-      if (response.ok) setAdRows(Array.isArray(data?.payload) ? data.payload : []);
-    }).catch(()=>{});
-  }, []);
+ const filteredOrders=useMemo(()=>orders.filter(o=>dateInside(o.created_at,from,to)),[orders,from,to]);
+ const salesOrders=filteredOrders.filter(o=>o.order_status!=='Cancelled'&&!o.is_test_order&&!o.is_duplicate_order);
+ const filteredAds=adRows.filter(r=>adInside(r,from,to));
+ const codCollectedOrders=orders.filter(o=>o.cod_payment_received&&dateInside(o.cod_payment_received_at,from,to)&&!o.is_test_order&&!o.is_duplicate_order);
+ const bankCollectedOrders=salesOrders.filter(o=>o.payment_method==='Bank Payment'&&o.payment_status==='Paid');
+ const receivedByOrder=new Map<string,number>();
+ codCollectedOrders.forEach(o=>receivedByOrder.set(o.id,(receivedByOrder.get(o.id)||0)+Number(o.cod_payment_amount||o.total_amount||0)));
+ bankCollectedOrders.forEach(o=>{const amt=o.payment_paid_type==='Advance'?Number(o.payment_detected_amount||o.advance_amount||0):Number(o.payment_detected_amount||o.total_amount||0);receivedByOrder.set(o.id,(receivedByOrder.get(o.id)||0)+amt)});
+ const collectedOrders=orders.filter(o=>receivedByOrder.has(o.id));
+ const orderedRevenue=salesOrders.reduce((s,o)=>s+Number(o.total_amount||0),0);
+ const cogs=salesOrders.reduce((s,o)=>s+o.items.reduce((x,i)=>x+Number(i.buying_price||0)*Number(i.quantity||0),0),0);
+ const deliveryCost=salesOrders.reduce((s,o)=>s+Number(o.internal_delivery_fee||0),0);
+ const adSpend=filteredAds.reduce((s,r)=>s+Number(r.amount_spent||0),0);
+ const codCollected=codCollectedOrders.reduce((s,o)=>s+Number(o.cod_payment_amount||o.total_amount||0),0);
+ const bankCollected=bankCollectedOrders.reduce((s,o)=>s+(o.payment_paid_type==='Advance'?Number(o.payment_detected_amount||o.advance_amount||0):Number(o.payment_detected_amount||o.total_amount||0)),0);
+ const totalReceived=codCollected+bankCollected;
+ const receivedCogs=collectedOrders.reduce((s,o)=>s+o.items.reduce((x,i)=>x+Number(i.buying_price||0)*Number(i.quantity||0),0),0);
+ const receivedDelivery=collectedOrders.reduce((s,o)=>s+Number(o.internal_delivery_fee||0),0);
+ const totalExpenses=receivedCogs+receivedDelivery+adSpend;
+ const realizedProfit=totalReceived-totalExpenses;
+ const pendingCollection=Math.max(0,orderedRevenue-salesOrders.reduce((s,o)=>s+Number(receivedByOrder.get(o.id)||0),0));
+ const returnsCount=returnRecords.filter((r:any)=>dateInside(r.checked_at||r.created_at,from,to)).length;
+ const cancelled=filteredOrders.filter(o=>o.order_status==='Cancelled').length;
+ const contribution=orderedRevenue-cogs-deliveryCost-adSpend;
 
-  useEffect(() => {
-    if (mode === 'weekly') {
-      const end = new Date(); const start = new Date(end); start.setDate(end.getDate()-6);
-      setFrom(dayKey(start)); setTo(dayKey(end));
-    } else if (mode === 'monthly') {
-      const end = new Date(); const start = new Date(end.getFullYear(), end.getMonth(), 1);
-      setFrom(dayKey(start)); setTo(dayKey(end));
-    }
-  }, [mode]);
+ const productRows=useMemo(()=>{const map=new Map<string,any>();const get=(code:string,product:string)=>map.get(code)||{code,product,qty:0,orders:new Set<string>(),revenue:0,cogs:0,delivery:0,received:0,receivedCogs:0,receivedDelivery:0,adSpend:0,results:0,cprTotal:0,cprCount:0};
+  salesOrders.forEach(o=>{const totalItems=o.items.reduce((s,i)=>s+Number(i.subtotal||0),0)||1;o.items.forEach(i=>{const code=reportCode(i.sku),r=get(code,i.product_name),share=Number(i.subtotal||0)/totalItems;r.qty+=Number(i.quantity||0);r.orders.add(o.id);r.revenue+=Number(i.subtotal||0);r.cogs+=Number(i.buying_price||0)*Number(i.quantity||0);r.delivery+=Number(o.internal_delivery_fee||0)*share;const rec=Number(receivedByOrder.get(o.id)||0);if(rec>0){r.received+=rec*share;r.receivedCogs+=Number(i.buying_price||0)*Number(i.quantity||0);r.receivedDelivery+=Number(o.internal_delivery_fee||0)*share}map.set(code,r)})});
+  codCollectedOrders.filter(o=>!salesOrders.some(s=>s.id===o.id)).forEach(o=>{const totalItems=o.items.reduce((s,i)=>s+Number(i.subtotal||0),0)||1;o.items.forEach(i=>{const code=reportCode(i.sku),r=get(code,i.product_name),share=Number(i.subtotal||0)/totalItems,rec=Number(receivedByOrder.get(o.id)||0);r.received+=rec*share;r.receivedCogs+=Number(i.buying_price||0)*Number(i.quantity||0);r.receivedDelivery+=Number(o.internal_delivery_fee||0)*share;map.set(code,r)})});
+  filteredAds.forEach(a=>{const code=reportCode(a.code),r=get(code,'No matching system product');r.adSpend+=Number(a.amount_spent||0);r.results+=Number(a.results||0);if(a.cost_per_result>0){r.cprTotal+=a.cost_per_result;r.cprCount++}map.set(code,r)});
+  return[...map.values()].map(r=>({...r,orderCount:r.orders.size,avgCpr:r.cprCount?r.cprTotal/r.cprCount:0,totalCost:r.cogs+r.delivery+r.adSpend,contribution:r.revenue-r.cogs-r.delivery-r.adSpend,realProfit:r.received-r.receivedCogs-r.receivedDelivery-r.adSpend})).sort((a,b)=>b.revenue-a.revenue)},[salesOrders,codCollectedOrders,filteredAds,totalReceived]);
 
-  const saveAds = async (next: AdRow[]) => {
-    const response = await fetch('/api/admin-data/ads-report-rows', { method:'PUT', headers: headers(), body: JSON.stringify({ payload: next }) });
-    const data = await response.json().catch(()=>({}));
-    if (!response.ok) throw new Error(data?.error || 'Could not save ad report rows.');
-    setAdRows(next);
-  };
-
-  const loadCsv = async (file?: File) => {
-    if (!file) return;
-    const parsed = parseCsv(await file.text());
-    setCsvHeaders(parsed.headers); setCsvRows(parsed.rows);
-    setMapping({
-      date: autoMapHeader(parsed.headers, ['date','day','reporting starts','reporting start']),
-      endDate: autoMapHeader(parsed.headers, ['reporting ends','reporting end','end date']),
-      code: autoMapHeader(parsed.headers, ['item code','product code','sku','code','ad name','campaign name','campaign']),
-      amount: autoMapHeader(parsed.headers, ['amount spent','spend','amount']),
-      cpr: autoMapHeader(parsed.headers, ['cost per result','cost/result','cpr']),
-      results: autoMapHeader(parsed.headers, ['results','result','purchases','leads']),
-    });
-    setMessage(`Loaded ${parsed.rows.length} Ads Manager row(s). Check the mapping before import.`);
-  };
-
-  const importAds = async () => {
-    if (!mapping.date || !mapping.amount) { setMessage('Map at least Date and Amount Spent.'); return; }
-    const normalized = csvRows.map((row, index) => {
-      const parsedDate = parseFlexibleDate(row[mapping.date]);
-      const parsedEndDate = mapping.endDate ? parseFlexibleDate(row[mapping.endDate]) : '';
-      const start = parsedDate ? dayKey(new Date(parsedDate)) : '';
-      const end = parsedEndDate ? dayKey(new Date(parsedEndDate)) : start;
-      return {
-        id: `${Date.now()}-${index}`,
-        date: start,
-        end_date: end >= start ? end : start,
-        code: mapping.code ? extractCampaignCode(row[mapping.code]) : 'UNMAPPED',
-        amount_spent: toNumber(row[mapping.amount]),
-        cost_per_result: mapping.cpr ? toNumber(row[mapping.cpr]) : 0,
-        results: mapping.results ? toNumber(row[mapping.results]) : 0,
-      } as AdRow;
-    }).filter((row) => row.date && row.amount_spent >= 0);
-    const dedupe = new Map<string,AdRow>();
-    [...adRows, ...normalized].forEach((row) => dedupe.set(`${row.date}|${row.end_date || row.date}|${row.code}|${row.amount_spent}|${row.cost_per_result}|${row.results}`, row));
-    const next = [...dedupe.values()].slice(-10000);
-    try { await saveAds(next); setMessage(`Imported ${normalized.length} normalized ad row(s). Raw CSV was not stored.`); }
-    catch (error:any) { setMessage(error?.message || 'Could not save Ads Manager data.'); }
-  };
-
-  const filteredOrders = useMemo(() => orders.filter((o) => dateInside(o.created_at, from, to)), [orders,from,to]);
-  const salesOrders = filteredOrders.filter((o) => o.order_status !== 'Cancelled' && !o.is_test_order && !o.is_duplicate_order);
-  const filteredAds = adRows.filter((row) => adInside(row, from, to));
-  const codCollectedOrders = orders.filter((o) => o.cod_payment_received && dateInside(o.cod_payment_received_at, from, to));
-  const orderedRevenue = salesOrders.reduce((sum,o)=>sum+Number(o.total_amount||0),0);
-  const cogs = salesOrders.reduce((sum,o)=>sum+o.items.reduce((s,i)=>s+Number(i.buying_price||0)*Number(i.quantity||0),0),0);
-  const deliveryCost = salesOrders.reduce((sum,o)=>sum+Number(o.internal_delivery_fee||0),0);
-  const adSpend = filteredAds.reduce((sum,row)=>sum+Number(row.amount_spent||0),0);
-  const codCollected = codCollectedOrders.reduce((sum,o)=>sum+Number(o.cod_payment_amount||o.total_amount||0),0);
-  const bankCollected = salesOrders.filter((o)=>o.payment_method==='Bank Payment' && o.payment_status==='Paid').reduce((sum,o)=>{
-    if (o.payment_paid_type === 'Advance') return sum + Number(o.payment_detected_amount || o.advance_amount || 0);
-    return sum + Number(o.payment_detected_amount || o.total_amount || 0);
-  },0);
-  const returnsCount = returnRecords.filter((r:any)=>dateInside(r.checked_at || r.created_at,from,to)).length;
-  const cancelled = filteredOrders.filter((o)=>o.order_status==='Cancelled').length;
-  const contribution = orderedRevenue-cogs-deliveryCost-adSpend;
-
-  const productRows = useMemo(() => {
-    const map = new Map<string,{code:string;product:string;qty:number;orders:Set<string>;revenue:number;cogs:number;adSpend:number;results:number;cprTotal:number;cprCount:number}>();
-    salesOrders.forEach((order) => order.items.forEach((item) => {
-      const code=reportCode(item.sku);
-      const row=map.get(code)||{code,product:item.product_name,qty:0,orders:new Set<string>(),revenue:0,cogs:0,adSpend:0,results:0,cprTotal:0,cprCount:0};
-      row.qty+=Number(item.quantity||0); row.orders.add(order.id); row.revenue+=Number(item.subtotal||0); row.cogs+=Number(item.buying_price||0)*Number(item.quantity||0); map.set(code,row);
-    }));
-    filteredAds.forEach((ad)=>{
-      const code=reportCode(ad.code||'UNMAPPED');
-      const row=map.get(code)||{code,product:'No matching system product',qty:0,orders:new Set<string>(),revenue:0,cogs:0,adSpend:0,results:0,cprTotal:0,cprCount:0};
-      row.adSpend+=Number(ad.amount_spent||0); row.results+=Number(ad.results||0); if(ad.cost_per_result>0){row.cprTotal+=ad.cost_per_result;row.cprCount+=1;} map.set(code,row);
-    });
-    return [...map.values()].map((row)=>({ ...row, orderCount:row.orders.size, avgCpr:row.cprCount?row.cprTotal/row.cprCount:0, contribution:row.revenue-row.cogs-row.adSpend })).sort((a,b)=>b.revenue-a.revenue);
-  },[salesOrders,filteredAds]);
-
-  const exportReport = () => downloadCsv(`O-RA_Report_${from}_to_${to}.csv`, [
-    ['Item Code','Product','Orders','Qty Sold','Sales Revenue','COGS','Ad Spend','Results','Avg Cost Per Result','Est Contribution'],
-    ...productRows.map((row)=>([row.code,row.product,row.orderCount,row.qty,row.revenue,row.cogs,row.adSpend,row.results,row.avgCpr.toFixed(2),row.contribution] as (string|number)[])),
-  ]);
-
-  const clearAds = async () => { if (!window.confirm('Clear all imported Ads Manager report rows?')) return; try { await saveAds([]); setMessage('Imported ad report rows cleared.'); } catch(error:any){setMessage(error?.message||'Could not clear rows.');} };
-
-  return (
-    <div className="space-y-5">
-      <div className="rounded-2xl bg-white border border-gray-100 p-4 flex flex-col lg:flex-row lg:items-end gap-3 justify-between">
-        <div><h2 className="font-black flex items-center gap-2"><BarChart3 className="w-5 h-5 text-orange-600"/>Business Reports</h2><p className="text-xs text-gray-500 mt-1">System sales + COD collections + optional Facebook Ads Manager CSV.</p></div>
-        <div className="flex flex-wrap gap-2 items-end">
-          <select value={mode} onChange={(e)=>setMode(e.target.value as any)} className="rounded-xl border border-gray-200 px-3 py-2 text-xs font-bold"><option value="weekly">Last 7 Days</option><option value="monthly">This Month</option><option value="custom">Custom</option></select>
-          <input type="date" value={from} onChange={(e)=>{setMode('custom');setFrom(e.target.value)}} className="rounded-xl border border-gray-200 px-3 py-2 text-xs"/>
-          <input type="date" value={to} onChange={(e)=>{setMode('custom');setTo(e.target.value)}} className="rounded-xl border border-gray-200 px-3 py-2 text-xs"/>
-          <button onClick={exportReport} className="rounded-xl bg-black text-white px-3 py-2 text-xs font-bold inline-flex items-center gap-2"><Download className="w-4 h-4"/>CSV</button>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-8 gap-3">
-        {[
-          ['Orders',salesOrders.length],['Revenue',`Rs. ${orderedRevenue.toLocaleString()}`],['COD Collected',`Rs. ${codCollected.toLocaleString()}`],['Bank Collected',`Rs. ${bankCollected.toLocaleString()}`],['COGS',`Rs. ${cogs.toLocaleString()}`],['Ad Spend',`Rs. ${adSpend.toLocaleString()}`],['Returns',returnsCount],['Est. Contribution',`Rs. ${contribution.toLocaleString()}`],
-        ].map(([label,value])=><div key={String(label)} className="rounded-2xl bg-white border border-gray-100 p-3"><p className="text-[10px] uppercase font-bold text-gray-400">{label}</p><p className="mt-1 text-base font-black text-gray-900 break-words">{value}</p></div>)}
-      </div>
-      <p className="text-[11px] text-gray-400">Cancelled in range: {cancelled}. Estimated Contribution = ordered sales revenue − product buying cost − internal delivery cost − imported ad spend. It is an operational estimate, not audited accounting profit.</p>
-
-      <div className="rounded-2xl bg-white border border-gray-100 p-5 space-y-4">
-        <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><FileUp className="w-5 h-5 text-orange-600"/><div><h3 className="font-black">Facebook Ads Manager CSV</h3><p className="text-xs text-gray-500">Flexible mapping works even before you know the exact Ads Manager export format.</p></div></div><button onClick={clearAds} className="text-xs font-bold text-red-600 inline-flex items-center gap-1"><Trash2 className="w-4 h-4"/>Clear Imported</button></div>
-        <input type="file" accept=".csv,text/csv" onChange={(e)=>loadCsv(e.target.files?.[0])} className="block w-full text-xs"/>
-        {csvHeaders.length>0&&<><div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">{([['date','Start Date *'],['endDate','End Date'],['code','Item/Product Code'],['amount','Amount Spent *'],['cpr','Cost Per Result'],['results','Results']] as [keyof Mapping,string][]).map(([key,label])=><label key={key} className="text-xs font-bold text-gray-600">{label}<select value={mapping[key]} onChange={(e)=>setMapping({...mapping,[key]:e.target.value})} className="mt-1 w-full rounded-xl border border-gray-200 px-2 py-2 text-xs font-normal"><option value="">Not mapped</option>{csvHeaders.map((h)=><option key={h}>{h}</option>)}</select></label>)}</div><button onClick={importAds} className="rounded-xl bg-orange-600 text-white px-4 py-2.5 text-xs font-bold">Import Normalized Data</button></>}
-        <p className="text-[11px] text-gray-400">Storage saver: the original CSV file is never stored. Only the small normalized date range / code / spend / cost-per-result / results rows are kept.</p>
-        {message&&<p className="text-xs font-semibold text-orange-700">{message}</p>}
-      </div>
-
-      <div className="rounded-2xl bg-white border border-gray-100 overflow-hidden">
-        <div className="p-4 border-b border-gray-100"><h3 className="font-black text-sm">Product / Ad Performance</h3></div>
-        <div className="overflow-x-auto"><table className="w-full text-xs"><thead className="bg-gray-50 text-gray-500"><tr>{['Code','Product','Orders','Qty','Revenue','COGS','Ad Spend','Results','Avg CPR','Est. Contribution'].map((h)=><th key={h} className="text-left p-3 whitespace-nowrap">{h}</th>)}</tr></thead><tbody>{productRows.map((row)=><tr key={row.code} className="border-t border-gray-50"><td className="p-3 font-mono font-bold">{row.code}</td><td className="p-3 min-w-40">{row.product}</td><td className="p-3">{row.orderCount}</td><td className="p-3">{row.qty}</td><td className="p-3">Rs. {row.revenue.toLocaleString()}</td><td className="p-3">Rs. {row.cogs.toLocaleString()}</td><td className="p-3">Rs. {row.adSpend.toLocaleString()}</td><td className="p-3">{row.results}</td><td className="p-3">{row.avgCpr?`Rs. ${row.avgCpr.toFixed(2)}`:'-'}</td><td className="p-3 font-bold">Rs. {row.contribution.toLocaleString()}</td></tr>)}</tbody></table></div>
-      </div>
-    </div>
-  );
+ const exportReport=()=>downloadCsv(`O-RA_Report_${from}_to_${to}.csv`,[['Item Code','Product','Orders','Qty Sold','Sales Revenue','Money Received','Purchasing Cost','Delivery Cost','Ad Spend','Total Cost','Results','Avg CPR','Estimated Profit','Realized Profit'],...productRows.map(r=>[r.code,r.product,r.orderCount,r.qty,r.revenue,r.received,r.cogs,r.delivery,r.adSpend,r.totalCost,r.results,r.avgCpr.toFixed(2),r.contribution,r.realProfit])]);
+ const clearAds=async()=>{if(!window.confirm('Clear all imported Ads Manager report rows?'))return;try{await saveAds([]);setMessage('Imported ad report rows cleared.')}catch(e:any){setMessage(e?.message||'Could not clear rows.')}};
+ const cards=[['Total Orders',filteredOrders.length],['Active Sales Orders',salesOrders.length],['Cancelled Orders',cancelled],['Sales Value',money(orderedRevenue)],['COD Received',money(codCollected)],['Bank Received',money(bankCollected)],['Total Money Received',money(totalReceived)],['Pending Collection',money(pendingCollection)],['Purchasing Cost - Sales',money(cogs)],['Purchasing Cost - Collected',money(receivedCogs)],['Delivery Cost - Collected',money(receivedDelivery)],['Facebook Ad Spend',money(adSpend)],['Total Cash Expenses',money(totalExpenses)],['Returns',returnsCount],['Estimated Order Profit',money(contribution)],['REALIZED PROFIT',money(realizedProfit)]];
+ return <div className="space-y-5">
+  <div className="rounded-2xl bg-white border border-gray-100 p-4 flex flex-col lg:flex-row lg:items-end gap-3 justify-between"><div><h2 className="font-black flex items-center gap-2"><BarChart3 className="w-5 h-5 text-orange-600"/>Business Reports</h2><p className="text-xs text-gray-500 mt-1">Clear sales, collected cash, purchasing costs, delivery costs, ad spend and profit.</p></div><div className="flex flex-wrap gap-2 items-end"><select value={mode} onChange={e=>setMode(e.target.value as any)} className="rounded-xl border border-gray-200 px-3 py-2 text-xs font-bold"><option value="weekly">Last 7 Days</option><option value="monthly">This Month</option><option value="custom">Custom</option></select><input type="date" value={from} onChange={e=>{setMode('custom');setFrom(e.target.value)}} className="rounded-xl border border-gray-200 px-3 py-2 text-xs"/><input type="date" value={to} onChange={e=>{setMode('custom');setTo(e.target.value)}} className="rounded-xl border border-gray-200 px-3 py-2 text-xs"/><button onClick={exportReport} className="rounded-xl bg-black text-white px-3 py-2 text-xs font-bold inline-flex items-center gap-2"><Download className="w-4 h-4"/>CSV</button></div></div>
+  <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-8 gap-3">{cards.map(([l,v])=><div key={String(l)} className={`rounded-2xl border p-3 ${l==='REALIZED PROFIT'?'bg-green-50 border-green-200':'bg-white border-gray-100'}`}><p className={`text-[10px] uppercase font-bold ${l==='REALIZED PROFIT'?'text-green-700':'text-gray-400'}`}>{l}</p><p className={`mt-1 text-base font-black break-words ${l==='REALIZED PROFIT'?'text-green-800':'text-gray-900'}`}>{v}</p></div>)}</div>
+  <div className="rounded-2xl bg-gray-50 border border-gray-100 p-4 text-xs text-gray-600 space-y-1"><p><b>Realized Profit</b> = money actually marked received − purchasing cost of those collected orders − their internal delivery cost − imported Facebook ad spend.</p><p><b>Estimated Order Profit</b> = sales value − purchasing cost − internal delivery cost − ad spend. Pending/uncollected orders can be included here.</p><p>Bank received uses paid bank orders in the selected order-date range; COD received uses the COD received date.</p></div>
+  <div className="rounded-2xl bg-white border border-gray-100 p-5 space-y-4"><div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><FileUp className="w-5 h-5 text-orange-600"/><div><h3 className="font-black">Facebook Ads Manager CSV</h3><p className="text-xs text-gray-500">Import campaign spend/results for the report.</p></div></div><button onClick={clearAds} className="text-xs font-bold text-red-600 inline-flex items-center gap-1"><Trash2 className="w-4 h-4"/>Clear Imported</button></div><input type="file" accept=".csv,text/csv" onChange={e=>loadCsv(e.target.files?.[0])} className="block w-full text-xs"/>{csvHeaders.length>0&&<><div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">{([['date','Start Date *'],['endDate','End Date'],['code','Item/Product Code'],['amount','Amount Spent *'],['cpr','Cost Per Result'],['results','Results']]as[keyof Mapping,string][]).map(([k,l])=><label key={k} className="text-xs font-bold text-gray-600">{l}<select value={mapping[k]} onChange={e=>setMapping({...mapping,[k]:e.target.value})} className="mt-1 w-full rounded-xl border border-gray-200 px-2 py-2 text-xs font-normal"><option value="">Not mapped</option>{csvHeaders.map(h=><option key={h}>{h}</option>)}</select></label>)}</div><button onClick={importAds} className="rounded-xl bg-orange-600 text-white px-4 py-2.5 text-xs font-bold">Import Normalized Data</button></>}<p className="text-[11px] text-gray-400">Only normalized date range / product code / spend / CPR / results are stored.</p>{message&&<p className="text-xs font-semibold text-orange-700">{message}</p>}</div>
+  <div className="rounded-2xl bg-white border border-gray-100 overflow-hidden"><div className="p-4 border-b border-gray-100"><h3 className="font-black text-sm">Product Profit Breakdown</h3><p className="text-xs text-gray-500 mt-1">Each variant is grouped under its main R-code.</p></div><div className="overflow-x-auto"><table className="w-full text-xs"><thead className="bg-gray-50 text-gray-500"><tr>{['Code','Product','Orders','Qty','Sales Value','Money Received','Purchasing','Delivery','Ad Spend','Total Cost','Results','Avg CPR','Estimated Profit','Realized Profit'].map(h=><th key={h} className="text-left p-3 whitespace-nowrap">{h}</th>)}</tr></thead><tbody>{productRows.map(r=><tr key={r.code} className="border-t border-gray-50"><td className="p-3 font-mono font-bold">{r.code}</td><td className="p-3 min-w-40">{r.product}</td><td className="p-3">{r.orderCount}</td><td className="p-3">{r.qty}</td><td className="p-3">{money(r.revenue)}</td><td className="p-3 font-bold">{money(r.received)}</td><td className="p-3">{money(r.cogs)}</td><td className="p-3">{money(r.delivery)}</td><td className="p-3">{money(r.adSpend)}</td><td className="p-3">{money(r.totalCost)}</td><td className="p-3">{r.results}</td><td className="p-3">{r.avgCpr?money(r.avgCpr):'-'}</td><td className="p-3 font-bold">{money(r.contribution)}</td><td className={`p-3 font-black ${r.realProfit>=0?'text-green-700':'text-red-600'}`}>{money(r.realProfit)}</td></tr>)}</tbody></table></div></div>
+ </div>;
 };
