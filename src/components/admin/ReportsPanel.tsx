@@ -9,6 +9,14 @@ const emptyMapping: Mapping = { date: '', code: '', amount: '', cpr: '', results
 const token = () => localStorage.getItem('ora_staff_session_token') || '';
 const headers = () => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` });
 const dayKey = (value: Date) => `${value.getFullYear()}-${String(value.getMonth()+1).padStart(2,'0')}-${String(value.getDate()).padStart(2,'0')}`;
+const extractCampaignCode = (value: unknown) => {
+  const text = String(value || '').trim().toUpperCase();
+  if (!text) return 'UNMAPPED';
+  const combo = text.match(/\bCB-R\d+(?:-R\d+)+\b/i)?.[0];
+  if (combo) return combo.toUpperCase();
+  const code = text.match(/\bR\d{3,}\b/i)?.[0];
+  return code ? code.toUpperCase() : text;
+};
 const dateInside = (iso: string | undefined, from: string, to: string) => {
   if (!iso) return false;
   const key = dayKey(new Date(iso));
@@ -58,7 +66,7 @@ export const ReportsPanel: React.FC = () => {
     setCsvHeaders(parsed.headers); setCsvRows(parsed.rows);
     setMapping({
       date: autoMapHeader(parsed.headers, ['date','day','reporting starts','reporting start']),
-      code: autoMapHeader(parsed.headers, ['item code','product code','sku','code','ad name']),
+      code: autoMapHeader(parsed.headers, ['item code','product code','sku','code','ad name','campaign name','campaign']),
       amount: autoMapHeader(parsed.headers, ['amount spent','spend','amount']),
       cpr: autoMapHeader(parsed.headers, ['cost per result','cost/result','cpr']),
       results: autoMapHeader(parsed.headers, ['results','result','purchases','leads']),
@@ -73,7 +81,7 @@ export const ReportsPanel: React.FC = () => {
       return {
         id: `${Date.now()}-${index}`,
         date: parsedDate ? dayKey(new Date(parsedDate)) : '',
-        code: mapping.code ? String(row[mapping.code] || '').trim().toUpperCase() : 'UNMAPPED',
+        code: mapping.code ? extractCampaignCode(row[mapping.code]) : 'UNMAPPED',
         amount_spent: toNumber(row[mapping.amount]),
         cost_per_result: mapping.cpr ? toNumber(row[mapping.cpr]) : 0,
         results: mapping.results ? toNumber(row[mapping.results]) : 0,
