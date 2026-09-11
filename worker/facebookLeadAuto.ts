@@ -610,7 +610,6 @@ const processLead = async (
               } : item),
               is_synced_google_sheets: false,
               synced_at: undefined,
-              sheet_sync_verified_at: undefined,
             };
             const saved = await callOrderSave(baseWorker, request, env, ctx, repaired);
             await appendLog(runtime, {
