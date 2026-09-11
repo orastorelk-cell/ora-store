@@ -86,15 +86,26 @@ const formsForPage = async (env: Env, pageId: string): Promise<KnownForm[]> => {
     .filter((form: KnownForm) => Boolean(form.id));
 };
 
-const leadExists = async (env: Env, leadId: string) => {
+const readLeadOrder = async (env: Env, leadId: string) => {
   const runtime = db(env);
   const url = new URL(`${runtime.url}/rest/v1/order_snapshots`);
-  url.searchParams.set('select', 'order_number');
+  url.searchParams.set('select', 'payload');
   url.searchParams.set('payload->>platform_lead_id', `eq.${leadId}`);
   url.searchParams.set('limit', '1');
   const response = await fetch(url, { headers: dbHeaders(runtime.key) });
   const rows: any[] = await response.json().catch(() => []);
-  return response.ok && rows.length > 0;
+  return response.ok ? (rows?.[0]?.payload || null) : null;
+};
+
+const needsExistingComboVariantRepair = (order: any) => {
+  const item = Array.isArray(order?.items) ? order.items[0] : null;
+  return Boolean(
+    order &&
+    order.call_center_status === 'Pending' &&
+    order.order_status !== 'Cancelled' &&
+    item?.product_type === 'bundle' &&
+    !String(item?.variant_name || '').trim()
+  );
 };
 
 const processCandidate = async (candidate: Candidate, pageId: string, envValue: unknown, baseWorker: BaseWorker) => {
@@ -189,10 +200,14 @@ const run = async (baseWorker: BaseWorker, envValue: unknown) => {
         if (index >= candidates.length) return;
         const candidate = candidates[index];
         try {
-          if (await leadExists(env, candidate.id)) continue;
+          const existing = await readLeadOrder(env, candidate.id);
+          if (existing && !needsExistingComboVariantRepair(existing)) continue;
           await processCandidate(candidate, pageId, envValue, baseWorker);
-          if (await leadExists(env, candidate.id)) summary.orders_created += 1;
-          else {
+          const after = await readLeadOrder(env, candidate.id);
+          if (!existing && after) summary.orders_created += 1;
+          else if (existing && after && !needsExistingComboVariantRepair(after)) {
+            // Existing pending combo was repaired from its original Meta answer.
+          } else if (!after) {
             summary.failed += 1;
             summary.errors.push(`Lead ${candidate.id}: no order was created.`);
           }
