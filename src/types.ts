@@ -44,6 +44,8 @@ export interface ProductVariant {
   image?: string;
   buying_price: number;
   selling_price: number;
+  /** One-time delivery-price migration marker, e.g. 250 means Rs.250 has already been shifted into this saved item price/cost. */
+  delivery_price_shift_applied?: number;
   discount_price?: number;
   discount_enabled?: boolean;
   /** Optional cheaper supplier cost used only while the saved special offer is active. */
@@ -362,6 +364,12 @@ export interface HeroBannerSlide {
 
 export interface StoreSettings {
   delivery_fee: number;
+  /** Move part of the old delivery charge into item pricing while preserving the final order total. */
+  delivery_price_rebalance_enabled?: boolean;
+  /** Amount moved from delivery into item pricing for one order (Rs.). */
+  delivery_price_rebalance_amount?: number;
+  /** Delivery fee before the rebalance; used for audit/reference only. */
+  delivery_price_rebalance_original_fee?: number;
   free_delivery_enabled?: boolean;
   multi_buy_discount_enabled?: boolean;
   multi_buy_tier1_min?: number;
