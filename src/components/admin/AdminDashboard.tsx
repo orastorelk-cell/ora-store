@@ -2994,7 +2994,6 @@ Suitable For:
       { id:'invoices', label:`Invoices (${orders.filter((o)=>o.invoice_locked).length})`, icon:ReceiptText },
       { id:'invoice_design', label:'Invoice Design', icon:Printer },
       { id:'reports', label:'Reports', icon:BarChart3 },
-      { id:'success_rate', label:'Success Rate', icon:Trophy },
       { id:'sheets', label:`Google Sheets Sync (${unsyncedOrders.length} New)`, icon:FileSpreadsheet },
     ]},
     { id:'SYSTEM', label:'SYSTEM', items:[
@@ -3189,6 +3188,15 @@ Suitable For:
               >
                 <span className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${activeTab==='overview'?'bg-orange-500/15':'bg-gray-100'}`}><LayoutDashboard className={`w-4 h-4 ${activeTab==='overview'?'text-orange-400':'text-gray-500'}`}/></span>
                 <span>Dashboard</span>
+              </button>}
+
+              {canAccessTab('success_rate') && <button
+                type="button"
+                onClick={()=>openSidebarTab('success_rate')}
+                className={`w-full rounded-xl px-3 py-2.5 text-left text-xs font-bold transition-all flex items-center gap-3 ${activeTab==='success_rate'?'bg-black text-white shadow-sm':'text-gray-600 hover:bg-orange-50 hover:text-orange-800'}`}
+              >
+                <span className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${activeTab==='success_rate'?'bg-orange-500/15':'bg-gray-100'}`}><Trophy className={`w-4 h-4 ${activeTab==='success_rate'?'text-orange-400':'text-gray-500'}`}/></span>
+                <span>Success Rate</span>
               </button>}
 
               {sidebarGroups.map((group)=>{
