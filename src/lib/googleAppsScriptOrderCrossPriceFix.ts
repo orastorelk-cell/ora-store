@@ -218,6 +218,26 @@ oraRecalcOrder_ = function(sh, orderId) {
   var normalTotal = 0;
   var totalQty = 0;
 
+  // Preserve the historical crossed/reference price when one old order quantity
+  // is split into multiple colors/variants of the SAME main product. If the new
+  // variant has the same actual customer price as the old variant, reuse the
+  // order's saved reference instead of pulling today's newer catalog offer.
+  var historicalByMain = {};
+  for (var s = 0; s < rows.length; s++) {
+    var seedVals = rows[s].values;
+    var seedCode = hm['Item Code'] ? seedVals[hm['Item Code'] - 1] : '';
+    var seedMain = hm['Main Code'] ? seedVals[hm['Main Code'] - 1] : seedCode;
+    var seedVariant = hm['Variant / Color'] ? seedVals[hm['Variant / Color'] - 1] : '';
+    var seedKey = oraOrderPricingKey_(seedCode || seedMain, seedVariant);
+    var seedPlainKey = oraOrderPricingKey_(seedCode || seedMain, '');
+    var seedActual = Math.max(0, oraNum_(actualPrices[seedKey] || actualPrices[seedPlainKey]));
+    var seedReference = Math.max(0, oraNum_(referencePrices[seedKey] || referencePrices[seedPlainKey]));
+    var seedMainKey = oraKey_(seedMain);
+    if (seedMainKey && seedActual > 0 && seedReference >= seedActual && !historicalByMain[seedMainKey]) {
+      historicalByMain[seedMainKey] = { actual:seedActual, reference:seedReference };
+    }
+  }
+
   for (var r = 0; r < rows.length; r++) {
     var row = rows[r];
     var vals = row.values;
@@ -231,7 +251,16 @@ oraRecalcOrder_ = function(sh, orderId) {
     var actual = Math.max(0, oraNum_(actualPrices[key]));
     if (!(actual > 0)) actual = cat && cat.actual > 0 ? cat.actual : currentUnit;
     var reference = Math.max(0, oraNum_(referencePrices[key]));
-    if (!(reference > 0)) reference = cat && cat.reference > 0 ? cat.reference : currentUnit;
+    if (!(reference > 0)) {
+      var sameMainSnapshot = historicalByMain[oraKey_(main)];
+      var catalogActual = cat && cat.actual > 0 ? cat.actual : actual;
+      var sameActualPrice = sameMainSnapshot
+        && sameMainSnapshot.actual > 0
+        && Math.abs(sameMainSnapshot.actual - catalogActual) < 0.01;
+      reference = sameActualPrice && sameMainSnapshot.reference > 0
+        ? sameMainSnapshot.reference
+        : (cat && cat.reference > 0 ? cat.reference : currentUnit);
+    }
     reference = Math.max(actual, reference);
     actualPrices[key] = actual;
     referencePrices[key] = reference;
