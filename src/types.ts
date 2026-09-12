@@ -252,6 +252,20 @@ export interface Order {
   cod_payment_reference?: string;
   courier_name?: string;
   waybill_number?: string;
+  waybill_reassigned_from?: string;
+  waybill_reassigned_at?: string;
+  waybill_reassigned_reason?: string;
+  waybill_protection_locked?: boolean;
+  waybill_protection_reason?: string;
+  waybill_history?: Array<{
+    old_waybill: string;
+    new_waybill: string;
+    reason: string;
+    changed_at: string;
+    changed_by?: string;
+    previous_fardar_exported_at?: string;
+    previous_fardar_exported_waybill?: string;
+  }>;
   tracking_status?: string;
   delivery_status?: string;
   shipment_mode?: CourierShipmentMode;
