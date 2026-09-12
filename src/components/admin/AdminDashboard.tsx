@@ -252,6 +252,7 @@ export const AdminDashboard: React.FC = () => {
   const [isDeleteOrderOpen, setIsDeleteOrderOpen] = useState(false);
   const [deleteOrderReason, setDeleteOrderReason] = useState('');
   const [deleteOrderBusy, setDeleteOrderBusy] = useState(false);
+  const [orderTimelineOpenId, setOrderTimelineOpenId] = useState('');
   const [copiedScript, setCopiedScript] = useState(false);
   const [selectedLeadItemCode, setSelectedLeadItemCode] = useState(products[0]?.sku || '');
   const [uploadBatches, setUploadBatches] = useState<Record<'Website'|'Facebook'|'TikTok', {
@@ -267,6 +268,62 @@ export const AdminDashboard: React.FC = () => {
     TikTok: { orderNumbers: [], uploaded: 0, failed: 0, ignored: 0, errors: [] },
   });
 
+  const buildOrderTimeline = (order: Order) => {
+    type TimelineEvent = { id:string; at:string; title:string; detail?:string; kind:'created'|'call'|'stock'|'waybill'|'invoice'|'fardar'|'dispatch'|'payment'|'return'|'change'|'cancel' };
+    const events: TimelineEvent[] = [];
+    const seen = new Set<string>();
+    const add = (at: unknown, title: string, detail: string | undefined, kind: TimelineEvent['kind'], id?: string) => {
+      const time=String(at || '').trim();
+      if(!time) return;
+      const stamp=new Date(time);
+      if(Number.isNaN(stamp.getTime())) return;
+      const key=id || (time+'|'+title+'|'+String(detail || ''));
+      if(seen.has(key)) return;
+      seen.add(key);
+      events.push({id:key,at:time,title,detail,kind});
+    };
+
+    add(order.created_at,'Order Created',`${order.order_source || 'Website'} • ${order.customer_name}`,'created','created');
+    if(order.lead_imported_at && order.lead_imported_at!==order.created_at) add(order.lead_imported_at,'Lead Imported',order.platform_lead_id ? `Lead ID: ${order.platform_lead_id}` : undefined,'created','lead-imported');
+    if(order.call_center_updated_at) add(order.call_center_updated_at,`Call Center ${order.call_center_status || 'Updated'}`,order.cancel_reason || undefined,'call','call-center');
+
+    (order.product_change_history || []).forEach((row,index)=>{
+      const before=(row.old_items || []).map(it=>`${it.sku} × ${it.quantity}`).join(', ');
+      const after=(row.new_items || []).map(it=>`${it.sku} × ${it.quantity}`).join(', ');
+      add(row.changed_at,'Order Items Changed',`${before || '—'} → ${after || '—'}${row.reason ? ` • ${row.reason}` : ''} • ${row.changed_by}`,'change','product-change-'+index+'-'+row.changed_at);
+    });
+
+    if(order.stock_allocated_at) add(order.stock_allocated_at,'Stock Allocated',order.stock_allocated_by || 'System FIFO Allocator','stock','stock-allocated');
+    stockHistory
+      .filter(row=>String(row.reason || '').toLowerCase().includes(String(order.order_number || '').toLowerCase()))
+      .forEach((row,index)=>add(row.created_at,'Stock Deducted',`${row.product_name} • ${row.previous_stock} → ${row.new_stock} (−${Math.abs(Number(row.quantity || 0))}) • ${row.performed_by || 'System'}`,'stock','stock-history-'+row.id+'-'+index));
+
+    const currentWaybillRecord=waybillRecords.find(w=>String(w.waybill_number || '').trim()===String(order.waybill_number || '').trim());
+    if(currentWaybillRecord?.assigned_at && order.waybill_number) add(currentWaybillRecord.assigned_at,'Waybill Assigned',`${order.waybill_number} • ${order.courier_name || currentWaybillRecord.courier_name || 'Fardar'}`,'waybill','current-waybill-assigned');
+
+    (order.waybill_history || []).forEach((row,index)=>{
+      add(row.changed_at,'Waybill Changed / Re-Dispatch',`${row.old_waybill} → ${row.new_waybill} • ${row.reason}${row.changed_by ? ` • ${row.changed_by}` : ''}`,'waybill','waybill-history-'+index+'-'+row.changed_at);
+    });
+    if(order.waybill_reassigned_at && !(order.waybill_history || []).some(row=>row.changed_at===order.waybill_reassigned_at)){
+      add(order.waybill_reassigned_at,'Waybill Changed',`${order.waybill_reassigned_from || 'Previous'} → ${order.waybill_number || 'New'}${order.waybill_reassigned_reason ? ` • ${order.waybill_reassigned_reason}` : ''}`,'waybill','legacy-waybill-change');
+    }
+
+    if(order.invoice_generated_at) add(order.invoice_generated_at,'Invoice Generated & Locked',`${order.invoice_number || ''}${order.invoice_generated_by ? ` • ${order.invoice_generated_by}` : ''}`,'invoice','invoice-generated');
+    if(order.invoice_pack_downloaded_at) add(order.invoice_pack_downloaded_at,'Packing Invoice Downloaded',order.invoice_pack_downloaded_by || undefined,'invoice','invoice-downloaded');
+    if(order.fardar_csv_exported_at) add(order.fardar_csv_exported_at,'Fardar Upload CSV Exported',`${order.fardar_csv_exported_waybill || order.waybill_number || ''}${order.fardar_csv_exported_by ? ` • ${order.fardar_csv_exported_by}` : ''}`,'fardar','fardar-export');
+    if(order.dispatch_scanned_at) add(order.dispatch_scanned_at,'Parcel Handed Over',`${order.waybill_number || ''}${order.dispatch_scanned_by ? ` • ${order.dispatch_scanned_by}` : ''}`,'dispatch','dispatch-scan');
+
+    (order.fardar_tracking_history || []).forEach((row,index)=>{
+      add(row.at,`Fardar: ${row.status}`,row.note || undefined,'fardar','fardar-track-'+index+'-'+row.at);
+    });
+
+    if(order.payment_reviewed_at) add(order.payment_reviewed_at,`Payment ${order.payment_verification_status || 'Reviewed'}`,order.payment_reviewed_by || undefined,'payment','payment-reviewed');
+    if(order.cod_payment_received_at) add(order.cod_payment_received_at,'COD Payment Received',`Rs. ${Number(order.cod_payment_amount || 0).toLocaleString()}${order.cod_payment_source ? ` • ${order.cod_payment_source}` : ''}`,'payment','cod-received');
+    if(order.return_received_at) add(order.return_received_at,`Return ${order.return_status || 'Received'}`,order.return_checked_by || undefined,'return','return-received');
+    if(order.cancelled_at) add(order.cancelled_at,'Order Cancelled',`${order.cancel_reason || ''}${order.cancelled_by ? ` • ${order.cancelled_by}` : ''}`,'cancel','cancelled');
+
+    return events.sort((a,b)=>new Date(a.at).getTime()-new Date(b.at).getTime());
+  };
   // Branding changes stay as a draft until the admin explicitly saves them.
   // This prevents color-picker/input events from flooding the audit log.
   const [brandingDraft, setBrandingDraft] = useState<any>({});
@@ -4238,6 +4295,16 @@ Suitable For:
                       {order.order_status}
                     </span>
 
+                    <button
+                      type="button"
+                      onClick={()=>setOrderTimelineOpenId(prev=>prev===order.id?'':order.id)}
+                      className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[10px] font-black ${orderTimelineOpenId===order.id?'border-orange-400/50 bg-orange-500/20 text-orange-200':'border-neutral-700 bg-neutral-950 text-neutral-300 hover:border-orange-500/40 hover:text-orange-300'}`}
+                      title="View complete order history"
+                    >
+                      <History className="h-3 w-3"/>
+                      {orderTimelineOpenId===order.id?'Hide History Map':'View History Map'}
+                    </button>
+
                     {order.order_status !== 'Cancelled' && (
                       <button
                         type="button"
@@ -4369,6 +4436,38 @@ Suitable For:
                   </div>
                 </div>
 
+                {orderTimelineOpenId===order.id && (()=>{
+                  const timeline=buildOrderTimeline(order);
+                  const dotClass=(kind:string)=>kind==='stock'?'bg-emerald-400 border-emerald-200':kind==='waybill'?'bg-blue-400 border-blue-200':kind==='invoice'?'bg-violet-400 border-violet-200':kind==='fardar'?'bg-cyan-400 border-cyan-200':kind==='dispatch'?'bg-orange-400 border-orange-200':kind==='payment'?'bg-lime-400 border-lime-200':kind==='return'?'bg-amber-400 border-amber-200':kind==='cancel'?'bg-red-400 border-red-200':kind==='change'?'bg-fuchsia-400 border-fuchsia-200':'bg-neutral-300 border-white';
+                  return <div className="rounded-2xl border border-orange-500/25 bg-neutral-950/70 p-4">
+                    <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="flex items-center gap-2 text-sm font-black text-white"><History className="h-4 w-4 text-orange-400"/> Order History Map</p>
+                        <p className="mt-1 text-[10px] text-neutral-500">{order.order_number} • {timeline.length} recorded event{timeline.length===1?'':'s'} • oldest → newest</p>
+                      </div>
+                      <div className="rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-right text-[10px] text-neutral-400">
+                        <div>Current Status: <b className="text-white">{order.order_status}</b></div>
+                        {order.waybill_number && <div>Current Waybill: <b className="font-mono text-blue-300">{order.waybill_number}</b></div>}
+                      </div>
+                    </div>
+                    <div className="relative ml-2">
+                      <div className="absolute bottom-3 left-[7px] top-3 w-px bg-neutral-700"/>
+                      <div className="space-y-0">
+                        {timeline.map((event,index)=><div key={event.id} className="relative flex gap-4 pb-5 last:pb-0">
+                          <div className={`relative z-10 mt-1 h-[15px] w-[15px] shrink-0 rounded-full border-2 shadow-[0_0_0_4px_rgba(23,23,23,1)] ${dotClass(event.kind)}`}/>
+                          <div className="min-w-0 flex-1 rounded-xl border border-neutral-800 bg-neutral-900/80 px-3 py-2.5">
+                            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                              <p className="text-[11px] font-black text-white">{event.title}</p>
+                              <p className="whitespace-nowrap font-mono text-[9px] text-neutral-500">{new Date(event.at).toLocaleString()}</p>
+                            </div>
+                            {event.detail && <p className="mt-1 break-words text-[10px] leading-4 text-neutral-400">{event.detail}</p>}
+                            {index===timeline.length-1 && <span className="mt-1.5 inline-block rounded-full bg-orange-500/10 px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-orange-300">Latest</span>}
+                          </div>
+                        </div>)}
+                      </div>
+                    </div>
+                  </div>;
+                })()}
                 {order.payment_method === 'Bank Payment' && order.bank_receipt_url && (
                   <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-3 text-xs space-y-3">
                     <div className="flex flex-col sm:flex-row gap-3">
