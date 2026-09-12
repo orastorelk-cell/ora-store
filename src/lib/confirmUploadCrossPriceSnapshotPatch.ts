@@ -92,16 +92,18 @@ export const confirmUploadCrossPriceSnapshotPatch = () => ({
         }else{`;
       text = replaceRequired(text, existingOld, existingNew, 'historical existing item snapshot');
 
-      const historicalOld = String.raw`              const historicalReference=Math.max(
-                freshUnit,
+      const historicalOld = String.raw`              const historicalActual=Math.max(0,Number(historicalSibling.unit_price||0)) || freshUnit;
+              const historicalReference=Math.max(
+                historicalActual,
                 Number(historicalSibling.regular_unit_price||0),
-                freshUnit+Number(historicalSibling.supplier_offer_discount_per_unit||0)
+                historicalActual+Number(historicalSibling.supplier_offer_discount_per_unit||0)
               );`;
-      const historicalNew = String.raw`              const historicalReference=Math.max(
-                freshUnit,
+      const historicalNew = String.raw`              const historicalActual=Math.max(0,Number(historicalSibling.unit_price||0)) || freshUnit;
+              const historicalReference=Math.max(
+                historicalActual,
                 sheetReferenceUnit,
                 Number(historicalSibling.regular_unit_price||0),
-                freshUnit+Number(historicalSibling.supplier_offer_discount_per_unit||0)
+                historicalActual+Number(historicalSibling.supplier_offer_discount_per_unit||0)
               );`;
       text = replaceRequired(text, historicalOld, historicalNew, 'historical sibling reference');
 
