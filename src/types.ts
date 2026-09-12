@@ -560,6 +560,7 @@ export type AdminPermission =
   | 'assistant_chats'
   | 'complaints'
   | 'reports'
+  | 'success_rate'
   | 'reviews'
   | 'product_requests'
   | 'sheets'
