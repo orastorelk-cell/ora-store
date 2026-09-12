@@ -106,6 +106,7 @@ import { compressImageFile, uploadPublicImage, uploadRawImageFile } from '../../
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 import { createProductBackup, PRODUCT_BACKUP_MAX_BYTES, validateProductBackup } from '../../lib/productBackup';
 import { downloadProductFoldersZip } from '../../lib/productFolderZip';
+import { calculateRoundSpecialOffer, roundSpecialOfferEnabledForProduct, roundSpecialOfferPercentForSelection } from '../../lib/roundSpecialOffer';
 
 const ITEM_DETAIL_PRESETS: Array<{ label_en: string; label_si: string }> = [
   { label_en: 'Model', label_si: 'මාදිලිය' },
@@ -217,7 +218,7 @@ export const AdminDashboard: React.FC = () => {
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'add_product' | 'combo_packs' | 'supplier_offer' | 'products' | 'categories' | 'banners' | 'notifications' | 'stock' | 'orders' | 'out_of_stock' | 'packing_expenses' | 'returns' | 'lead_import' | 'confirm_upload' | 'invoices' | 'packing' | 'invoice_design' | 'delivery' | 'dispatch' | 'cod_payments' | 'bank_transfer_check' | 'assistant_chats' | 'complaints' | 'reports' | 'success_rate' | 'reviews' | 'product_requests' | 'customers' | 'sheets' | 'activity' | 'branding' | 'website_info' | 'settings' | 'user_access' | 'deploy'
+    'overview' | 'add_product' | 'combo_packs' | 'supplier_offer' | 'price_increase' | 'products' | 'categories' | 'banners' | 'notifications' | 'stock' | 'orders' | 'out_of_stock' | 'packing_expenses' | 'returns' | 'lead_import' | 'confirm_upload' | 'invoices' | 'packing' | 'invoice_design' | 'delivery' | 'dispatch' | 'cod_payments' | 'bank_transfer_check' | 'assistant_chats' | 'complaints' | 'reports' | 'success_rate' | 'reviews' | 'product_requests' | 'customers' | 'sheets' | 'activity' | 'branding' | 'website_info' | 'settings' | 'user_access' | 'deploy'
   >('overview');
   const [comboEditProductId, setComboEditProductId] = useState<string | undefined>(undefined);
   const [packingSearch, setPackingSearch] = useState('');
@@ -694,6 +695,10 @@ export const AdminDashboard: React.FC = () => {
   const [supplierVariantId, setSupplierVariantId] = useState('');
   const [supplierNewCost, setSupplierNewCost] = useState<number>(0);
   const [supplierMessage, setSupplierMessage] = useState('');
+  const [priceIncreaseProductId, setPriceIncreaseProductId] = useState('');
+  const [priceIncreaseVariantId, setPriceIncreaseVariantId] = useState('');
+  const [priceIncreaseNewCost, setPriceIncreaseNewCost] = useState<number>(0);
+  const [priceIncreaseMessage, setPriceIncreaseMessage] = useState('');
 
   const autoDeliveryReserve = Math.max(0, Number(settings.delivery_price_rebalance_amount ?? settings.delivery_fee ?? 0));
   const profitForBuyingPrice = (buyingPrice: number, alreadyApplied = 0) =>
@@ -2800,6 +2805,71 @@ Suitable For:
 
   const lastSeenOrderAt = Number(localStorage.getItem('ora_admin_last_seen_order_at') || 0);
   const newOrdersCount = orders.filter(o => new Date(o.created_at).getTime() > lastSeenOrderAt).length;
+  const priceIncreaseProduct = products.find((p) => p.id === priceIncreaseProductId);
+  const priceIncreaseVariant = priceIncreaseProduct && priceIncreaseVariantId ? variantById(priceIncreaseProduct, priceIncreaseVariantId) : undefined;
+  const priceIncreaseTarget = priceIncreaseVariant || priceIncreaseProduct;
+  const priceIncreaseCurrentBuying = Math.max(0, Number(priceIncreaseTarget?.buying_price || 0));
+  const priceIncreaseCurrentSelling = Math.max(0, Number(priceIncreaseTarget?.selling_price || 0));
+  const priceIncreasePreviewSelling = priceIncreaseTarget && priceIncreaseNewCost > 0
+    ? Math.round((priceIncreaseNewCost + oraProfitForBuyingPrice(priceIncreaseNewCost) + autoDeliveryReserve) * 100) / 100
+    : 0;
+  const priceIncreaseOfferPercent = priceIncreaseProduct
+    ? roundSpecialOfferPercentForSelection(priceIncreaseProduct, priceIncreaseVariant)
+    : 0;
+  const priceIncreaseCrossPreview = priceIncreaseProduct && priceIncreasePreviewSelling > 0
+    ? calculateRoundSpecialOffer({
+        currentPrice: priceIncreasePreviewSelling,
+        enabled: roundSpecialOfferEnabledForProduct(priceIncreaseProduct),
+        percent: priceIncreaseOfferPercent,
+        hasExistingDiscount: false,
+      })
+    : null;
+
+  const saveFuturePriceIncrease = () => {
+    if (!priceIncreaseProduct || !priceIncreaseTarget) { setPriceIncreaseMessage('Select a product first.'); return; }
+    if (normalizedProductType(priceIncreaseProduct)==='variant' && !priceIncreaseVariant) { setPriceIncreaseMessage('Select the exact color / variant first.'); return; }
+    const newCost=Math.max(0,Number(priceIncreaseNewCost||0));
+    if (!(newCost > priceIncreaseCurrentBuying)) {
+      setPriceIncreaseMessage('PRICE INCREASE is only for a higher buying cost. For a lower supplier cost use SUPPLIER PRICE / OFFER.');
+      return;
+    }
+    const now=new Date().toISOString();
+    const newSelling=Math.round((newCost + oraProfitForBuyingPrice(newCost) + autoDeliveryReserve)*100)/100;
+    const applyIncrease=(target:Product|ProductVariant):Product|ProductVariant=>({
+      ...target,
+      buying_price:newCost,
+      selling_price:newSelling,
+      discount_price:newSelling,
+      discount_enabled:false,
+      offer_buying_price:undefined,
+      supplier_offer_enabled:false,
+      supplier_offer_saved_at:undefined,
+      auto_price_enabled:true,
+      delivery_price_shift_applied:autoDeliveryReserve,
+      price_history:[...(target.price_history||[]),{
+        changed_at:now,
+        reason:`Future price increase only: buying Rs. ${Number(target.buying_price||0)} -> Rs. ${newCost}; selling Rs. ${Number(target.selling_price||0)} -> Rs. ${newSelling}. Historical orders/invoices stay unchanged.`,
+        buying_price:newCost,
+        selling_price:newSelling,
+        discount_price:newSelling,
+        discount_enabled:false,
+      }].slice(-50),
+    });
+
+    if(priceIncreaseVariant){
+      updateProduct({
+        ...priceIncreaseProduct,
+        variants:(priceIncreaseProduct.variants||[]).map(v=>v.id===priceIncreaseVariant.id ? applyIncrease(v) as ProductVariant : v),
+      });
+    }else{
+      updateProduct(applyIncrease(priceIncreaseProduct) as Product);
+    }
+
+    setPriceIncreaseMessage(
+      `Saved for FUTURE orders only. Buying: Rs. ${priceIncreaseCurrentBuying.toLocaleString()} → Rs. ${newCost.toLocaleString()} • Customer item price: Rs. ${priceIncreaseCurrentSelling.toLocaleString()} → Rs. ${newSelling.toLocaleString()}. Old system orders, old invoices and old Sheet order prices were not rewritten.`
+    );
+  };
+
   const supplierProduct = products.find((p) => p.id === supplierProductId);
   const supplierVariant = supplierProduct && supplierVariantId ? variantById(supplierProduct, supplierVariantId) : undefined;
   const supplierTarget = supplierVariant || supplierProduct;
@@ -3002,9 +3072,9 @@ Suitable For:
     staff: 'Custom Access Staff',
   };
 
-  const allPermissionIds: AdminPermission[] = ['overview','add_product','combo_packs','supplier_offer','products','orders','lead_import','confirm_upload','packing','delivery','dispatch','returns','cod_payments','bank_transfer_check','stock','out_of_stock','packing_expenses','categories','banners','reviews','product_requests','assistant_chats','complaints','notifications','customers','invoices','invoice_design','reports','success_rate','sheets','activity','branding','website_info','settings','user_access','deploy'];
+  const allPermissionIds: AdminPermission[] = ['overview','add_product','combo_packs','supplier_offer','price_increase','products','orders','lead_import','confirm_upload','packing','delivery','dispatch','returns','cod_payments','bank_transfer_check','stock','out_of_stock','packing_expenses','categories','banners','reviews','product_requests','assistant_chats','complaints','notifications','customers','invoices','invoice_design','reports','success_rate','sheets','activity','branding','website_info','settings','user_access','deploy'];
   const permissionLabels: Record<AdminPermission, string> = {
-    overview: 'Dashboard', add_product:'Add Product', combo_packs:'Combo Packs', supplier_offer:'Supplier Price / Offer', products: 'Products', stock: 'Inventory & Stock', orders: 'Orders', out_of_stock: 'Out of Stock Needs', packing_expenses: 'Packing Materials Expenses', returns: 'Returns Verification', lead_import: 'FB / TikTok Lead Import', confirm_upload: 'Confirm / Cancel Upload', invoices: 'Invoices', packing: 'Packing Invoice Downloads', invoice_design: 'Invoice Design', delivery: 'Delivery & Waybills', dispatch: 'Dispatch Scan', cod_payments: 'COD Payments', bank_transfer_check: 'Bank Transfer Check', assistant_chats: 'Assistant Chats', complaints: 'Complaints', notifications:'Customer Notifications', reports: 'Reports', success_rate: 'Success Rate', reviews: 'Product Reviews', product_requests: 'Product Requests', sheets: 'Google Sheets Sync', customers: 'Customers', categories: 'Categories', banners:'Banners', activity: 'Activity Log', branding: 'Branding & Logo Studio', website_info: 'Website Info & Policies', settings: 'Store Settings', deploy: 'Deployment Guide', user_access: 'System Access'
+    overview: 'Dashboard', add_product:'Add Product', combo_packs:'Combo Packs', supplier_offer:'Supplier Price / Offer', price_increase:'Price Increase', products: 'Products', stock: 'Inventory & Stock', orders: 'Orders', out_of_stock: 'Out of Stock Needs', packing_expenses: 'Packing Materials Expenses', returns: 'Returns Verification', lead_import: 'FB / TikTok Lead Import', confirm_upload: 'Confirm / Cancel Upload', invoices: 'Invoices', packing: 'Packing Invoice Downloads', invoice_design: 'Invoice Design', delivery: 'Delivery & Waybills', dispatch: 'Dispatch Scan', cod_payments: 'COD Payments', bank_transfer_check: 'Bank Transfer Check', assistant_chats: 'Assistant Chats', complaints: 'Complaints', notifications:'Customer Notifications', reports: 'Reports', success_rate: 'Success Rate', reviews: 'Product Reviews', product_requests: 'Product Requests', sheets: 'Google Sheets Sync', customers: 'Customers', categories: 'Categories', banners:'Banners', activity: 'Activity Log', branding: 'Branding & Logo Studio', website_info: 'Website Info & Policies', settings: 'Store Settings', deploy: 'Deployment Guide', user_access: 'System Access'
   };
   type StaffAccessLevel = 'none' | 'view' | 'edit';
   const currentRole = adminUser?.role || 'staff';
@@ -3054,6 +3124,7 @@ Suitable For:
       { id:'add_product', label:'ADD PRODUCT', icon:PlusCircle },
       { id:'combo_packs', label:`COMBO PACKS (${products.filter((p)=>normalizedProductType(p)==='bundle').length})`, icon:Boxes },
       { id:'supplier_offer', label:'SUPPLIER PRICE / OFFER', icon:Tag },
+      { id:'price_increase', label:'PRICE INCREASE', icon:TrendingUp },
       { id:'products', label:`Products (${products.length})`, icon:Package },
     ]},
     { id:'ORDERS', label:'ORDERS', items:[
@@ -3116,6 +3187,13 @@ Suitable For:
       setSupplierNewCost(Number(first?.offer_buying_price || first?.buying_price || 0));
       setSupplierMessage('');
       setActiveTab('supplier_offer');
+    } else if (tabId === 'price_increase') {
+      const first = products.find((p)=>p.status!=='Draft' && normalizedProductType(p)!=='bundle');
+      setPriceIncreaseProductId((prev)=>prev || first?.id || '');
+      setPriceIncreaseVariantId('');
+      setPriceIncreaseNewCost(Number(first?.buying_price || 0));
+      setPriceIncreaseMessage('');
+      setActiveTab('price_increase');
     } else setActiveTab(tabId as any);
     setIsSidebarOpen(false);
   };
@@ -6563,6 +6641,102 @@ Suitable For:
                 <li>Set build variables <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_PUBLISHABLE_KEY</code>, then add server secrets such as <code>SUPABASE_SECRET_KEY</code> in Worker settings.</li>
                 <li>Use <code>npm run build</code> as the build command and <code>npx wrangler@latest deploy</code> as the deploy command.</li>
               </ol>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Future-only Price Increase Workspace */}
+      {activeTab === 'price_increase' && canAccessTab('price_increase') && (
+        <div className="space-y-4">
+          <div className="rounded-3xl border border-red-200 bg-white p-5 shadow-sm">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-red-600">Future Price Control</p>
+                <h2 className="mt-1 text-xl font-black text-gray-900">Price Increase</h2>
+                <p className="mt-1 max-w-3xl text-xs leading-5 text-gray-500">Use this only when the supplier buying cost goes UP. The new buying/selling price starts from future orders. Existing orders, invoices and old Google Sheet order rows keep their saved historical prices.</p>
+              </div>
+              <div className="rounded-xl bg-gray-900 px-3 py-2 text-[10px] font-bold text-white">Historical orders stay frozen</div>
+            </div>
+
+            <div className="mt-5 grid gap-4 xl:grid-cols-[1.05fr_.95fr]">
+              <div className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="text-xs font-bold text-gray-700">Product / Main Code
+                    <select value={priceIncreaseProductId} onChange={(e)=>{
+                      const id=e.target.value;
+                      const p=products.find(x=>x.id===id);
+                      setPriceIncreaseProductId(id);
+                      setPriceIncreaseVariantId('');
+                      setPriceIncreaseNewCost(Number(p?.buying_price||0));
+                      setPriceIncreaseMessage('');
+                    }} className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900">
+                      <option value="">Select product...</option>
+                      {products.filter(p=>p.status!=='Draft' && normalizedProductType(p)!=='bundle').map(p=><option key={p.id} value={p.id}>{p.sku} • {p.name_en}</option>)}
+                    </select>
+                  </label>
+
+                  <label className="text-xs font-bold text-gray-700">Exact Color / Variant
+                    <select disabled={!priceIncreaseProduct || normalizedProductType(priceIncreaseProduct)!=='variant'} value={priceIncreaseVariantId} onChange={(e)=>{
+                      const id=e.target.value;
+                      const v=priceIncreaseProduct ? variantById(priceIncreaseProduct,id) : undefined;
+                      setPriceIncreaseVariantId(id);
+                      setPriceIncreaseNewCost(Number(v?.buying_price||priceIncreaseProduct?.buying_price||0));
+                      setPriceIncreaseMessage('');
+                    }} className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 disabled:bg-gray-100 disabled:text-gray-400">
+                      <option value="">{priceIncreaseProduct && normalizedProductType(priceIncreaseProduct)==='variant' ? 'Select exact color...' : 'Not required'}</option>
+                      {(priceIncreaseProduct?.variants||[]).map(v=><option key={v.id} value={v.id}>{v.sku} • {v.option_value}</option>)}
+                    </select>
+                  </label>
+                </div>
+
+                {priceIncreaseProduct && normalizedProductType(priceIncreaseProduct)==='variant' && !priceIncreaseVariant && (
+                  <div className="rounded-xl border border-violet-200 bg-violet-50 p-3 text-xs font-bold text-violet-800">Select the exact variant/color. Only that future variant price will change.</div>
+                )}
+
+                {priceIncreaseTarget && (
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-3"><p className="text-[9px] font-black uppercase text-gray-400">Current Buying</p><p className="mt-1 text-lg font-black text-gray-900">Rs. {priceIncreaseCurrentBuying.toLocaleString()}</p></div>
+                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-3"><p className="text-[9px] font-black uppercase text-gray-400">Current Customer Item Price</p><p className="mt-1 text-lg font-black text-gray-900">Rs. {priceIncreaseCurrentSelling.toLocaleString()}</p></div>
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3"><p className="text-[9px] font-black uppercase text-emerald-600">Delivery Reserve</p><p className="mt-1 text-lg font-black text-emerald-800">Rs. {autoDeliveryReserve.toLocaleString()}</p><p className="text-[9px] text-emerald-700">included once in new item price</p></div>
+                  </div>
+                )}
+
+                <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
+                  <label className="text-xs font-black text-gray-800">New Buying Price (Rs.)
+                    <input type="number" min="0" value={priceIncreaseNewCost||''} onChange={(e)=>{setPriceIncreaseNewCost(Math.max(0,Number(e.target.value||0)));setPriceIncreaseMessage('');}} placeholder="Enter the new higher supplier cost" className="mt-1 w-full rounded-xl border border-red-300 bg-white px-3 py-3 text-base font-black text-gray-900 outline-none focus:border-red-500"/>
+                  </label>
+                  <p className="mt-2 text-[10px] leading-4 text-gray-600">New customer item price = <b>new buying + O-RA auto profit + Rs. {autoDeliveryReserve.toLocaleString()} reserve</b>. Delivery charge remains separate according to Store Settings.</p>
+                </div>
+
+                {priceIncreaseTarget && priceIncreaseNewCost>0 && (
+                  <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                    <p className="text-xs font-black text-blue-900">FUTURE PRICE PREVIEW</p>
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+                      <div><p className="text-gray-500">New buying</p><p className="font-black text-gray-900">Rs. {priceIncreaseNewCost.toLocaleString()}</p></div>
+                      <div><p className="text-gray-500">O-RA profit</p><p className="font-black text-gray-900">Rs. {oraProfitForBuyingPrice(priceIncreaseNewCost).toLocaleString()}</p></div>
+                      <div><p className="text-gray-500">New item price</p><p className="font-black text-red-700">Rs. {priceIncreasePreviewSelling.toLocaleString()}</p></div>
+                      <div><p className="text-gray-500">Auto crossed offer</p><p className="font-black text-orange-700">{priceIncreaseCrossPreview?.active ? `Rs. ${priceIncreaseCrossPreview.regularPrice.toLocaleString()} → Rs. ${priceIncreasePreviewSelling.toLocaleString()}` : roundSpecialOfferEnabledForProduct(priceIncreaseProduct) ? 'Recalculates after save' : 'OFF'}</p></div>
+                    </div>
+                  </div>
+                )}
+
+                <button type="button" disabled={!priceIncreaseTarget || !(priceIncreaseNewCost>priceIncreaseCurrentBuying) || (priceIncreaseProduct && normalizedProductType(priceIncreaseProduct)==='variant' && !priceIncreaseVariant)} onClick={saveFuturePriceIncrease} className="rounded-xl bg-red-600 px-5 py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-30">Save Future Price Increase</button>
+                {priceIncreaseMessage && <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs font-bold leading-5 text-blue-800">{priceIncreaseMessage}</div>}
+              </div>
+
+              <aside className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                <p className="text-[10px] font-black uppercase tracking-wider text-gray-400">What this changes</p>
+                <div className="mt-3 space-y-2 text-xs leading-5 text-gray-600">
+                  <p>• Customer website uses the new selling price after Save.</p>
+                  <p>• New Website / Facebook / TikTok orders snapshot the new price.</p>
+                  <p>• Automatic crossed Special Offer is rebuilt from the new customer item price.</p>
+                  <p>• Old O-RA orders keep their saved item price and buying-price snapshot.</p>
+                  <p>• Old invoices stay unchanged.</p>
+                  <p>• Old Google Sheet order rows are not rewritten from the new catalog price.</p>
+                  <p>• If the supplier cost becomes cheaper, use <b>SUPPLIER PRICE / OFFER</b> instead.</p>
+                </div>
+              </aside>
             </div>
           </div>
         </div>
