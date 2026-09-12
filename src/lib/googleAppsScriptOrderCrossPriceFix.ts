@@ -248,16 +248,16 @@ oraRecalcOrder_ = function(sh, orderId) {
     var plainKey = oraOrderPricingKey_(code || main, '');
     var cat = catalog[key] || catalog[plainKey] || catalog[oraOrderPricingKey_(main, variant)] || catalog[oraOrderPricingKey_(main, '')];
     var currentUnit = hm['Unit Price (Rs)'] ? Math.max(0, oraNum_(vals[hm['Unit Price (Rs)'] - 1])) : 0;
+    var sameMainSnapshot = historicalByMain[oraKey_(main)];
     var actual = Math.max(0, oraNum_(actualPrices[key]));
-    if (!(actual > 0)) actual = cat && cat.actual > 0 ? cat.actual : currentUnit;
+    if (!(actual > 0)) {
+      actual = sameMainSnapshot && sameMainSnapshot.actual > 0
+        ? sameMainSnapshot.actual
+        : (cat && cat.actual > 0 ? cat.actual : currentUnit);
+    }
     var reference = Math.max(0, oraNum_(referencePrices[key]));
     if (!(reference > 0)) {
-      var sameMainSnapshot = historicalByMain[oraKey_(main)];
-      var catalogActual = cat && cat.actual > 0 ? cat.actual : actual;
-      var sameActualPrice = sameMainSnapshot
-        && sameMainSnapshot.actual > 0
-        && Math.abs(sameMainSnapshot.actual - catalogActual) < 0.01;
-      reference = sameActualPrice && sameMainSnapshot.reference > 0
+      reference = sameMainSnapshot && sameMainSnapshot.reference > 0
         ? sameMainSnapshot.reference
         : (cat && cat.reference > 0 ? cat.reference : currentUnit);
     }
