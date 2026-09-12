@@ -2214,7 +2214,16 @@ useEffect(() => {
       const gift_wrap_fee=gift_wrap_selected
         ? Math.max(0,Number(sheetWrappingCost || order.gift_wrap_fee || settings.gift_wrap_fee || 0))
         : 0;
-      const totalQty=nextItems.reduce((n,it)=>n+it.quantity,0),subtotal=nextItems.reduce((n,it)=>n+it.subtotal,0),rate=getMultiBuyDiscountRate(totalQty),special_offer_discount=Math.round(subtotal*(rate/100)*100)/100,total_amount=Math.round(Math.max(0,subtotal-special_offer_discount+order.delivery_fee+gift_wrap_fee)),threshold=Math.max(0,Number(settings.advance_qty_threshold??4)),adv=totalQty>threshold,pct=Math.min(100,Math.max(1,Number(settings.advance_percentage??50)));
+      const totalQty=nextItems.reduce((n,it)=>n+it.quantity,0);
+      const subtotal=nextItems.reduce((n,it)=>n+it.subtotal,0);
+      const rate=getMultiBuyDiscountRate(totalQty);
+      const confirmRebalanceAmount=settings.delivery_price_rebalance_enabled?Math.max(0,Number(settings.delivery_price_rebalance_amount||0)):0;
+      const confirmLegacySubtotal=Math.max(0,subtotal-confirmRebalanceAmount*totalQty);
+      const confirmLegacyQtyDiscount=Math.round(confirmLegacySubtotal*(rate/100)*100)/100;
+      const special_offer_discount=Math.round((confirmLegacyQtyDiscount+confirmRebalanceAmount*Math.max(0,totalQty-1))*100)/100;
+      const delivery_fee=settings.free_delivery_enabled?0:Math.max(0,Number(settings.delivery_fee||0));
+      const total_amount=Math.round(Math.max(0,subtotal-special_offer_discount+delivery_fee+gift_wrap_fee));
+      const threshold=Math.max(0,Number(settings.advance_qty_threshold??4)),adv=totalQty>threshold,pct=Math.min(100,Math.max(1,Number(settings.advance_percentage??50)));
       const confirmedAddress=addressI>=0?String(rows.map(c=>c[addressI]).find(v=>String(v||'').trim())||'').trim():'';
       const confirmedCity=cityI>=0?String(rows.map(c=>c[cityI]).find(v=>String(v||'').trim())||'').trim():'';
       const confirmedDistrict=districtI>=0?String(rows.map(c=>c[districtI]).find(v=>String(v||'').trim())||'').trim():'';
@@ -2222,7 +2231,7 @@ useEffect(() => {
       const oldShape=(order.items||[]).map(it=>({sku:it.sku,product_name:it.product_name,variant_name:it.variant_name,quantity:it.quantity,unit_price:it.unit_price}));
       const newShape=nextItems.map(it=>({sku:it.sku,product_name:it.product_name,variant_name:it.variant_name,quantity:it.quantity,unit_price:it.unit_price}));
       const changed=JSON.stringify(oldShape)!==JSON.stringify(newShape);
-      updates.set(id,{items:nextItems,subtotal,special_offer_discount,gift_wrap_selected,gift_wrap_fee,total_amount,is_advance_required:adv,advance_amount:adv?Math.round(total_amount*pct/100):0,call_center_status:'Confirmed',order_status:'Processing',call_center_updated_at:now,stock_allocated:false,stock_status:'Waiting for Stock',...(confirmedAddress?{address:confirmedAddress}:{}),...(confirmedCity?{city:confirmedCity}:{}),...(confirmedDistrict?{district:confirmedDistrict}:{}),...(cityChanged?{fardar_city:undefined,city_verified:false,city_mapping_source:undefined}:{}),product_change_history:changed?[...(order.product_change_history||[]),{changed_at:now,changed_by:'Call Center Confirm Upload',old_items:oldShape,new_items:newShape,reason:reason||undefined}]:(order.product_change_history||[]),notes:[order.notes,cancelled.length?`Call Center cancelled ${cancelled.length} item row(s).`:'',reason?`Call Center: ${reason}`:''].filter(Boolean).join(' | ')});
+      updates.set(id,{items:nextItems,subtotal,special_offer_discount,delivery_fee,gift_wrap_selected,gift_wrap_fee,total_amount,is_advance_required:adv,advance_amount:adv?Math.round(total_amount*pct/100):0,call_center_status:'Confirmed',order_status:'Processing',call_center_updated_at:now,stock_allocated:false,stock_status:'Waiting for Stock',...(confirmedAddress?{address:confirmedAddress}:{}),...(confirmedCity?{city:confirmedCity}:{}),...(confirmedDistrict?{district:confirmedDistrict}:{}),...(cityChanged?{fardar_city:undefined,city_verified:false,city_mapping_source:undefined}:{}),product_change_history:changed?[...(order.product_change_history||[]),{changed_at:now,changed_by:'Call Center Confirm Upload',old_items:oldShape,new_items:newShape,reason:reason||undefined}]:(order.product_change_history||[]),notes:[order.notes,cancelled.length?`Call Center cancelled ${cancelled.length} item row(s).`:'',reason?`Call Center: ${reason}`:''].filter(Boolean).join(' | ')});
       orderNumbers.push(id);
     });
 
@@ -2982,7 +2991,8 @@ useEffect(() => {
         const variant=variantById(child,component.variant_id);
         return sum + effectiveBuyingPrice(child,variant)*Math.max(1,Number(component.quantity||1));
       },0);
-      const buying=Math.max(0,rawBuying-extraComponentShift);
+      // Delivery-price rebalance is customer-facing only; actual bundle buying cost must stay unchanged.
+      const buying=Math.max(0,rawBuying);
       if(Math.abs(Number(bundle.selling_price||0)-baseSelling)<0.001 && Math.abs(Number(bundle.buying_price||0)-buying)<0.001) return bundle;
       return {...bundle,buying_price:buying,selling_price:baseSelling,discount_price:baseSelling,discount_enabled:false};
     });
@@ -3074,7 +3084,12 @@ useEffect(() => {
       catch { return (settings as any)[key] !== value; }
     });
     setSettings(nextSettings);
-    if ('delivery_fee' in newSettings || 'free_delivery_enabled' in newSettings) {
+    if (
+      'delivery_fee' in newSettings ||
+      'free_delivery_enabled' in newSettings ||
+      'delivery_price_rebalance_enabled' in newSettings ||
+      'delivery_price_rebalance_amount' in newSettings
+    ) {
       setProducts((prev)=>repriceAutoBundles(prev,nextSettings));
     }
     if (changedEntries.length) {
