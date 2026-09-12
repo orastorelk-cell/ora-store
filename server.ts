@@ -2310,6 +2310,13 @@ app.post('/api/orders/redispatch-waybill', requireStaffAnyPermission(['delivery'
       invoice_pack_downloaded_by:undefined,
       invoice_pack_download_set_date:undefined,
       invoice_pack_download_set_number:undefined,
+      // The previous Fardar export stays preserved in waybill_history above.
+      // Clear the current export marker so the replacement waybill becomes a NEW
+      // Fardar upload and can be exported exactly once.
+      fardar_csv_exported_at:undefined,
+      fardar_csv_exported_by:undefined,
+      fardar_csv_export_batch_id:undefined,
+      fardar_csv_exported_waybill:undefined,
       notes:[String(order.notes || '').trim(),'RETURNED PARCEL RE-DISPATCH: '+oldWaybill+' -> '+newWaybill].filter(Boolean).join(' | '),
       fardar_tracking_history:[
         ...(Array.isArray(order.fardar_tracking_history)?order.fardar_tracking_history:[]),
