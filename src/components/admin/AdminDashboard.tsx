@@ -4749,7 +4749,10 @@ Suitable For:
                 <p className="mt-1 text-[10px] text-neutral-400">{redispatchOrder.order_number} • {redispatchOrder.customer_name} • same parcel / same order / no second stock deduction</p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button type="button" onClick={()=>void generateOrderInvoicePDF(redispatchOrder,settings)} className="rounded-lg bg-blue-600 px-3 py-2 text-[10px] font-black text-white">
-                    <Printer className="mr-1 inline h-3.5 w-3.5"/> Print New Waybill Invoice
+                    <Printer className="mr-1 inline h-3.5 w-3.5"/> Download A6
+                  </button>
+                  <button type="button" onClick={()=>void generateA5SingleInvoicesPDF([redispatchOrder],settings,`O-RA_Redispatch_A5_${redispatchOrder.order_number}.pdf`)} className="rounded-lg bg-teal-600 px-3 py-2 text-[10px] font-black text-white">
+                    <Printer className="mr-1 inline h-3.5 w-3.5"/> Download A5
                   </button>
                   <button type="button" onClick={()=>void downloadFardarUploadCsv([redispatchOrder],'redispatch-'+redispatchOrder.order_number)} className="rounded-lg bg-emerald-600 px-3 py-2 text-[10px] font-black text-white">
                     <Download className="mr-1 inline h-3.5 w-3.5"/> Fardar Upload CSV
