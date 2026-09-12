@@ -222,7 +222,7 @@ interface StoreContextType {
 }
 
 
-const ALL_STAFF_PERMISSIONS = ['overview','add_product','combo_packs','supplier_offer','products','stock','orders','out_of_stock','returns','lead_import','confirm_upload','invoices','packing','invoice_design','delivery','dispatch','cod_payments','bank_transfer_check','assistant_chats','complaints','notifications','reports','success_rate','reviews','product_requests','sheets','customers','categories','banners','activity','branding','website_info','settings','deploy','user_access'] as const;
+const ALL_STAFF_PERMISSIONS = ['overview','add_product','combo_packs','supplier_offer','price_increase','products','stock','orders','out_of_stock','returns','lead_import','confirm_upload','invoices','packing','invoice_design','delivery','dispatch','cod_payments','bank_transfer_check','assistant_chats','complaints','notifications','reports','success_rate','reviews','product_requests','sheets','customers','categories','banners','activity','branding','website_info','settings','deploy','user_access'] as const;
 
 const legacyPermissions = (role: string): any[] => {
   if (role === 'order_manager') return ['overview','orders','invoices','invoice_design','delivery','dispatch','customers','sheets'];
