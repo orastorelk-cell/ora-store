@@ -68,6 +68,9 @@ const orderQtyOfferLabel = (order: any): string => {
 
 const sheetQtyOfferRules = (settings: Record<string, any>) => JSON.stringify({
   enabled: settings?.multi_buy_discount_enabled !== false,
+  delivery_price_rebalance_enabled: settings?.delivery_price_rebalance_enabled === true,
+  delivery_price_rebalance_amount: Math.max(0, Number(settings?.delivery_price_rebalance_amount || 0)),
+  delivery_price_rebalance_original_fee: Math.max(0, Number(settings?.delivery_price_rebalance_original_fee || 0)),
   tiers: [
     { min:Number(settings?.multi_buy_tier1_min ?? 2), max:Number(settings?.multi_buy_tier1_max ?? 3), rate:Number(settings?.multi_buy_tier1_rate ?? 5) },
     { min:Number(settings?.multi_buy_tier2_min ?? 4), max:Number(settings?.multi_buy_tier2_max ?? 5), rate:Number(settings?.multi_buy_tier2_rate ?? 7.5) },
