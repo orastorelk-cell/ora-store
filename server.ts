@@ -50,6 +50,10 @@ const buildOrderSheetRowServer = (order: any, item: any, isFirst: boolean, setti
   'Gift Wrap': isFirst ? (order?.gift_wrap_selected ? 'YES' : 'NO') : '',
   'Wrapping Cost (Rs)': isFirst ? sheetWrappingFeeServer(order,settings) : '',
   'Qty Offer Rules': isFirst ? sheetQtyOfferRulesServer(settings) : '',
+  // Transport-only pricing metadata. Apps Script reads these keys before writing
+  // visible columns so crossed/offer prices remain tied to the order snapshot.
+  regular_unit_price: Number(item?.regular_unit_price || 0),
+  supplier_offer_discount_per_unit: Number(item?.supplier_offer_discount_per_unit || 0),
   'Source': String(order?.order_source || order?.source || 'Website'),
   'WhatsApp Number': isFirst ? String(order?.whatsapp || '') : '',
   'Order Time': isFirst ? String(order?.created_at || new Date().toISOString()) : '',
