@@ -137,6 +137,8 @@ const catalogProductsForSheet = (products:any[]) => {
         stock_quantity:available,
         status:available>0?'Active':'Out of Stock',
         sheet_inherited_combo_variant:true,
+        sheet_inherited_component_product_id:String(target.child?.id||''),
+        sheet_inherited_component_variant_id:String(v?.id||''),
       };
     });
     return {...p,variants:sheetVariants,sheet_has_inherited_combo_variants:true};
@@ -170,6 +172,11 @@ const buildOrderSheetRow = (order: any, item: any, isFirst: boolean, settings:Re
     'Gift Wrap': isFirst ? (order?.gift_wrap_selected ? 'YES' : 'NO') : '',
     'Wrapping Cost (Rs)': isFirst ? sheetWrappingFee(order,settings) : '',
     'Qty Offer Rules': isFirst ? sheetQtyOfferRules(settings) : '',
+    // Hidden transport metadata consumed by the Apps Script pricing layer before
+    // it writes visible columns. This keeps the exact crossed/offer snapshot even
+    // if the catalog changes later.
+    regular_unit_price: Number(item?.regular_unit_price || 0),
+    supplier_offer_discount_per_unit: Number(item?.supplier_offer_discount_per_unit || 0),
     'Item Action': 'KEEP ITEM',
     'Order Action': isFirst ? 'PENDING' : '',
     'Cancel Reason': '',
