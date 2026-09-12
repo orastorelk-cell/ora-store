@@ -113,22 +113,21 @@ export const confirmUploadPackingBatchPatch = () => ({
             const freshMain=String(freshItem.main_sku||selection.product.sku||mainCode||'').trim().toUpperCase();
             const historicalSibling=!applyRequested ? (order.items||[]).find(it=>{
               const siblingMain=String(it.main_sku||it.sku||'').trim().toUpperCase();
-              return Boolean(
-                freshMain &&
-                siblingMain===freshMain &&
-                Math.abs(Number(it.unit_price||0)-freshUnit)<0.01
-              );
+              return Boolean(freshMain && siblingMain===freshMain);
             }) : undefined;
             if(historicalSibling){
+              const historicalActual=Math.max(0,Number(historicalSibling.unit_price||0)) || freshUnit;
               const historicalReference=Math.max(
-                freshUnit,
+                historicalActual,
                 Number(historicalSibling.regular_unit_price||0),
-                freshUnit+Number(historicalSibling.supplier_offer_discount_per_unit||0)
+                historicalActual+Number(historicalSibling.supplier_offer_discount_per_unit||0)
               );
               nextItems.push({
                 ...freshItem,
+                unit_price:historicalActual,
+                subtotal:Math.round(historicalActual*qty*100)/100,
                 regular_unit_price:historicalReference,
-                supplier_offer_discount_per_unit:Math.max(0,Math.round((historicalReference-freshUnit)*100)/100),
+                supplier_offer_discount_per_unit:Math.max(0,Math.round((historicalReference-historicalActual)*100)/100),
               });
             }else{
               nextItems.push(freshItem);
