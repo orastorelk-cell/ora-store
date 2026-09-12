@@ -2217,10 +2217,9 @@ useEffect(() => {
       const totalQty=nextItems.reduce((n,it)=>n+it.quantity,0);
       const subtotal=nextItems.reduce((n,it)=>n+it.subtotal,0);
       const rate=getMultiBuyDiscountRate(totalQty);
-      const confirmRebalanceAmount=settings.delivery_price_rebalance_enabled?Math.max(0,Number(settings.delivery_price_rebalance_amount||0)):0;
-      const confirmLegacySubtotal=Math.max(0,subtotal-confirmRebalanceAmount*totalQty);
-      const confirmLegacyQtyDiscount=Math.round(confirmLegacySubtotal*(rate/100)*100)/100;
-      const special_offer_discount=Math.round((confirmLegacyQtyDiscount+confirmRebalanceAmount*Math.max(0,totalQty-1))*100)/100;
+      // Qty Offer is the only quantity-based discount. Delivery-price rebalance
+      // must never create an extra discount when Qty Offer is disabled.
+      const special_offer_discount=Math.round(subtotal*(rate/100)*100)/100;
       const delivery_fee=settings.free_delivery_enabled?0:Math.max(0,Number(settings.delivery_fee||0));
       const total_amount=Math.round(Math.max(0,subtotal-special_offer_discount+delivery_fee+gift_wrap_fee));
       const threshold=Math.max(0,Number(settings.advance_qty_threshold??4)),adv=totalQty>threshold,pct=Math.min(100,Math.max(1,Number(settings.advance_percentage??50)));
