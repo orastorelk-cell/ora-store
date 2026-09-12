@@ -564,6 +564,7 @@ export type AdminPermission =
   | 'add_product'
   | 'combo_packs'
   | 'supplier_offer'
+  | 'price_increase'
   | 'banners'
   | 'notifications'
   | 'products'
