@@ -204,6 +204,7 @@ export const AdminDashboard: React.FC = () => {
     importWebsiteConfirmedCsv,
     importConfirmedOrdersCsv,
     assignNextWaybill,
+    redispatchReturnedParcel,
     unassignWaybill,
     markInvoicesGenerated,
     markInvoiceBatchDownloaded,
@@ -1020,6 +1021,10 @@ Suitable For:
   const [waybillCsvFileName, setWaybillCsvFileName] = useState('');
   const [waybillImportMessage, setWaybillImportMessage] = useState('');
   const [waybillAssigningId, setWaybillAssigningId] = useState<string | null>(null);
+  const [redispatchOldWaybill, setRedispatchOldWaybill] = useState('');
+  const [redispatchBusy, setRedispatchBusy] = useState(false);
+  const [redispatchMessage, setRedispatchMessage] = useState('');
+  const [redispatchOrder, setRedispatchOrder] = useState<Order | null>(null);
   const [fardarCityCsvFileName, setFardarCityCsvFileName] = useState('');
   const [fardarCityMessage, setFardarCityMessage] = useState('');
   const [citySelections, setCitySelections] = useState<Record<string, string>>({});
@@ -1218,6 +1223,30 @@ Suitable For:
   };
 
 
+  const handleReturnedParcelRedispatch = async () => {
+    if(redispatchBusy) return;
+    const oldWaybill=String(redispatchOldWaybill || '').trim();
+    if(!oldWaybill){ setRedispatchMessage('Enter the old waybill first.'); return; }
+    const preview=orders.find((o)=>String(o.waybill_number || '').trim()===oldWaybill);
+    if(!preview){ setRedispatchMessage('No order found for waybill '+oldWaybill+'.'); return; }
+    if(!window.confirm('Re-dispatch '+preview.order_number+'?\n\nOld waybill '+oldWaybill+' will be permanently locked and the next available waybill will be assigned. Stock will NOT be deducted again.')) return;
+
+    setRedispatchBusy(true);
+    setRedispatchMessage('Assigning replacement waybill...');
+    setRedispatchOrder(null);
+    try{
+      const result=await redispatchReturnedParcel(oldWaybill);
+      setRedispatchMessage(result.success
+        ? ('Done: '+String(result.oldWaybill || oldWaybill)+' → '+String(result.newWaybill || ''))
+        : result.message);
+      setRedispatchOrder(result.order || null);
+      if(result.success) setRedispatchOldWaybill('');
+    }catch(error:any){
+      setRedispatchMessage(error?.message || 'Re-dispatch failed.');
+    }finally{
+      setRedispatchBusy(false);
+    }
+  };
   const downloadWaybillCsvTemplate = () => {
     const csvContent =
       'Waybill\n' +
@@ -4678,6 +4707,57 @@ Suitable For:
 
       {activeTab === 'delivery' && (
         <div className="space-y-5">
+          <div className="rounded-2xl border border-red-500/30 bg-red-950/20 p-5 space-y-4">
+            <div className="flex flex-col lg:flex-row lg:items-end gap-3">
+              <div className="flex-1">
+                <h3 className="text-sm font-black text-white flex items-center gap-2">
+                  <RotateCcw className="w-4 h-4 text-red-400"/> Returned Parcel / Re-Dispatch
+                </h3>
+                <p className="mt-1 text-[10px] text-neutral-400">
+                  Parcel came back to O-RA Store: enter the OLD waybill. Same order/customer details are kept, stock is not deducted again, the old waybill is permanently locked, and the next Available Fardar waybill is assigned.
+                </p>
+                <input
+                  value={redispatchOldWaybill}
+                  onChange={(e)=>{setRedispatchOldWaybill(e.target.value);setRedispatchMessage('');setRedispatchOrder(null);}}
+                  placeholder="Old Waybill e.g. 18160396"
+                  className="mt-3 w-full rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-3 font-mono text-sm font-black text-white outline-none focus:border-red-400"
+                />
+                {redispatchOldWaybill.trim() && (() => {
+                  const found=orders.find((o)=>String(o.waybill_number || '').trim()===redispatchOldWaybill.trim());
+                  if(!found) return <p className="mt-2 text-[10px] font-bold text-red-300">Order not found for this current waybill.</p>;
+                  return <div className="mt-2 rounded-xl border border-neutral-800 bg-neutral-950 p-3 text-[11px] text-neutral-300">
+                    <span className="font-black text-orange-300">{found.order_number}</span> • {found.customer_name} • {found.phone}
+                    <div className="mt-1 text-neutral-500">{found.address} • {found.fardar_city || found.city}</div>
+                  </div>;
+                })()}
+              </div>
+              <button
+                type="button"
+                disabled={redispatchBusy || !redispatchOldWaybill.trim()}
+                onClick={()=>void handleReturnedParcelRedispatch()}
+                className="rounded-xl bg-red-600 px-5 py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {redispatchBusy?'Changing Waybill...':'Assign New Waybill'}
+              </button>
+            </div>
+
+            {redispatchMessage && <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-3 text-xs font-bold text-emerald-300">{redispatchMessage}</div>}
+
+            {redispatchOrder && (
+              <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-4">
+                <p className="text-xs font-black text-emerald-300">Ready to Re-Dispatch • New Waybill: <span className="font-mono text-white">{redispatchOrder.waybill_number}</span></p>
+                <p className="mt-1 text-[10px] text-neutral-400">{redispatchOrder.order_number} • {redispatchOrder.customer_name} • same parcel / same order / no second stock deduction</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button type="button" onClick={()=>void generateOrderInvoicePDF(redispatchOrder,settings)} className="rounded-lg bg-blue-600 px-3 py-2 text-[10px] font-black text-white">
+                    <Printer className="mr-1 inline h-3.5 w-3.5"/> Print New Waybill Invoice
+                  </button>
+                  <button type="button" onClick={()=>void downloadFardarUploadCsv([redispatchOrder],'redispatch-'+redispatchOrder.order_number)} className="rounded-lg bg-emerald-600 px-3 py-2 text-[10px] font-black text-white">
+                    <Download className="mr-1 inline h-3.5 w-3.5"/> Fardar Upload CSV
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="lg:col-span-2 bg-neutral-900 border border-neutral-800 rounded-2xl p-5 space-y-4">
               <div className="flex items-center justify-between gap-3">
