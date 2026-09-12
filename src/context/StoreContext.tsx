@@ -188,6 +188,7 @@ interface StoreContextType {
   importWebsiteConfirmedCsv: (csvText: string) => Promise<{ confirmedCount: number; notFoundCount: number; ignoredCount: number; orderNumbers: string[]; errors: string[] }>;
   importConfirmedOrdersCsv: (csvText: string, source?: OrderSource) => Promise<{ confirmedCount: number; notFoundCount: number; ignoredCount: number; orderNumbers: string[]; errors: string[] }>;
   assignNextWaybill: (orderId: string, courierName?: string) => string | null;
+  redispatchReturnedParcel: (oldWaybill: string) => Promise<{ success: boolean; message: string; order?: Order; oldWaybill?: string; newWaybill?: string }>;
   unassignWaybill: (orderId: string) => void;
   markInvoicesGenerated: (orderIds: string[], generatedBy?: string) => Order[];
   markInvoiceBatchDownloaded: (orderIds: string[], downloadedBy?: string, downloadSet?: { date: string; number: number }) => Promise<void>;
@@ -2413,6 +2414,100 @@ useEffect(() => {
     logActivity({ action: 'Waybill Unassigned', module: 'Delivery', target_id: orderId, target_label: order.order_number, details: order.waybill_number });
   };
 
+  const redispatchReturnedParcel = async (oldWaybillInput: string): Promise<{ success: boolean; message: string; order?: Order; oldWaybill?: string; newWaybill?: string }> => {
+    const oldWaybill=String(oldWaybillInput || '').trim();
+    if(!oldWaybill) return {success:false,message:'Enter the returned parcel old waybill.'};
+
+    const order=orders.find((o)=>String(o.waybill_number || '').trim()===oldWaybill);
+    if(!order) return {success:false,message:'No order found with waybill '+oldWaybill+'.'};
+
+    const provider=String(order.courier_name || settings.courier_provider || 'Fardar');
+    const alreadyOnOrders=new Set(orders.map((o)=>String(o.waybill_number || '').trim().toLowerCase()).filter(Boolean));
+    const candidate=waybillRecords
+      .filter((w)=>{
+        const key=String(w.waybill_number || '').trim().toLowerCase();
+        return Boolean(
+          key &&
+          w.status==='Available' &&
+          w.courier_name===provider &&
+          key!==oldWaybill.toLowerCase() &&
+          !alreadyOnOrders.has(key)
+        );
+      })
+      .sort((a,b)=>new Date(a.imported_at).getTime()-new Date(b.imported_at).getTime())[0];
+
+    if(!candidate) return {success:false,message:'No available '+provider+' waybill. Import a new waybill CSV first.'};
+
+    try{
+      const saved=await sharedStaffRequest('/api/orders/redispatch-waybill',{
+        method:'POST',
+        body:JSON.stringify({
+          order_id:order.id,
+          old_waybill:oldWaybill,
+          new_waybill:candidate.waybill_number,
+          reason:'Returned parcel re-dispatch',
+        }),
+      });
+      const updated=(saved?.order || null) as Order | null;
+      if(!updated) throw new Error('Server did not return the re-dispatched order.');
+
+      const now=new Date().toISOString();
+      setOrders((prev)=>prev.map((o)=>o.id===updated.id?updated:o));
+      setWaybillRecords((prev)=>{
+        let oldFound=false;
+        const next=prev.map((w)=>{
+          const number=String(w.waybill_number || '').trim();
+          if(number===oldWaybill){
+            oldFound=true;
+            return {
+              ...w,
+              status:'Used' as const,
+              assigned_order_id:updated.id,
+              assigned_order_number:updated.order_number,
+              assigned_at:w.assigned_at || now,
+            };
+          }
+          if(w.id===candidate.id || number===String(candidate.waybill_number || '').trim()){
+            return {
+              ...w,
+              status:'Assigned' as const,
+              assigned_order_id:updated.id,
+              assigned_order_number:updated.order_number,
+              assigned_at:now,
+            };
+          }
+          return w;
+        });
+        if(oldFound) return next;
+        return [...next,{
+          id:'wb-retired-'+Date.now(),
+          waybill_number:oldWaybill,
+          courier_name:provider,
+          status:'Used' as const,
+          assigned_order_id:updated.id,
+          assigned_order_number:updated.order_number,
+          imported_at:now,
+          assigned_at:now,
+        }];
+      });
+      logActivity({
+        action:'Returned Parcel Re-Dispatch',
+        module:'Delivery',
+        target_id:updated.id,
+        target_label:updated.order_number,
+        details:oldWaybill+' → '+String(updated.waybill_number || candidate.waybill_number)+' • old + new waybills locked',
+      });
+      return {
+        success:true,
+        message:String(updated.order_number)+' ready to re-dispatch.',
+        order:updated,
+        oldWaybill,
+        newWaybill:String(updated.waybill_number || candidate.waybill_number),
+      };
+    }catch(error:any){
+      return {success:false,message:String(error?.message || 'Returned parcel re-dispatch failed.')};
+    }
+  };
   const markInvoicesGenerated = (orderIds: string[], generatedBy = adminUser?.name || 'Admin'): Order[] => {
     const uniqueIds = Array.from(new Set(orderIds)).slice(0, 50);
     const nowForBatch = new Date();
@@ -3192,6 +3287,7 @@ useEffect(() => {
         importWebsiteConfirmedCsv,
         importConfirmedOrdersCsv,
         assignNextWaybill,
+        redispatchReturnedParcel,
         unassignWaybill,
         markInvoicesGenerated,
         markInvoiceBatchDownloaded,
