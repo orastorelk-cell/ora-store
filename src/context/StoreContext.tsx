@@ -1281,7 +1281,13 @@ useEffect(() => {
   };
 
   const cartMultiBuyDiscountRate = getMultiBuyDiscountRate(cartItemCount);
-  const cartSpecialOfferDiscount = Math.round(cartSubtotal * (cartMultiBuyDiscountRate / 100) * 100) / 100;
+  const deliveryPriceRebalanceAmount = settings.delivery_price_rebalance_enabled
+    ? Math.max(0, Number(settings.delivery_price_rebalance_amount || 0))
+    : 0;
+  const cartLegacySubtotal = Math.max(0, cartSubtotal - deliveryPriceRebalanceAmount * cartItemCount);
+  const cartLegacyQtyDiscount = Math.round(cartLegacySubtotal * (cartMultiBuyDiscountRate / 100) * 100) / 100;
+  const cartDeliveryRebalanceDiscount = deliveryPriceRebalanceAmount * Math.max(0, cartItemCount - 1);
+  const cartSpecialOfferDiscount = Math.round((cartLegacyQtyDiscount + cartDeliveryRebalanceDiscount) * 100) / 100;
   const cartFinalProductsTotal = Math.max(0, cartSubtotal - cartSpecialOfferDiscount);
 
 
@@ -1682,7 +1688,10 @@ useEffect(() => {
       const internal_delivery_fee=Math.max(0,Number(settings.delivery_fee||0));
       const delivery_fee=settings.free_delivery_enabled?0:internal_delivery_fee;
       const rate=getMultiBuyDiscountRate(totalQty);
-      const special_offer_discount=Math.round(subtotal*(rate/100)*100)/100;
+      const importRebalanceAmount=settings.delivery_price_rebalance_enabled?Math.max(0,Number(settings.delivery_price_rebalance_amount||0)):0;
+      const importLegacySubtotal=Math.max(0,subtotal-importRebalanceAmount*totalQty);
+      const importLegacyQtyDiscount=Math.round(importLegacySubtotal*(rate/100)*100)/100;
+      const special_offer_discount=Math.round((importLegacyQtyDiscount+importRebalanceAmount*Math.max(0,totalQty-1))*100)/100;
       const total_amount=Math.round(Math.max(0,subtotal-special_offer_discount+delivery_fee));
       const nextOrderNum=requestedOrderId || nextSourceOrderNumber(source,newOrdersList);
       const fingerprint=makeOrderFingerprint(phone,orderItems);
@@ -2742,7 +2751,10 @@ useEffect(() => {
     const subtotal = testItems.reduce((sum, item) => sum + Number(item.subtotal || 0), 0);
     const totalQty = testItems.reduce((sum, item) => sum + Math.max(1, Number(item.quantity || 1)), 0);
     const discountRate = getMultiBuyDiscountRate(totalQty);
-    const discount = Math.round(subtotal * (discountRate / 100) * 100) / 100;
+    const testRebalanceAmount = settings.delivery_price_rebalance_enabled ? Math.max(0, Number(settings.delivery_price_rebalance_amount || 0)) : 0;
+    const testLegacySubtotal = Math.max(0, subtotal - testRebalanceAmount * totalQty);
+    const testLegacyQtyDiscount = Math.round(testLegacySubtotal * (discountRate / 100) * 100) / 100;
+    const discount = Math.round((testLegacyQtyDiscount + testRebalanceAmount * Math.max(0, totalQty - 1)) * 100) / 100;
     const deliveryFee = settings.free_delivery_enabled ? 0 : Math.max(0, Number(settings.delivery_fee || 0));
     const totalAmount = Math.round(Math.max(0, subtotal - discount + deliveryFee) * 100) / 100;
     const now = new Date().toISOString();
@@ -2952,21 +2964,25 @@ useEffect(() => {
   const repriceAutoBundles=(rows:Product[], pricingSettings:StoreSettings=settings)=>{
     const productMap=new Map(rows.map(p=>[p.id,p] as [string,Product]));
     const includedDelivery=pricingSettings.free_delivery_enabled?Math.max(0,Number(pricingSettings.delivery_fee||0)):0;
+    const bundleShift=pricingSettings.delivery_price_rebalance_enabled?Math.max(0,Number(pricingSettings.delivery_price_rebalance_amount||0)):0;
     return rows.map(bundle=>{
       if(normalizedProductType(bundle)!=='bundle' || bundle.bundle_auto_price!==true || !(bundle.bundle_components||[]).length) return bundle;
+      const componentUnits=(bundle.bundle_components||[]).reduce((sum,component)=>sum+Math.max(1,Number(component.quantity||1)),0);
+      const extraComponentShift=bundleShift*Math.max(0,componentUnits-1);
       const componentDisplayTotal=(bundle.bundle_components||[]).reduce((sum,component)=>{
         const child=productMap.get(component.product_id); if(!child)return sum;
         const variant=variantById(child,component.variant_id);
         return sum + displayUnitPrice(child,pricingSettings,variant)*Math.max(1,Number(component.quantity||1));
       },0);
       const discount=Math.max(0,Number(bundle.bundle_discount_amount ?? 50));
-      const customerDisplay=Math.max(0,componentDisplayTotal-discount);
+      const customerDisplay=Math.max(0,componentDisplayTotal-discount-extraComponentShift);
       const baseSelling=Math.max(0,customerDisplay-includedDelivery);
-      const buying=(bundle.bundle_components||[]).reduce((sum,component)=>{
+      const rawBuying=(bundle.bundle_components||[]).reduce((sum,component)=>{
         const child=productMap.get(component.product_id); if(!child)return sum;
         const variant=variantById(child,component.variant_id);
         return sum + effectiveBuyingPrice(child,variant)*Math.max(1,Number(component.quantity||1));
       },0);
+      const buying=Math.max(0,rawBuying-extraComponentShift);
       if(Math.abs(Number(bundle.selling_price||0)-baseSelling)<0.001 && Math.abs(Number(bundle.buying_price||0)-buying)<0.001) return bundle;
       return {...bundle,buying_price:buying,selling_price:baseSelling,discount_price:baseSelling,discount_enabled:false};
     });
