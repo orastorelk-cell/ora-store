@@ -285,14 +285,9 @@ oraRecalcOrder_ = function(sh, orderId) {
   var rate = oraQtyOfferRateFromRules_(rules, totalQty);
   var qtyDiscount = Math.min(actualProductsTotal, Math.max(0, oraRound_(actualProductsTotal * rate / 100)));
   var specialDiscount = Math.max(0, oraRound_(normalTotal - actualProductsTotal));
-  var rebalanceAmount = Math.max(
-    0,
-    oraNum_(rules.delivery_price_rebalance_amount),
-    oraNum_(rules.delivery_price_rebalance_applied)
-  );
-  var rebalanceEnabled = rules.delivery_price_rebalance_enabled === true || rebalanceAmount > 0;
-  var rebalanceDiscount = rebalanceEnabled ? oraRound_(rebalanceAmount * Math.max(0, totalQty - 1)) : 0;
-  var combinedDiscount = oraRound_(specialDiscount + qtyDiscount + rebalanceDiscount);
+  // Only the configured Qty Offer can add a quantity-based discount.
+  // Delivery rebalance metadata is display/accounting context, not a Qty Offer.
+  var combinedDiscount = oraRound_(specialDiscount + qtyDiscount);
   var delivery = hm['Delivery Fee (Rs)'] ? Math.max(0, oraNum_(sh.getRange(firstRow, hm['Delivery Fee (Rs)']).getDisplayValue())) : 0;
   var giftWrap = hm['Gift Wrap'] ? sh.getRange(firstRow, hm['Gift Wrap']).getDisplayValue() : 'NO';
   var wrapCost = hm['Wrapping Cost (Rs)'] ? Math.max(0, oraNum_(sh.getRange(firstRow, hm['Wrapping Cost (Rs)']).getDisplayValue())) : 0;
