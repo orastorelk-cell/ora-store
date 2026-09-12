@@ -88,6 +88,7 @@ import { CameraBarcodeScanner } from './CameraBarcodeScanner';
 import { CodPaymentsPanel } from './CodPaymentsPanel';
 import { BankTransferCheckPanel } from './BankTransferCheckPanel';
 import { ReportsPanel } from './ReportsPanel';
+import { SuccessRatePanel } from './SuccessRatePanel';
 import { ReviewModerationPanel } from './ReviewModerationPanel';
 import { ProductRequestsPanel } from './ProductRequestsPanel';
 import { AssistantChatsPanel } from './AssistantChatsPanel';
@@ -215,7 +216,7 @@ export const AdminDashboard: React.FC = () => {
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'add_product' | 'combo_packs' | 'supplier_offer' | 'products' | 'categories' | 'banners' | 'notifications' | 'stock' | 'orders' | 'out_of_stock' | 'packing_expenses' | 'returns' | 'lead_import' | 'confirm_upload' | 'invoices' | 'packing' | 'invoice_design' | 'delivery' | 'dispatch' | 'cod_payments' | 'bank_transfer_check' | 'assistant_chats' | 'complaints' | 'reports' | 'reviews' | 'product_requests' | 'customers' | 'sheets' | 'activity' | 'branding' | 'website_info' | 'settings' | 'user_access' | 'deploy'
+    'overview' | 'add_product' | 'combo_packs' | 'supplier_offer' | 'products' | 'categories' | 'banners' | 'notifications' | 'stock' | 'orders' | 'out_of_stock' | 'packing_expenses' | 'returns' | 'lead_import' | 'confirm_upload' | 'invoices' | 'packing' | 'invoice_design' | 'delivery' | 'dispatch' | 'cod_payments' | 'bank_transfer_check' | 'assistant_chats' | 'complaints' | 'reports' | 'success_rate' | 'reviews' | 'product_requests' | 'customers' | 'sheets' | 'activity' | 'branding' | 'website_info' | 'settings' | 'user_access' | 'deploy'
   >('overview');
   const [comboEditProductId, setComboEditProductId] = useState<string | undefined>(undefined);
   const [packingSearch, setPackingSearch] = useState('');
@@ -2905,9 +2906,9 @@ Suitable For:
     staff: 'Custom Access Staff',
   };
 
-  const allPermissionIds: AdminPermission[] = ['overview','add_product','combo_packs','supplier_offer','products','orders','lead_import','confirm_upload','packing','delivery','dispatch','returns','cod_payments','bank_transfer_check','stock','out_of_stock','packing_expenses','categories','banners','reviews','product_requests','assistant_chats','complaints','notifications','customers','invoices','invoice_design','reports','sheets','activity','branding','website_info','settings','user_access','deploy'];
+  const allPermissionIds: AdminPermission[] = ['overview','add_product','combo_packs','supplier_offer','products','orders','lead_import','confirm_upload','packing','delivery','dispatch','returns','cod_payments','bank_transfer_check','stock','out_of_stock','packing_expenses','categories','banners','reviews','product_requests','assistant_chats','complaints','notifications','customers','invoices','invoice_design','reports','success_rate','sheets','activity','branding','website_info','settings','user_access','deploy'];
   const permissionLabels: Record<AdminPermission, string> = {
-    overview: 'Dashboard', add_product:'Add Product', combo_packs:'Combo Packs', supplier_offer:'Supplier Price / Offer', products: 'Products', stock: 'Inventory & Stock', orders: 'Orders', out_of_stock: 'Out of Stock Needs', packing_expenses: 'Packing Materials Expenses', returns: 'Returns Verification', lead_import: 'FB / TikTok Lead Import', confirm_upload: 'Confirm / Cancel Upload', invoices: 'Invoices', packing: 'Packing Invoice Downloads', invoice_design: 'Invoice Design', delivery: 'Delivery & Waybills', dispatch: 'Dispatch Scan', cod_payments: 'COD Payments', bank_transfer_check: 'Bank Transfer Check', assistant_chats: 'Assistant Chats', complaints: 'Complaints', notifications:'Customer Notifications', reports: 'Reports', reviews: 'Product Reviews', product_requests: 'Product Requests', sheets: 'Google Sheets Sync', customers: 'Customers', categories: 'Categories', banners:'Banners', activity: 'Activity Log', branding: 'Branding & Logo Studio', website_info: 'Website Info & Policies', settings: 'Store Settings', deploy: 'Deployment Guide', user_access: 'System Access'
+    overview: 'Dashboard', add_product:'Add Product', combo_packs:'Combo Packs', supplier_offer:'Supplier Price / Offer', products: 'Products', stock: 'Inventory & Stock', orders: 'Orders', out_of_stock: 'Out of Stock Needs', packing_expenses: 'Packing Materials Expenses', returns: 'Returns Verification', lead_import: 'FB / TikTok Lead Import', confirm_upload: 'Confirm / Cancel Upload', invoices: 'Invoices', packing: 'Packing Invoice Downloads', invoice_design: 'Invoice Design', delivery: 'Delivery & Waybills', dispatch: 'Dispatch Scan', cod_payments: 'COD Payments', bank_transfer_check: 'Bank Transfer Check', assistant_chats: 'Assistant Chats', complaints: 'Complaints', notifications:'Customer Notifications', reports: 'Reports', success_rate: 'Success Rate', reviews: 'Product Reviews', product_requests: 'Product Requests', sheets: 'Google Sheets Sync', customers: 'Customers', categories: 'Categories', banners:'Banners', activity: 'Activity Log', branding: 'Branding & Logo Studio', website_info: 'Website Info & Policies', settings: 'Store Settings', deploy: 'Deployment Guide', user_access: 'System Access'
   };
   type StaffAccessLevel = 'none' | 'view' | 'edit';
   const currentRole = adminUser?.role || 'staff';
@@ -2993,6 +2994,7 @@ Suitable For:
       { id:'invoices', label:`Invoices (${orders.filter((o)=>o.invoice_locked).length})`, icon:ReceiptText },
       { id:'invoice_design', label:'Invoice Design', icon:Printer },
       { id:'reports', label:'Reports', icon:BarChart3 },
+      { id:'success_rate', label:'Success Rate', icon:Trophy },
       { id:'sheets', label:`Google Sheets Sync (${unsyncedOrders.length} New)`, icon:FileSpreadsheet },
     ]},
     { id:'SYSTEM', label:'SYSTEM', items:[
@@ -5296,6 +5298,8 @@ Suitable For:
       {activeTab === 'complaints' && <ComplaintsPanel />}
 
       {activeTab === 'reports' && <ReportsPanel />}
+
+      {activeTab === 'success_rate' && <SuccessRatePanel orders={orders} products={products} />}
 
       {activeTab === 'reviews' && <ReviewModerationPanel />}
 
