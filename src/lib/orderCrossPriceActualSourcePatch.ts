@@ -25,12 +25,20 @@ export const orderCrossPriceActualSourcePatch = () => ({
       'incoming actual price priority',
     );
 
-    text = replaceRequired(
-      text,
-      `    if (!(actual > 0)) actual = cat && cat.actual > 0 ? cat.actual : currentUnit;`,
-      `    if (!(actual > 0)) actual = currentUnit > 0 ? currentUnit : (cat && cat.actual > 0 ? cat.actual : 0);`,
-      'recalc actual price priority',
-    );
+    // Older recalc code used catalog actual before the incoming Unit Price.
+    // Newer historical-price protection already resolves old orders from the
+    // order's saved same-main snapshot before today's catalog. Do not override
+    // that newer logic or a later catalog price increase could rewrite old rows.
+    const oldRecalc = `    if (!(actual > 0)) actual = cat && cat.actual > 0 ? cat.actual : currentUnit;`;
+    const newRecalc = `    if (!(actual > 0)) actual = currentUnit > 0 ? currentUnit : (cat && cat.actual > 0 ? cat.actual : 0);`;
+    if (text.includes(oldRecalc)) {
+      text = text.replace(oldRecalc, newRecalc);
+    } else if (
+      !text.includes('var sameMainSnapshot = historicalByMain[oraKey_(main)];') ||
+      !text.includes('sameMainSnapshot && sameMainSnapshot.actual > 0')
+    ) {
+      throw new Error('[O-RA order cross actual source] recalc actual price priority marker not found');
+    }
 
     return { code: text, map: null };
   },
