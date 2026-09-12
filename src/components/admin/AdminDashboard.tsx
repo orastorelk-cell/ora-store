@@ -4442,10 +4442,10 @@ Suitable For:
                   return <div className="rounded-2xl border border-orange-500/25 bg-neutral-950/70 p-4">
                     <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
                       <div>
-                        <p className="flex items-center gap-2 text-sm font-black text-white"><History className="h-4 w-4 text-orange-400"/> Order History Map</p>
-                        <p className="mt-1 text-[10px] text-neutral-500">{order.order_number} • {timeline.length} recorded event{timeline.length===1?'':'s'} • oldest → newest</p>
+                        <p className="flex items-center gap-2 text-[15px] font-black tracking-wide text-white"><History className="h-4 w-4 text-orange-400"/> Order History Map</p>
+                        <p className="mt-1 text-[11px] font-bold text-neutral-300">{order.order_number} • {timeline.length} recorded event{timeline.length===1?'':'s'} • oldest → newest</p>
                       </div>
-                      <div className="rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-right text-[10px] text-neutral-400">
+                      <div className="rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-right text-[11px] font-bold text-neutral-300">
                         <div>Current Status: <b className="text-white">{order.order_status}</b></div>
                         {order.waybill_number && <div>Current Waybill: <b className="font-mono text-blue-300">{order.waybill_number}</b></div>}
                       </div>
@@ -4455,13 +4455,13 @@ Suitable For:
                       <div className="space-y-0">
                         {timeline.map((event,index)=><div key={event.id} className="relative flex gap-4 pb-5 last:pb-0">
                           <div className={`relative z-10 mt-1 h-[15px] w-[15px] shrink-0 rounded-full border-2 shadow-[0_0_0_4px_rgba(23,23,23,1)] ${dotClass(event.kind)}`}/>
-                          <div className="min-w-0 flex-1 rounded-xl border border-neutral-800 bg-neutral-900/80 px-3 py-2.5">
+                          <div className="min-w-0 flex-1 rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-3">
                             <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                              <p className="text-[11px] font-black text-white">{event.title}</p>
-                              <p className="whitespace-nowrap font-mono text-[9px] text-neutral-500">{new Date(event.at).toLocaleString()}</p>
+                              <p className="text-[13px] font-black tracking-wide text-white">{event.title}</p>
+                              <p className="whitespace-nowrap font-mono text-[10px] font-bold text-neutral-300">{new Date(event.at).toLocaleString()}</p>
                             </div>
-                            {event.detail && <p className="mt-1 break-words text-[10px] leading-4 text-neutral-400">{event.detail}</p>}
-                            {index===timeline.length-1 && <span className="mt-1.5 inline-block rounded-full bg-orange-500/10 px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-orange-300">Latest</span>}
+                            {event.detail && <p className="mt-1.5 break-words text-[11px] font-semibold leading-5 text-neutral-200">{event.detail}</p>}
+                            {index===timeline.length-1 && <span className="mt-2 inline-block rounded-full border border-orange-500/30 bg-orange-500/15 px-2.5 py-1 text-[9px] font-black uppercase tracking-widest text-orange-200">Latest</span>}
                           </div>
                         </div>)}
                       </div>
