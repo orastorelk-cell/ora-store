@@ -107,7 +107,33 @@ export const confirmUploadPackingBatchPatch = () => ({
           const preservedUnit=Math.max(0,Number(existingItem.unit_price||0));
           nextItems.push({...existingItem,quantity:qty,subtotal:Math.round(preservedUnit*qty*100)/100});
         }else{
-          try{nextItems.push(buildOrderItemSnapshot(selection.product,qty,settings,selection.variant,products));}catch(e:any){errors.push(id + ': ' + (e?.message||'Invalid item selection.'));bad=true;}
+          try{
+            const freshItem=buildOrderItemSnapshot(selection.product,qty,settings,selection.variant,products);
+            const freshUnit=Math.max(0,Number(freshItem.unit_price||0));
+            const freshMain=String(freshItem.main_sku||selection.product.sku||mainCode||'').trim().toUpperCase();
+            const historicalSibling=!applyRequested ? (order.items||[]).find(it=>{
+              const siblingMain=String(it.main_sku||it.sku||'').trim().toUpperCase();
+              return Boolean(
+                freshMain &&
+                siblingMain===freshMain &&
+                Math.abs(Number(it.unit_price||0)-freshUnit)<0.01
+              );
+            }) : undefined;
+            if(historicalSibling){
+              const historicalReference=Math.max(
+                freshUnit,
+                Number(historicalSibling.regular_unit_price||0),
+                freshUnit+Number(historicalSibling.supplier_offer_discount_per_unit||0)
+              );
+              nextItems.push({
+                ...freshItem,
+                regular_unit_price:historicalReference,
+                supplier_offer_discount_per_unit:Math.max(0,Math.round((historicalReference-freshUnit)*100)/100),
+              });
+            }else{
+              nextItems.push(freshItem);
+            }
+          }catch(e:any){errors.push(id + ': ' + (e?.message||'Invalid item selection.'));bad=true;}
         }`;
         text = text.replace(oldSnapshotPush, safeSnapshotPush);
       }
