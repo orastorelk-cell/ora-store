@@ -95,6 +95,8 @@ export interface Product {
   images: string[];
   buying_price: number;
   selling_price: number;
+  /** One-time delivery-price reserve already included in this saved product selling price. */
+  delivery_price_shift_applied?: number;
   discount_price?: number;
   discount_enabled?: boolean;
   /** Optional cheaper supplier cost used only while the saved special offer is active. */
