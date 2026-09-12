@@ -673,6 +673,7 @@ export const AdminDashboard: React.FC = () => {
     is_test_product: false,
     buying_price: 500,
     selling_price: 1000,
+    delivery_price_shift_applied: 0,
     discount_price: 1000,
     discount_enabled: false,
     auto_price_enabled: true,
@@ -694,7 +695,9 @@ export const AdminDashboard: React.FC = () => {
   const [supplierNewCost, setSupplierNewCost] = useState<number>(0);
   const [supplierMessage, setSupplierMessage] = useState('');
 
-  const profitForBuyingPrice = oraProfitForBuyingPrice;
+  const autoDeliveryReserve = Math.max(0, Number(settings.delivery_price_rebalance_amount ?? settings.delivery_fee ?? 0));
+  const profitForBuyingPrice = (buyingPrice: number, alreadyApplied = 0) =>
+    oraProfitForBuyingPrice(buyingPrice) + Math.max(0, autoDeliveryReserve - Math.max(0, Number(alreadyApplied || 0)));
 
   // Global running Item Code. The first product after FULL RESET is typed manually
   // (example S0001). After that Auto Code follows the same prefix/number pattern.
@@ -728,7 +731,7 @@ export const AdminDashboard: React.FC = () => {
       name_en: '', name_si: '', description_en: '', description_si: '', brand: '', search_keywords: '',
       source_shop_name: '', source_shop_price: 0, category_name: '', category_slug: '',
       product_type: 'normal' as ProductType, variants: [] as ProductVariant[], bundle_components: [] as BundleComponent[], specifications: [] as ProductSpecification[], item_details: [] as ProductItemDetail[], is_test_product: false,
-      buying_price: buying, selling_price: buying + profit, discount_price: buying + profit, discount_enabled: false,
+      buying_price: buying, selling_price: buying + profit, delivery_price_shift_applied: 0, discount_price: buying + profit, discount_enabled: false,
       auto_price_enabled: true, auto_discount_on_cost_drop: true, offer_buying_price: undefined as number | undefined, supplier_offer_enabled: false, supplier_offer_saved_at: undefined as string | undefined,
       stock_quantity: 0, status: 'Active' as const,
       images: [] as string[],
@@ -2501,6 +2504,9 @@ Suitable For:
         sku:String(v.sku || buildVariantSku(productForm.sku,optionValue||`OPT-${index+1}`,(productForm.variants||[]).map(x=>x.sku))).trim().toUpperCase(),
         buying_price:Math.max(0,Number(v.buying_price||0)),
         selling_price:Math.max(0,Number(v.selling_price||0)),
+        delivery_price_shift_applied: productAutoPricing
+          ? Math.max(Math.max(0,Number(v.delivery_price_shift_applied||0)), autoDeliveryReserve)
+          : v.delivery_price_shift_applied,
         stock_quantity:Math.max(0,Number(v.stock_quantity||0)),
         status:(Number(v.stock_quantity||0)>0?'Active':'Out of Stock') as ProductVariant['status'],
       };
@@ -2512,6 +2518,9 @@ Suitable For:
     const { category_name: _manualCategoryName, ...savedProductFields } = productForm;
     const finalProductForm = {
       ...savedProductFields,
+      delivery_price_shift_applied: productAutoPricing
+        ? Math.max(Math.max(0,Number(productForm.delivery_price_shift_applied||0)), autoDeliveryReserve)
+        : productForm.delivery_price_shift_applied,
       search_keywords: productForm.search_keywords.trim() || autoMeta.search_keywords,
       category_slug: matchedCat.slug,
       variants,
@@ -2576,6 +2585,7 @@ Suitable For:
       is_test_product: false,
       buying_price: resetBuying,
       selling_price: resetBuying + resetProfit,
+      delivery_price_shift_applied: 0,
       discount_price: resetBuying + resetProfit,
       discount_enabled: false,
       auto_price_enabled: true,
@@ -3680,6 +3690,7 @@ Suitable For:
                             is_test_product: Boolean(p.is_test_product),
                             buying_price: p.buying_price,
                             selling_price: p.selling_price,
+                            delivery_price_shift_applied: Number(p.delivery_price_shift_applied || 0),
                             discount_price: (p.discount_enabled !== false && p.discount_price && p.discount_price < p.selling_price ? p.discount_price : p.selling_price),
                             discount_enabled: Boolean(p.discount_enabled),
                             auto_price_enabled: false,
@@ -6883,7 +6894,7 @@ Suitable For:
                             <button type="button" disabled={optionRows.length<=1} onClick={()=>{const rows=optionRows.filter((_,i)=>i!==optionIndex);const label=rows.map(row=>row.value).filter(Boolean).join(' / ');const next=[...productForm.variants];next[index]={...v,options:rows,option_name:rows[0]?.name||'Option',option_value:label,sku:buildVariantSku(productForm.sku,label||`OPT-${index+1}`,next.filter((_,i)=>i!==index).map(x=>x.sku))};setProductForm(prev=>({...prev,variants:next}));}} className="h-9 rounded-lg bg-red-950 text-red-300 disabled:opacity-30"><X className="mx-auto h-3 w-3"/></button>
                           </div>)}
                         </div>
-                        <label className="text-[10px] text-neutral-400">Buying Rs.<input type="number" min="0" value={v.buying_price} onChange={(e)=>{const cost=Math.max(0,Number(e.target.value||0));const next=[...productForm.variants];next[index]={...v,buying_price:cost,selling_price:productAutoPricing?cost+profitForBuyingPrice(cost):v.selling_price,discount_price:productAutoPricing?cost+profitForBuyingPrice(cost):v.discount_price,discount_enabled:productAutoPricing?false:v.discount_enabled,offer_buying_price:productAutoPricing?undefined:v.offer_buying_price,supplier_offer_enabled:productAutoPricing?false:v.supplier_offer_enabled};setProductForm(prev=>({...prev,variants:next}));}} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-2 text-white"/></label>
+                        <label className="text-[10px] text-neutral-400">Buying Rs.<input type="number" min="0" value={v.buying_price} onChange={(e)=>{const cost=Math.max(0,Number(e.target.value||0));const next=[...productForm.variants];next[index]={...v,buying_price:cost,selling_price:productAutoPricing?cost+profitForBuyingPrice(cost,v.delivery_price_shift_applied):v.selling_price,discount_price:productAutoPricing?cost+profitForBuyingPrice(cost,v.delivery_price_shift_applied):v.discount_price,discount_enabled:productAutoPricing?false:v.discount_enabled,offer_buying_price:productAutoPricing?undefined:v.offer_buying_price,supplier_offer_enabled:productAutoPricing?false:v.supplier_offer_enabled};setProductForm(prev=>({...prev,variants:next}));}} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-2 text-white"/></label>
                         <label className="text-[10px] text-neutral-400">Selling Rs.<input type="number" min="0" value={v.selling_price} onChange={(e)=>{const next=[...productForm.variants];next[index]={...v,selling_price:Number(e.target.value||0)};setProductForm(prev=>({...prev,variants:next}));}} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-2 text-white"/></label>
                         <label className="text-[10px] text-neutral-400">Stock<input type="number" min="0" value={v.stock_quantity} onChange={(e)=>{const stock=Math.max(0,Number(e.target.value||0));const next=[...productForm.variants];next[index]={...v,stock_quantity:stock,status:stock>0?'Active':'Out of Stock'};setProductForm(prev=>({...prev,variants:next}));}} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-2 text-white"/></label>
                         <div className="text-[10px] text-neutral-400">Variant Image<div className="mt-1 flex h-[34px] items-center gap-2">{v.image ? <img src={v.image} alt="" className="h-8 w-8 rounded-lg object-cover border border-neutral-700"/> : <div className="h-8 w-8 rounded-lg border border-dashed border-neutral-700 bg-neutral-900"/>}<input id={`variant-image-${v.id}`} type="file" accept="image/*" className="hidden" onChange={(e)=>{const file=e.target.files?.[0];e.target.value='';void handleVariantImageUpload(index,file);}}/><label htmlFor={`variant-image-${v.id}`} className="cursor-pointer rounded-lg border border-violet-500/30 bg-violet-500/10 px-2 py-2 font-black text-violet-300">{variantImageUploadingId===v.id?'Uploading…':v.image?'Change':'Upload'}</label>{v.image && <button type="button" onClick={()=>{const next=[...productForm.variants];next[index]={...v,image:''};setProductForm(prev=>({...prev,variants:next}));}} className="text-red-400"><X className="h-3.5 w-3.5"/></button>}</div></div>
@@ -6933,14 +6944,14 @@ Suitable For:
                 </div>
 
                 <div className="sm:col-span-2 rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-4 space-y-3">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-black text-emerald-300">O-RA Auto Price Calculator</p><p className="text-[10px] text-neutral-500">Selling Price below is the product price before the hidden delivery reserve. With FREE Delivery mode, Rs. {Math.max(0,Number(settings.delivery_fee||0)).toLocaleString()} is added automatically to the customer display price.</p></div><div className="flex rounded-xl border border-neutral-700 bg-neutral-950 p-1"><button type="button" onClick={()=>{setProductAutoPricing(true);const profit=profitForBuyingPrice(productForm.buying_price);setProductForm(prev=>({...prev,auto_price_enabled:true,selling_price:Number(prev.buying_price||0)+profit,discount_price:Number(prev.buying_price||0)+profit,discount_enabled:false,offer_buying_price:undefined,supplier_offer_enabled:false}));}} className={`rounded-lg px-3 py-1.5 text-[10px] font-black ${productAutoPricing?'bg-emerald-500 text-black':'text-neutral-400'}`}>AUTO PROFIT</button><button type="button" onClick={()=>{setProductAutoPricing(false);setProductForm(prev=>({...prev,auto_price_enabled:false}));}} className={`rounded-lg px-3 py-1.5 text-[10px] font-black ${!productAutoPricing?'bg-amber-500 text-black':'text-neutral-400'}`}>CUSTOM PROFIT</button></div></div>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-black text-emerald-300">O-RA Auto Price Calculator</p><p className="text-[10px] text-neutral-500">Buying Price is the real supplier cost. AUTO PROFIT adds the normal O-RA profit plus the Rs. {autoDeliveryReserve.toLocaleString()} delivery-price reserve once. Existing products already marked with this reserve do not receive it again.</p></div><div className="flex rounded-xl border border-neutral-700 bg-neutral-950 p-1"><button type="button" onClick={()=>{setProductAutoPricing(true);const profit=profitForBuyingPrice(productForm.buying_price,productForm.delivery_price_shift_applied);setProductForm(prev=>({...prev,auto_price_enabled:true,selling_price:Number(prev.buying_price||0)+profit,discount_price:Number(prev.buying_price||0)+profit,discount_enabled:false,offer_buying_price:undefined,supplier_offer_enabled:false}));}} className={`rounded-lg px-3 py-1.5 text-[10px] font-black ${productAutoPricing?'bg-emerald-500 text-black':'text-neutral-400'}`}>AUTO PROFIT</button><button type="button" onClick={()=>{setProductAutoPricing(false);setProductForm(prev=>({...prev,auto_price_enabled:false}));}} className={`rounded-lg px-3 py-1.5 text-[10px] font-black ${!productAutoPricing?'bg-amber-500 text-black':'text-neutral-400'}`}>CUSTOM PROFIT</button></div></div>
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-                    <label className="text-[10px] font-bold text-neutral-400">Buying Price<input type="number" min="0" required value={productForm.buying_price} onChange={(e)=>{const cost=Math.max(0,Number(e.target.value||0));setProductForm(prev=>productAutoPricing?{...prev,buying_price:cost,selling_price:cost+profitForBuyingPrice(cost),discount_price:cost+profitForBuyingPrice(cost),discount_enabled:false,offer_buying_price:undefined,supplier_offer_enabled:false}:{...prev,buying_price:cost});}} className="mt-1 w-full rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-white"/></label>
+                    <label className="text-[10px] font-bold text-neutral-400">Buying Price<input type="number" min="0" required value={productForm.buying_price} onChange={(e)=>{const cost=Math.max(0,Number(e.target.value||0));setProductForm(prev=>productAutoPricing?{...prev,buying_price:cost,selling_price:cost+profitForBuyingPrice(cost,prev.delivery_price_shift_applied),discount_price:cost+profitForBuyingPrice(cost,prev.delivery_price_shift_applied),discount_enabled:false,offer_buying_price:undefined,supplier_offer_enabled:false}:{...prev,buying_price:cost});}} className="mt-1 w-full rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-white"/></label>
                     <label className="text-[10px] font-bold text-neutral-400">Profit<input type="number" min="0" readOnly={productAutoPricing} value={Math.max(0,Number(productForm.selling_price||0)-Number(productForm.buying_price||0))} onChange={(e)=>{const profit=Math.max(0,Number(e.target.value||0));setProductAutoPricing(false);setProductForm(prev=>({...prev,auto_price_enabled:false,selling_price:Number(prev.buying_price||0)+profit,discount_price:Number(prev.buying_price||0)+profit,discount_enabled:false,offer_buying_price:undefined,supplier_offer_enabled:false}));}} className={`mt-1 w-full rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 ${productAutoPricing?'text-emerald-300':'text-white'}`}/></label>
-                    <label className="text-[10px] font-bold text-neutral-400">Base Selling<input type="number" min="0" required value={productForm.selling_price} onChange={(e)=>{setProductAutoPricing(false);setProductForm(prev=>({...prev,auto_price_enabled:false,selling_price:Math.max(0,Number(e.target.value||0))}));}} className="mt-1 w-full rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-white"/></label>
-                    <div className="rounded-xl border border-emerald-500/20 bg-neutral-950 p-3"><p className="text-[9px] font-bold text-neutral-500">CUSTOMER DISPLAY</p><p className="mt-1 text-lg font-black text-emerald-300">Rs. {(Number(productForm.selling_price||0)+(settings.free_delivery_enabled?Math.max(0,Number(settings.delivery_fee||0)):0)).toLocaleString()}</p><p className="text-[9px] text-neutral-500">{settings.free_delivery_enabled?'FREE delivery shown':'delivery separate'}</p></div>
+                    <label className="text-[10px] font-bold text-neutral-400">Selling (Reserve Included)<input type="number" min="0" required value={productForm.selling_price} onChange={(e)=>{setProductAutoPricing(false);setProductForm(prev=>({...prev,auto_price_enabled:false,selling_price:Math.max(0,Number(e.target.value||0))}));}} className="mt-1 w-full rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-white"/></label>
+                    <div className="rounded-xl border border-emerald-500/20 bg-neutral-950 p-3"><p className="text-[9px] font-bold text-neutral-500">CUSTOMER DISPLAY</p><p className="mt-1 text-lg font-black text-emerald-300">Rs. {(Number(productForm.selling_price||0)+(settings.free_delivery_enabled?Math.max(0,Number(settings.delivery_fee||0)):0)).toLocaleString()}</p><p className="text-[9px] text-neutral-500">{settings.free_delivery_enabled?'FREE delivery shown':`+ Rs. ${Math.max(0,Number(settings.delivery_fee||0)).toLocaleString()} delivery at order`}</p></div>
                   </div>
-                  <div className="grid grid-cols-2 gap-1 text-[9px] text-neutral-500 sm:grid-cols-5"><span>1–249 → +200</span><span>250–499 → +350</span><span>500 → +500</span><span>501–999 → +700</span><span>1,000–1,999 → +900</span><span>2,000–2,999 → +1,100</span><span>3,000–4,999 → +1,500</span><span>5,000–7,499 → +1,800</span><span>7,500–9,999 → +2,200</span><span>10,000–14,999 → +3,000</span><span>15,000–19,999 → +4,000</span><span>20,000+ → 25%</span></div>
+                  <div className="grid grid-cols-2 gap-1 text-[9px] text-neutral-500 sm:grid-cols-5"><span>1–249 → +{(200+autoDeliveryReserve).toLocaleString()}</span><span>250–499 → +{(350+autoDeliveryReserve).toLocaleString()}</span><span>500–999 → +{(700+autoDeliveryReserve).toLocaleString()}</span><span>1,000–1,999 → +{(900+autoDeliveryReserve).toLocaleString()}</span><span>2,000–2,999 → +{(1100+autoDeliveryReserve).toLocaleString()}</span><span>3,000–4,999 → +{(1500+autoDeliveryReserve).toLocaleString()}</span><span>5,000–7,499 → +{(1800+autoDeliveryReserve).toLocaleString()}</span><span>7,500–9,999 → +{(2200+autoDeliveryReserve).toLocaleString()}</span><span>10,000–14,999 → +{(3000+autoDeliveryReserve).toLocaleString()}</span><span>15,000–19,999 → +{(4000+autoDeliveryReserve).toLocaleString()}</span><span>20,000+ → 25% + {autoDeliveryReserve.toLocaleString()}</span></div>
                   <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 px-3 py-2 text-[10px] leading-4 text-blue-200">
                     This profit table is used only for the first product/variant price. Later supplier price changes must be saved from <b>SUPPLIER PRICE / OFFER</b> in the sidebar, so a new purchase cost cannot accidentally change the website price.
                   </div>
