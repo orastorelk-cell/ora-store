@@ -2208,6 +2208,128 @@ app.post('/api/orders/:id/dispatch-scan', requireAdminSession, async (req,res)=>
     return res.status(500).json({error:e?.message || 'Dispatch scan could not be saved.'});
   }
 });
+
+app.post('/api/orders/redispatch-waybill', requireStaffAnyPermission(['delivery','orders']), async (req,res)=>{
+  try{
+    const oldWaybill=String(req.body?.old_waybill || '').trim();
+    const newWaybill=String(req.body?.new_waybill || '').trim();
+    const orderId=String(req.body?.order_id || '').trim();
+    const reason=String(req.body?.reason || 'Returned parcel re-dispatch').trim() || 'Returned parcel re-dispatch';
+    if(!oldWaybill || !newWaybill || oldWaybill===newWaybill){
+      return res.status(400).json({error:'Old and new waybill numbers are required and must be different.'});
+    }
+
+    const current=await getOrderSnapshots();
+    const order=current.find((candidate:any)=>
+      (orderId && String(candidate?.id || '')===orderId) ||
+      String(candidate?.waybill_number || '').trim()===oldWaybill
+    );
+    if(!order) return res.status(404).json({error:'Order was not found for the old waybill.'});
+    if(String(order.waybill_number || '').trim()!==oldWaybill){
+      return res.status(409).json({error:'This order no longer owns the old waybill. Refresh and try again.'});
+    }
+
+    const newOwner=current.find((candidate:any)=>
+      String(candidate?.id || '')!==String(order.id || '') &&
+      String(candidate?.waybill_number || '').trim()===newWaybill
+    );
+    if(newOwner){
+      return res.status(409).json({error:'The new waybill is already assigned to '+String(newOwner.order_number || 'another order')+'.'});
+    }
+
+    const sb=getSupabaseAdmin();
+    if(sb){
+      const {data:lockedRows,error:lockReadError}=await sb
+        .from('courier_waybills')
+        .select('waybill_number,status,assigned_order_number')
+        .in('waybill_number',[oldWaybill,newWaybill]);
+      if(lockReadError) throw lockReadError;
+
+      const newLock=(lockedRows||[]).find((row:any)=>String(row.waybill_number)===newWaybill);
+      if(newLock && ['Assigned','Used','Cancelled'].includes(String(newLock.status || '')) &&
+         String(newLock.assigned_order_number || '')!==String(order.order_number || '')){
+        return res.status(409).json({error:'The selected replacement waybill is already locked/used.'});
+      }
+
+      const lockRows=[
+        {
+          waybill_number:oldWaybill,
+          courier_name:String(order.courier_name || 'Fardar'),
+          status:'Used',
+          assigned_order_number:String(order.order_number || ''),
+          assigned_at:new Date().toISOString(),
+        },
+        {
+          waybill_number:newWaybill,
+          courier_name:String(order.courier_name || 'Fardar'),
+          status:'Assigned',
+          assigned_order_number:String(order.order_number || ''),
+          assigned_at:new Date().toISOString(),
+        }
+      ];
+      const {error:lockWriteError}=await sb.from('courier_waybills').upsert(lockRows,{onConflict:'waybill_number'});
+      if(lockWriteError) throw lockWriteError;
+    }
+
+    const actor=(req as any).staffSessionUser as ServerStaffAccount | undefined;
+    const changedAt=new Date().toISOString();
+    const changedBy=String(actor?.display_name || actor?.username || 'Admin');
+    const redispatchBatch='REDISPATCH-'+String(order.order_number || 'ORDER')+'-'+changedAt.replace(/[^0-9]/g,'').slice(0,14);
+    const priorHistory=Array.isArray(order.waybill_history)?order.waybill_history:[];
+
+    const updated={
+      ...order,
+      waybill_number:newWaybill,
+      courier_name:String(order.courier_name || 'Fardar'),
+      shipment_mode:'manual',
+      tracking_status:'Waybill Assigned',
+      delivery_status:'Ready to Ship',
+      dispatch_status:'Not Scanned',
+      dispatch_scanned_at:undefined,
+      dispatch_scanned_by:undefined,
+      order_status:'Processing',
+      waybill_reassigned_from:oldWaybill,
+      waybill_reassigned_at:changedAt,
+      waybill_reassigned_reason:reason,
+      waybill_protection_locked:true,
+      waybill_protection_reason:'Returned parcel re-dispatch. Old waybill '+oldWaybill+' is permanently locked; current waybill '+newWaybill+' is protected.',
+      waybill_history:[
+        ...priorHistory,
+        {
+          old_waybill:oldWaybill,
+          new_waybill:newWaybill,
+          reason,
+          changed_at:changedAt,
+          changed_by:changedBy,
+          previous_fardar_exported_at:order.fardar_csv_exported_at,
+          previous_fardar_exported_waybill:order.fardar_csv_exported_waybill,
+        }
+      ],
+      invoice_pack_batch_id:redispatchBatch,
+      invoice_pack_downloaded_at:undefined,
+      invoice_pack_downloaded_by:undefined,
+      invoice_pack_download_set_date:undefined,
+      invoice_pack_download_set_number:undefined,
+      notes:[String(order.notes || '').trim(),'RETURNED PARCEL RE-DISPATCH: '+oldWaybill+' -> '+newWaybill].filter(Boolean).join(' | '),
+      fardar_tracking_history:[
+        ...(Array.isArray(order.fardar_tracking_history)?order.fardar_tracking_history:[]),
+        {at:changedAt,status:'Re-Dispatch Ready',note:'Returned parcel re-dispatch: '+oldWaybill+' -> '+newWaybill}
+      ],
+    };
+
+    await saveOrderSnapshot(updated);
+    return res.json({
+      ok:true,
+      order:updated,
+      old_waybill:oldWaybill,
+      new_waybill:newWaybill,
+      message:String(order.order_number || '')+' ready for re-dispatch: '+oldWaybill+' -> '+newWaybill,
+    });
+  }catch(e:any){
+    return res.status(500).json({error:e?.message || 'Returned parcel re-dispatch failed.'});
+  }
+});
+
 app.put('/api/orders/:id', requireAdminSession, async (req,res)=>{
   try{
     const incoming=req.body?.order;
@@ -2221,6 +2343,26 @@ app.put('/api/orders/:id', requireAdminSession, async (req,res)=>{
     const existing=current.find((candidate:any)=>String(candidate?.id || '')===id);
     let order={...incoming};
     let waybillPreserved=false;
+
+    // Durable waybill lock registry. This blocks stale browsers from reusing a
+    // waybill that has already been consumed or permanently retired by re-dispatch.
+    const requestedWaybill=String(order.waybill_number || '').trim();
+    if(requestedWaybill){
+      const sb=getSupabaseAdmin();
+      if(sb){
+        const {data:lockRow,error:lockError}=await sb
+          .from('courier_waybills')
+          .select('waybill_number,status,assigned_order_number')
+          .eq('waybill_number',requestedWaybill)
+          .maybeSingle();
+        if(lockError) throw lockError;
+        if(lockRow && ['Assigned','Used','Cancelled'].includes(String(lockRow.status || '')) &&
+           String(lockRow.assigned_order_number || '') &&
+           String(lockRow.assigned_order_number || '')!==String(order.order_number || '')){
+          return res.status(409).json({error:'Waybill '+requestedWaybill+' is already locked/used by '+String(lockRow.assigned_order_number)+'.'});
+        }
+      }
+    }
 
     if(existing){
       const existingWaybill=String(existing.waybill_number || '').trim();
@@ -2273,6 +2415,23 @@ app.put('/api/orders/:id', requireAdminSession, async (req,res)=>{
     }
 
     await saveOrderSnapshot(order);
+
+    // Record normal first-time waybill assignments in the durable lock registry.
+    const finalWaybill=String(order.waybill_number || '').trim();
+    if(finalWaybill){
+      const sb=getSupabaseAdmin();
+      if(sb){
+        const {error:waybillLockError}=await sb.from('courier_waybills').upsert([{
+          waybill_number:finalWaybill,
+          courier_name:String(order.courier_name || 'Fardar'),
+          status:(order.dispatch_status==='Handed Over' || order.order_status==='Delivered')?'Used':'Assigned',
+          assigned_order_number:String(order.order_number || ''),
+          assigned_at:new Date().toISOString(),
+        }],{onConflict:'waybill_number'});
+        if(waybillLockError) console.warn('Durable waybill lock save failed:',waybillLockError.message);
+      }
+    }
+
     return res.json({ok:true,order,waybill_preserved:waybillPreserved});
   }catch(e:any){return res.status(500).json({error:e?.message||'Order update failed.'});}
 });
