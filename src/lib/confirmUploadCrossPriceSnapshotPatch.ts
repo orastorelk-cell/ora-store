@@ -62,6 +62,69 @@ export const confirmUploadCrossPriceSnapshotPatch = () => ({
           }catch(e:any){errors.push(id + ': ' + (e?.message||'Invalid item selection.'));bad=true;}
         }`;
 
+    // Newer Confirm Upload packing logic may already have expanded the item
+    // snapshot block to preserve historical same-product variant pricing. Enhance
+    // that transformed block in-place instead of requiring the older marker.
+    if (text.includes('const historicalSibling=!applyRequested')) {
+      const existingOld = String.raw`        if(existingItem){
+          const preservedUnit=Math.max(0,Number(existingItem.unit_price||0));
+          nextItems.push({...existingItem,quantity:qty,subtotal:Math.round(preservedUnit*qty*100)/100});
+        }else{`;
+      const existingNew = String.raw`        const referenceRaw=unitPriceI>=0?String(c[unitPriceI]||'').trim().replace(/,/g,''):'';
+        const referenceMatch=referenceRaw.match(/-?(?:\d+(?:\.\d+)?|\.\d+)/);
+        const sheetReferenceUnit=referenceMatch?Math.max(0,Number(referenceMatch[0])||0):0;
+        if(existingItem){
+          const preservedUnit=Math.max(0,Number(existingItem.unit_price||0));
+          const preservedReference=Math.max(
+            preservedUnit,
+            sheetReferenceUnit,
+            Math.max(0,Number((existingItem as any).regular_unit_price||0)),
+            preservedUnit+Math.max(0,Number((existingItem as any).supplier_offer_discount_per_unit||0))
+          );
+          nextItems.push({
+            ...existingItem,
+            quantity:qty,
+            unit_price:preservedUnit,
+            subtotal:Math.round(preservedUnit*qty*100)/100,
+            regular_unit_price:preservedReference,
+            supplier_offer_discount_per_unit:Math.max(0,preservedReference-preservedUnit),
+          });
+        }else{`;
+      text = replaceRequired(text, existingOld, existingNew, 'historical existing item snapshot');
+
+      const historicalOld = String.raw`              const historicalReference=Math.max(
+                freshUnit,
+                Number(historicalSibling.regular_unit_price||0),
+                freshUnit+Number(historicalSibling.supplier_offer_discount_per_unit||0)
+              );`;
+      const historicalNew = String.raw`              const historicalReference=Math.max(
+                freshUnit,
+                sheetReferenceUnit,
+                Number(historicalSibling.regular_unit_price||0),
+                freshUnit+Number(historicalSibling.supplier_offer_discount_per_unit||0)
+              );`;
+      text = replaceRequired(text, historicalOld, historicalNew, 'historical sibling reference');
+
+      const freshElseOld = String.raw`            }else{
+              nextItems.push(freshItem);
+            }`;
+      const freshElseNew = String.raw`            }else{
+              const referenceUnit=Math.max(
+                freshUnit,
+                sheetReferenceUnit,
+                Math.max(0,Number((freshItem as any).regular_unit_price||0)),
+                freshUnit+Math.max(0,Number((freshItem as any).supplier_offer_discount_per_unit||0))
+              );
+              nextItems.push({
+                ...freshItem,
+                regular_unit_price:referenceUnit,
+                supplier_offer_discount_per_unit:Math.max(0,referenceUnit-freshUnit),
+              });
+            }`;
+      text = replaceRequired(text, freshElseOld, freshElseNew, 'fresh item reference');
+      return { code: text, map: null };
+    }
+
     text = replaceRequired(text, oldBlock, newBlock, 'confirmed item snapshot');
     return { code: text, map: null };
   },
