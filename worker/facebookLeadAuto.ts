@@ -341,15 +341,18 @@ const applyFacebookBundleOfferSnapshot = (
   if (!(unitPrice > 0)) return item;
 
   let referencePrice = 0;
+  let componentUnits = 0;
   for (const component of product.bundle_components || []) {
     const child = products.find((row) => row.id === component.product_id);
     if (!child || normalizedProductType(child) === 'bundle') return item;
-    const childVariant = component.variant_id
-      ? (child.variants || []).find((variant) => variant.id === component.variant_id)
+    const snapshotComponent = (item.bundle_components || []).find((row) => row.product_id === component.product_id);
+    const selectedVariantId = snapshotComponent?.variant_id || component.variant_id;
+    const childVariant = selectedVariantId
+      ? (child.variants || []).find((variant) => variant.id === selectedVariantId)
       : undefined;
-    if (normalizedProductType(child) === 'variant' && !childVariant) return item;
 
     const childQty = Math.max(1, Number(component.quantity || 1));
+    componentUnits += childQty;
     const current = Math.max(0, Number(displayUnitPrice(child, settings, childVariant) || 0));
     const savedRegular = Math.max(current, Number(regularDisplayUnitPrice(child, settings, childVariant) || 0));
     const hasSavedDiscount = savedRegular > current + 0.001;
@@ -368,7 +371,13 @@ const applyFacebookBundleOfferSnapshot = (
     referencePrice += childReference * childQty;
   }
 
-  referencePrice = Math.max(unitPrice, Math.round(referencePrice * 100) / 100);
+  const rebalanceAmount = settings.delivery_price_rebalance_enabled
+    ? Math.max(0, Number(settings.delivery_price_rebalance_amount || 0))
+    : 0;
+  referencePrice = Math.max(
+    unitPrice,
+    Math.round(Math.max(0, referencePrice - rebalanceAmount * Math.max(0, componentUnits - 1)) * 100) / 100,
+  );
   const savingPerUnit = Math.max(0, Math.round((referencePrice - unitPrice) * 100) / 100);
   return savingPerUnit > 0
     ? { ...item, regular_unit_price: referencePrice, supplier_offer_discount_per_unit: savingPerUnit }
