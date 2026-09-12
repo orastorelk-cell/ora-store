@@ -44,14 +44,19 @@ export const bundleComponentOfferDisplay = (
   if (!components.length) return inactive();
 
   let referencePrice = 0;
+  let componentUnits = 0;
   for (const component of components) {
     const child = allProducts.find((product) => product.id === component.product_id);
     if (!child || normalizedProductType(child) === 'bundle') return inactive();
 
+    // A combo can intentionally keep one variant component unresolved until the
+    // customer/call-center selects it. In that case use the child product-level
+    // price/offer as the generic combo preview; a resolved bundle clone will use
+    // the exact selected variant automatically.
     const variant = component.variant_id ? variantById(child, component.variant_id) : undefined;
-    if (normalizedProductType(child) === 'variant' && !variant) return inactive();
 
     const quantity = Math.max(1, Number(component.quantity || 1));
+    componentUnits += quantity;
     const current = money(displayUnitPrice(child, settings, variant));
     const savedRegular = money(regularDisplayUnitPrice(child, settings, variant));
     const hasSavedDiscount = savedRegular > current + 0.001;
@@ -70,7 +75,15 @@ export const bundleComponentOfferDisplay = (
     referencePrice += childReference * quantity;
   }
 
-  referencePrice = money(referencePrice);
+  // Every single-item customer price already contains the one-time delivery
+  // rebalance amount. A combo order must carry that amount only once, exactly like
+  // the auto bundle-price engine, so remove the duplicated shift from the combined
+  // crossed/reference total as well.
+  const rebalanceAmount = settings?.delivery_price_rebalance_enabled
+    ? Math.max(0, Number(settings.delivery_price_rebalance_amount || 0))
+    : 0;
+  const duplicatedShift = rebalanceAmount * Math.max(0, componentUnits - 1);
+  referencePrice = money(Math.max(0, referencePrice - duplicatedShift));
   const saving = money(Math.max(0, referencePrice - customerPrice));
   const percent = referencePrice > 0 && saving > 0
     ? Math.round((saving / referencePrice) * 1000) / 10
