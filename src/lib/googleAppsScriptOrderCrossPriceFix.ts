@@ -10,7 +10,7 @@ export const GOOGLE_APPS_SCRIPT_ORDER_CROSS_PRICE_FIX = String.raw`
 // Existing orders can be repaired safely with repairExistingOrderPricingOnly().
 // No order rows are deleted/reordered and stock/status/waybill fields are untouched.
 // ============================================================
-ORA_VERSION = 'O-RA Store Google Sheets Clean V1 + Order Cross Price V4 Offer Price';
+ORA_VERSION = 'O-RA Store Google Sheets Clean V1 + Order Cross Price V5 Delivery Qty Edit';
 
 function oraOrderPricingKey_(code, variant) {
   return oraKey_(oraStr_(code).trim() + '|' + oraStr_(variant).trim());
@@ -285,7 +285,7 @@ oraRecalcOrder_ = function(sh, orderId) {
   var rate = oraQtyOfferRateFromRules_(rules, totalQty);
   var specialDiscount = Math.max(0, oraRound_(normalTotal - actualProductsTotal));
   var rebalanceAmount = Math.max(0, oraNum_(rules.delivery_price_rebalance_amount || rules.delivery_price_rebalance_unit_shift || 0));
-  var useDeliveryQtyOffer = rules.delivery_rebalance_qty_offer === true;
+  var useDeliveryQtyOffer = rules.delivery_rebalance_qty_offer === true || (Object.prototype.hasOwnProperty.call(rules, 'delivery_rebalance_qty_offer') && rules.delivery_price_rebalance_enabled === true && rebalanceAmount > 0);
   var qtyBase = useDeliveryQtyOffer ? Math.max(0, actualProductsTotal - rebalanceAmount * totalQty) : actualProductsTotal;
   var qtyDiscount = Math.min(qtyBase, Math.max(0, oraRound_(qtyBase * rate / 100)));
   // For NEW marked orders, every extra embedded Rs.250 is shown as Qty Offer.
