@@ -700,9 +700,10 @@ export const AdminDashboard: React.FC = () => {
   const [priceIncreaseNewCost, setPriceIncreaseNewCost] = useState<number>(0);
   const [priceIncreaseMessage, setPriceIncreaseMessage] = useState('');
 
-  const autoDeliveryReserve = Math.max(0, Number(settings.delivery_price_rebalance_amount ?? settings.delivery_fee ?? 0));
-  const profitForBuyingPrice = (buyingPrice: number, alreadyApplied = 0) =>
-    oraProfitForBuyingPrice(buyingPrice) + Math.max(0, autoDeliveryReserve - Math.max(0, Number(alreadyApplied || 0)));
+  const adminDeliverySplit = deliverySplitForSettings(settings);
+  const autoDeliveryReserve = adminDeliverySplit.embeddedAmount;
+  const visibleDeliveryCharge = adminDeliverySplit.visibleDelivery;
+  const profitForBuyingPrice = (buyingPrice: number) => oraProfitForBuyingPrice(buyingPrice);
 
   // Global running Item Code. The first product after FULL RESET is typed manually
   // (example S0001). After that Auto Code follows the same prefix/number pattern.
