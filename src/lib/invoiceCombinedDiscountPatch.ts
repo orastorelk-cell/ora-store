@@ -20,18 +20,18 @@ export const invoiceCombinedDiscountPatch = () => ({
 
     if (id.endsWith('/src/lib/exactInvoiceTemplateBase.ts')) {
       const oldLines = `    ...(supplierOfferDiscount > 0 ? [{ label:'Special Offer', value:\`- \${money(supplierOfferDiscount)}\` }] : []),\n    ...(qtyOfferDiscount > 0 ? [{ label:'Qty Offer', value:\`- \${money(qtyOfferDiscount)}\` }] : []),`;
-      const newLines = `    ...((supplierOfferDiscount + qtyOfferDiscount) > 0 ? [{ label:'Offer Discount', value:\`- \${money(supplierOfferDiscount + qtyOfferDiscount)}\` }] : []),`;
+      const newLines = `    ...((supplierOfferDiscount + qtyOfferDiscount + Math.max(0, Number((order as any).delivery_rebalance_qty_offer_amount || 0))) > 0 ? [{ label:'Offer Discount', value:\`- \${money(supplierOfferDiscount + qtyOfferDiscount + Math.max(0, Number((order as any).delivery_rebalance_qty_offer_amount || 0)))}\` }] : []),`;
       text = replaceRequired(text, oldLines, newLines, 'invoice discount summary rows');
       return { code: text, map: null };
     }
 
     if (id.endsWith('/src/lib/pdfGenerator.ts')) {
       const oldAllDiscount = `  const allDiscount=Math.round((displaySpecial+qtyOffer)*100)/100;\n  const computed=Math.max(0,Math.round((crossedSubtotal-allDiscount+delivery+wrapFee)*100)/100);`;
-      const newAllDiscount = `  const confirmedDiscount=repairMoney(snapshot.discount);\n  const allDiscount=confirmedDiscount>0?confirmedDiscount:Math.round((displaySpecial+qtyOffer)*100)/100;\n  const computed=Math.max(0,Math.round((crossedSubtotal-allDiscount+delivery+wrapFee)*100)/100);`;
+      const newAllDiscount = `  const confirmedDiscount=repairMoney(snapshot.discount);\n  const autoQtyOffer=repairMoney((order as any).delivery_rebalance_qty_offer_amount);\n  const allDiscount=confirmedDiscount>0?confirmedDiscount:Math.round((displaySpecial+qtyOffer+autoQtyOffer)*100)/100;\n  const computed=Math.max(0,Math.round((crossedSubtotal-allDiscount+delivery+wrapFee)*100)/100);`;
       text = replaceRequired(text, oldAllDiscount, newAllDiscount, 'repair combined discount source');
 
       const oldDiscountField = `    special_offer_discount:qtyOffer,`;
-      const newDiscountField = `    special_offer_discount:Math.max(0,Math.round((allDiscount-displaySpecial)*100)/100),`;
+      const newDiscountField = `    special_offer_discount:Math.max(0,Math.round((allDiscount-displaySpecial-autoQtyOffer)*100)/100),\n    delivery_rebalance_qty_offer_amount:autoQtyOffer,`;
       text = replaceRequired(text, oldDiscountField, newDiscountField, 'repair invoice discount snapshot');
 
       return { code: text, map: null };
