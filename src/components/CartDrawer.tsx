@@ -22,6 +22,7 @@ export const CartDrawer: React.FC = () => {
     updateCartQuantity,
     cartSubtotal,
     cartSpecialOfferDiscount,
+    cartDeliveryQtyOfferDiscount,
     cartMultiBuyDiscountRate,
     cartFinalProductsTotal,
     cartItemCount,
@@ -159,13 +160,22 @@ export const CartDrawer: React.FC = () => {
                 <span>{getTranslation(language, 'subtotal')}</span>
                 <span>Rs. {formatLkr(cartSubtotal)}</span>
               </div>
+              {cartDeliveryQtyOfferDiscount > 0 && (
+                <div className="my-2 rounded-xl border border-cyan-200 bg-cyan-50 p-2">
+                  <div className="flex justify-between font-black text-cyan-700">
+                    <span>🎉 Qty Offer</span>
+                    <span>- Rs. {formatLkr(cartDeliveryQtyOfferDiscount)}</span>
+                  </div>
+                  <p className="mt-1 text-[10px] font-semibold text-cyan-600">Automatic saving for extra quantity.</p>
+                </div>
+              )}
               {cartSpecialOfferDiscount > 0 && (
                 <div className="my-2 rounded-xl border border-orange-200 bg-orange-50 p-2">
                   <div className="flex justify-between font-black text-orange-700">
-                    <span>🎉 Qty Offer</span>
+                    <span>🎉 Multi-Buy Offer ({cartMultiBuyDiscountRate}% OFF)</span>
                     <span>- Rs. {formatLkr(cartSpecialOfferDiscount)}</span>
                   </div>
-                  <p className="mt-1 text-[10px] font-semibold text-orange-600">You save more when you buy more!</p>
+                  <p className="mt-1 text-[10px] font-semibold text-orange-600">Manual percentage Qty Offer.</p>
                 </div>
               )}
               <div className="flex justify-between text-gray-500">
