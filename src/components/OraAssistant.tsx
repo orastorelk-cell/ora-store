@@ -344,9 +344,9 @@ export const OraAssistant: React.FC = () => {
 
   const packingLine = (order: VerifiedOrder) => {
     if (!order.packing_pdf_downloaded) return '';
-    if (lang === 'si') return '📦 පැකින්: ඔබගේ ඇණවුම පාර්සල් කිරීමට Packing Section එකට යවා ඇත.';
-    if (lang === 'ta') return '📦 Packing: உங்கள் ஆர்டர் பார்சல் தயாரிப்பிற்காக Packing Section-க்கு அனுப்பப்பட்டுள்ளது.';
-    return '📦 Packing: Your order has been sent to the Packing Section for parcel preparation.';
+    if (lang === 'si') return '📦 ඔබගේ ඇණවුම බෙදාහැරීම සඳහා සූදානම් කරමින් පවතී. Courier වෙත භාරදුන් පසු Delivery status එක update වේ.';
+    if (lang === 'ta') return '📦 உங்கள் ஆர்டர் டெலிவரிக்காக தயாராகிக் கொண்டிருக்கிறது. Courier-க்கு ஒப்படைத்த பிறகு Delivery status update ஆகும்.';
+    return '📦 Your order is being prepared for delivery. The delivery status will update after it is handed over to the courier.';
   };
 
   const presentOrder = (order: VerifiedOrder) => {
