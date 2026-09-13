@@ -22,6 +22,62 @@ export const oraProfitForBuyingPrice = (value: number) => {
 export const oraSuggestedBaseSellingPrice = (buyingPrice: number) =>
   Math.max(0, Number(buyingPrice || 0)) + oraProfitForBuyingPrice(buyingPrice);
 
+
+const money2 = (value: unknown) => Math.max(0, Math.round(Number(value || 0) * 100) / 100);
+
+/**
+ * Delivery split source of truth.
+ * Example: base Rs.500 + 50% => Rs.250 embedded in item display + Rs.250 shown as Delivery.
+ * Legacy settings without the new percentage are derived from original fee + saved rebalance amount.
+ */
+export const deliverySplitForSettings = (settings?: StoreSettings) => {
+  const legacyBase = Math.max(
+    0,
+    Number(settings?.delivery_price_rebalance_original_fee ?? settings?.delivery_fee ?? 0),
+  );
+  const baseFee = Math.max(0, Number(settings?.delivery_base_fee ?? legacyBase));
+  const legacyAmount = Math.max(0, Number(settings?.delivery_price_rebalance_amount || 0));
+  const derivedLegacyPercent = baseFee > 0 ? (legacyAmount / baseFee) * 100 : 0;
+  const percent = Math.max(
+    0,
+    Math.min(
+      100,
+      Number(
+        settings?.delivery_rebalance_percent ??
+        (settings?.delivery_price_rebalance_enabled ? derivedLegacyPercent : 0),
+      ) || 0,
+    ),
+  );
+  const embeddedAmount = money2(baseFee * (percent / 100));
+  const visibleDelivery = money2(Math.max(0, baseFee - embeddedAmount));
+  return {
+    baseFee: money2(baseFee),
+    percent: Math.round(percent * 100) / 100,
+    embeddedAmount,
+    visibleDelivery,
+    enabled: embeddedAmount > 0.001,
+  };
+};
+
+const targetShiftApplied = (product: Product, variant?: ProductVariant) =>
+  Math.max(0, Number(variant?.delivery_price_shift_applied ?? product.delivery_price_shift_applied ?? 0));
+
+/**
+ * Saved prices from the Rs.500 -> Rs.250 migration may already contain Rs.250.
+ * Remove that saved migration amount first, then add the CURRENT configured embedded amount.
+ * This lets the admin change the split percentage later without stacking delivery into profit.
+ */
+export const deliveryAdjustedUnitBase = (
+  savedPrice: number,
+  product: Product,
+  settings?: StoreSettings,
+  variant?: ProductVariant,
+) => {
+  const applied = targetShiftApplied(product, variant);
+  const { embeddedAmount } = deliverySplitForSettings(settings);
+  return money2(Math.max(0, Number(savedPrice || 0) - applied + embeddedAmount));
+};
+
 export type SupplierPriceChangeKind = 'offer' | 'increase' | 'same';
 
 /**
@@ -175,15 +231,19 @@ export const effectiveProductBasePrice = (product: Product) =>
     : Number(product.selling_price || 0);
 
 export const displayUnitPrice = (product: Product, settings?: StoreSettings, variant?: ProductVariant) => {
-  const base = variant ? effectiveVariantPrice(variant) : effectiveProductBasePrice(product);
-  const includedDelivery = settings?.free_delivery_enabled ? Math.max(0, Number(settings.delivery_fee || 0)) : 0;
-  return base + includedDelivery;
+  const savedBase = variant ? effectiveVariantPrice(variant) : effectiveProductBasePrice(product);
+  const adjustedBase = deliveryAdjustedUnitBase(savedBase, product, settings, variant);
+  const { visibleDelivery } = deliverySplitForSettings(settings);
+  const includedDelivery = settings?.free_delivery_enabled ? visibleDelivery : 0;
+  return money2(adjustedBase + includedDelivery);
 };
 
 export const regularDisplayUnitPrice = (product: Product, settings?: StoreSettings, variant?: ProductVariant) => {
-  const base = variant ? Math.max(0, Number(variant.selling_price || 0)) : Math.max(0, Number(product.selling_price || 0));
-  const includedDelivery = settings?.free_delivery_enabled ? Math.max(0, Number(settings.delivery_fee || 0)) : 0;
-  return base + includedDelivery;
+  const savedBase = variant ? Math.max(0, Number(variant.selling_price || 0)) : Math.max(0, Number(product.selling_price || 0));
+  const adjustedBase = deliveryAdjustedUnitBase(savedBase, product, settings, variant);
+  const { visibleDelivery } = deliverySplitForSettings(settings);
+  const includedDelivery = settings?.free_delivery_enabled ? visibleDelivery : 0;
+  return money2(adjustedBase + includedDelivery);
 };
 
 export const effectiveBuyingPrice = (product: Product, variant?: ProductVariant) => {
@@ -198,14 +258,17 @@ export const effectiveBuyingPrice = (product: Product, variant?: ProductVariant)
 };
 
 export const selectionDiscountPercent = (product: Product, variant?: ProductVariant, settings?: StoreSettings) => {
-  const delivery = settings?.free_delivery_enabled ? Math.max(0, Number(settings.delivery_fee || 0)) : 0;
-  const regularBase = variant ? Math.max(0, Number(variant.selling_price || 0)) : Math.max(0, Number(product.selling_price || 0));
-  const discountedBase = variant
+  const regularSaved = variant ? Math.max(0, Number(variant.selling_price || 0)) : Math.max(0, Number(product.selling_price || 0));
+  const discountedSaved = variant
     ? (variant.discount_enabled !== false ? Math.max(0, Number(variant.discount_price || 0)) : 0)
     : (product.discount_enabled !== false ? Math.max(0, Number(product.discount_price || 0)) : 0);
-  const regular = regularBase + delivery;
-  const discounted = discountedBase + delivery;
-  return regular > 0 && discountedBase > 0 && discountedBase < regularBase
+  const { visibleDelivery } = deliverySplitForSettings(settings);
+  const delivery = settings?.free_delivery_enabled ? visibleDelivery : 0;
+  const regular = deliveryAdjustedUnitBase(regularSaved, product, settings, variant) + delivery;
+  const discounted = discountedSaved > 0
+    ? deliveryAdjustedUnitBase(discountedSaved, product, settings, variant) + delivery
+    : 0;
+  return regular > 0 && discounted > 0 && discounted < regular
     ? Math.max(1, Math.round(((regular - discounted) / regular) * 100))
     : 0;
 };
