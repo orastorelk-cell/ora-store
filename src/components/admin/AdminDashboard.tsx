@@ -6160,16 +6160,38 @@ Suitable For:
             </h2>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-              <div>
-                <label className="block text-neutral-300 font-semibold mb-1">
-                  Default Islandwide Delivery Charge (Rs.)
-                </label>
-                <input
-                  type="number"
-                  value={settings.delivery_fee}
-                  onChange={(e) => updateSettings({ delivery_fee: Number(e.target.value) })}
-                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white"
-                />
+              <div className="md:col-span-2 rounded-2xl border border-cyan-500/25 bg-cyan-500/5 p-4 space-y-4">
+                <div>
+                  <p className="text-xs font-black text-cyan-300">DELIVERY PRICE SPLIT</p>
+                  <p className="mt-1 text-[10px] leading-4 text-neutral-400">Set the full delivery charge once, then choose what percentage moves into the customer item price. This moved amount is separate from profit.</p>
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <label className="text-[10px] font-bold text-neutral-300">Full Delivery Charge (Rs.)
+                    <input
+                      type="number"
+                      min="0"
+                      value={settings.delivery_base_fee ?? settings.delivery_price_rebalance_original_fee ?? settings.delivery_fee}
+                      onChange={(e)=>updateSettings({delivery_base_fee:Math.max(0,Number(e.target.value||0))})}
+                      className="mt-1 w-full rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-white"
+                    />
+                  </label>
+                  <label className="text-[10px] font-bold text-neutral-300">Move Into Item Price (%)
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value={adminDeliverySplit.percent}
+                      onChange={(e)=>updateSettings({delivery_rebalance_percent:Math.max(0,Math.min(100,Number(e.target.value||0)))})}
+                      className="mt-1 w-full rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-white"
+                    />
+                  </label>
+                </div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-3"><p className="text-[9px] font-black text-neutral-500">ITEM PRICE PART</p><p className="mt-1 text-lg font-black text-cyan-300">Rs. {autoDeliveryReserve.toLocaleString()}</p><p className="text-[9px] text-neutral-500">not profit</p></div>
+                  <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-3"><p className="text-[9px] font-black text-neutral-500">WEBSITE / BILL / SHEET DELIVERY</p><p className="mt-1 text-lg font-black text-emerald-300">Rs. {visibleDeliveryCharge.toLocaleString()}</p></div>
+                  <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-3"><p className="text-[9px] font-black text-neutral-500">AUTO QTY OFFER</p><p className="mt-1 text-sm font-black text-orange-300">{autoDeliveryReserve > 0 ? `Qty 2: Rs. ${autoDeliveryReserve.toLocaleString()} • Qty 3: Rs. ${(autoDeliveryReserve*2).toLocaleString()}` : 'OFF'}</p><p className="text-[9px] text-neutral-500">0% = no automatic delivery Qty Offer</p></div>
+                </div>
               </div>
 
               <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-3 space-y-2">
