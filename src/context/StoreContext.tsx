@@ -588,6 +588,11 @@ useEffect(() => {
   const [isAdminView, setIsAdminView] = useState(false);
   const [sharedStoreReady, setSharedStoreReady] = useState(false);
   const sharedStoreVersionRef = useRef(0);
+  // Serialize full storefront publishes. Rapid Admin edits used to start overlapping
+  // PUT requests for the ~shared catalog payload, so an older transient failure could
+  // raise "Website sync failed" even when a newer save was already succeeding.
+  const storefrontPublishQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const storefrontPublishSeqRef = useRef(0);
 
   // Sync to localStorage
   useEffect(() => {
@@ -809,51 +814,86 @@ useEffect(() => {
   }, [adminUser?.id]);
 
   // Publish catalog/category/store-setting edits from authenticated staff only.
-  // Debouncing collapses rapid product/stock edits into one shared write.
+  // Full storefront saves are serialized and retried so rapid edits / short network
+  // hiccups cannot create false "Website sync failed" alerts or out-of-order writes.
   useEffect(() => {
     if (!sharedStoreReady || !adminUser) return;
-    const hasStaffSession = Boolean(getStaffSessionToken());
-    if (!hasStaffSession && !isLocalStorefrontHost()) {
-      localStorage.removeItem('ora_admin_user');
-      setAdminUser(null);
-      window.alert('Admin session expired. Please login again before saving products. Unsynced changes are not live on other devices.');
-      return;
-    }
+
     const timer = window.setTimeout(() => {
-      const publish = hasStaffSession
-        ? sharedStaffRequest('/api/admin/storefront/state', {
-            method:'PUT',
-            body:JSON.stringify({ products, categories, settings }),
-          })
-        : localStorefrontRequest({ products, categories, settings });
-      publish.then((data) => {
-        sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, Number(data?.version || 0));
-      }).catch((err:any) => {
-        if (Number(err?.status || 0) === 401 && !isLocalStorefrontHost()) {
-          localStorage.removeItem('ora_staff_session_token');
-          localStorage.removeItem('ora_admin_user');
-          setAdminUser(null);
-          window.alert('Admin session expired. Please login again, then save the product again so it publishes to all devices.');
-          return;
-        }
-        // One automatic retry covers short network/server hiccups. Never leave an
-        // Admin believing a product is live when only this browser cache changed.
-        window.setTimeout(() => {
-          const retry = getStaffSessionToken()
-            ? sharedStaffRequest('/api/admin/storefront/state', {
-                method:'PUT',
-                body:JSON.stringify({ products, categories, settings }),
-              })
-            : Promise.reject(new Error('Admin session is no longer active.'));
-          retry.then((data) => {
-            sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, Number(data?.version || 0));
-          }).catch((retryErr:any) => {
-            console.warn('Shared storefront publish failed after retry:', retryErr?.message || retryErr);
-            window.alert('Website sync failed. This change may be visible only in this browser. Please login again and save once more.');
-          });
-        }, 1500);
-      });
-    }, 500);
+      const seq = ++storefrontPublishSeqRef.current;
+      const snapshot = { products, categories, settings };
+
+      storefrontPublishQueueRef.current = storefrontPublishQueueRef.current
+        .catch(() => {})
+        .then(async () => {
+          if (!adminUser) return;
+
+          const publishOnce = async () => {
+            if (isLocalStorefrontHost()) {
+              const token = getStaffSessionToken();
+              return token
+                ? sharedStaffRequest('/api/admin/storefront/state', {
+                    method:'PUT',
+                    body:JSON.stringify(snapshot),
+                  })
+                : localStorefrontRequest(snapshot);
+            }
+
+            // Keep active Admin sessions fresh before a large storefront write.
+            // The refresh helper existed previously but this publish path never used it.
+            await refreshStaffSessionToken();
+            if (!getStaffSessionToken()) {
+              const authErr:any = new Error('Admin session is no longer active.');
+              authErr.status = 401;
+              throw authErr;
+            }
+            return sharedStaffRequest('/api/admin/storefront/state', {
+              method:'PUT',
+              body:JSON.stringify(snapshot),
+            });
+          };
+
+          let lastError:any = null;
+          const retryDelays = [0, 1200, 3000];
+          for (let attempt=0; attempt<retryDelays.length; attempt++) {
+            if (retryDelays[attempt] > 0) {
+              await new Promise<void>((resolve) => window.setTimeout(resolve, retryDelays[attempt]));
+            }
+            try {
+              const data = await publishOnce();
+              sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, Number(data?.version || 0));
+              return;
+            } catch (err:any) {
+              lastError = err;
+              if (Number(err?.status || 0) === 401 || Number(err?.status || 0) === 403) break;
+            }
+          }
+
+          const status = Number(lastError?.status || 0);
+          if ((status === 401 || status === 403) && !isLocalStorefrontHost()) {
+            localStorage.removeItem('ora_staff_session_token');
+            localStorage.removeItem('ora_admin_user');
+            setAdminUser(null);
+            if (seq === storefrontPublishSeqRef.current) {
+              window.alert('Admin session expired. Please login again, then save once more.');
+            }
+            return;
+          }
+
+          // Ignore a failed stale save if a newer edit is already queued. The newer
+          // snapshot is the one that matters and will publish immediately after this.
+          if (seq !== storefrontPublishSeqRef.current) {
+            console.warn('Older storefront publish failed; a newer save is queued:', lastError?.message || lastError);
+            return;
+          }
+
+          console.warn('Shared storefront publish failed after retries:', lastError?.message || lastError);
+          window.alert(
+            `Website sync failed after 3 attempts: ${String(lastError?.message || 'Network/server error')}. Your edit is still kept in this browser; please try Save again.`
+          );
+        });
+    }, 900);
+
     return () => window.clearTimeout(timer);
   }, [products, categories, settings, sharedStoreReady, adminUser?.id]);
 
