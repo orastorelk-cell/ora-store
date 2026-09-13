@@ -2886,10 +2886,10 @@ Suitable For:
   const supplierVariant = supplierProduct && supplierVariantId ? variantById(supplierProduct, supplierVariantId) : undefined;
   const supplierTarget = supplierVariant || supplierProduct;
   const supplierPreview = supplierTarget ? supplierPricePreview(supplierTarget, supplierNewCost) : null;
-  const supplierDeliveryReserve = settings.free_delivery_enabled ? Math.max(0, Number(settings.delivery_fee || 0)) : 0;
-  const supplierRegularDisplay = supplierTarget ? Math.max(0, Number(supplierTarget.selling_price || 0)) + supplierDeliveryReserve : 0;
-  const supplierPreviewDisplay = supplierPreview
-    ? (supplierPreview.kind === 'offer' ? supplierPreview.offerSelling : supplierPreview.nextSelling) + supplierDeliveryReserve
+  const supplierDeliveryReserve = settings.free_delivery_enabled ? visibleDeliveryCharge : 0;
+  const supplierRegularDisplay = supplierProduct && supplierTarget ? (supplierVariant ? regularDisplayUnitPrice(supplierProduct, settings, supplierVariant) : regularDisplayUnitPrice(supplierProduct, settings)) : 0;
+  const supplierPreviewDisplay = supplierPreview && supplierProduct && supplierTarget
+    ? deliveryAdjustedUnitBase((supplierPreview.kind === 'offer' ? supplierPreview.offerSelling : supplierPreview.nextSelling), supplierProduct, settings, supplierVariant) + supplierDeliveryReserve
     : 0;
   const supplierPreviewPercent = supplierPreview && supplierPreview.kind === 'offer' && supplierRegularDisplay > 0
     ? Math.max(1, Math.round((supplierPreview.savingPerUnit / supplierRegularDisplay) * 100))
