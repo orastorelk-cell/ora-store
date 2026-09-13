@@ -211,8 +211,14 @@ export interface Order {
   special_offer_discount?: number;
   /** Hidden system adjustment that keeps the old order total unchanged after the Rs.500 -> Rs.250 delivery rebalance. It is NOT a Qty Offer. */
   delivery_rebalance_offset?: number;
-  /** Future-order marker: extra delivery-shift units are shown as Qty Offer. */
+  /** Future-order marker: extra embedded delivery units use the automatic Qty Offer. */
   delivery_rebalance_qty_offer?: boolean;
+  /** Automatic fixed Qty Offer created only by the delivery split (e.g. Rs.250 for Qty 2). */
+  delivery_rebalance_qty_offer_amount?: number;
+  /** Delivery amount embedded into one item unit when this order was created. */
+  delivery_rebalance_amount_snapshot?: number;
+  /** Delivery charge shown separately when this order was created. */
+  delivery_visible_fee_snapshot?: number;
   call_center_status?: 'Pending' | 'Confirmed' | 'No Answer' | 'Cancelled' | 'Reschedule';
   call_center_updated_at?: string;
   cancelled_at?: string;
@@ -384,12 +390,16 @@ export interface HeroBannerSlide {
 
 export interface StoreSettings {
   delivery_fee: number;
-  /** Move part of the old delivery charge into item pricing while preserving the final order total. */
+  /** Move part of the delivery charge into item pricing while preserving the final order total. */
   delivery_price_rebalance_enabled?: boolean;
-  /** Amount moved from delivery into item pricing for one order (Rs.). */
+  /** Amount moved into each displayed item unit (derived from base fee × percent). */
   delivery_price_rebalance_amount?: number;
-  /** Delivery fee before the rebalance; used for audit/reference only. */
+  /** Delivery fee before the split. Legacy/audit alias for delivery_base_fee. */
   delivery_price_rebalance_original_fee?: number;
+  /** Admin-entered full delivery fee before any split, e.g. Rs.500. */
+  delivery_base_fee?: number;
+  /** Percentage of the base delivery fee moved into item pricing, e.g. 50 => Rs.250 of Rs.500. */
+  delivery_rebalance_percent?: number;
   free_delivery_enabled?: boolean;
   multi_buy_discount_enabled?: boolean;
   multi_buy_tier1_min?: number;
