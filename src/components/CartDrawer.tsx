@@ -162,7 +162,7 @@ export const CartDrawer: React.FC = () => {
               {cartSpecialOfferDiscount > 0 && (
                 <div className="my-2 rounded-xl border border-orange-200 bg-orange-50 p-2">
                   <div className="flex justify-between font-black text-orange-700">
-                    <span>🎉 Special Multi-Buy Offer ({cartMultiBuyDiscountRate}% OFF)</span>
+                    <span>🎉 Qty Offer</span>
                     <span>- Rs. {formatLkr(cartSpecialOfferDiscount)}</span>
                   </div>
                   <p className="mt-1 text-[10px] font-semibold text-orange-600">You save more when you buy more!</p>
