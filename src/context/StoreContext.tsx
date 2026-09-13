@@ -1458,7 +1458,7 @@ useEffect(() => {
     const subtotal = cartSubtotal;
     const special_offer_discount = cartSpecialOfferDiscount;
     const delivery_rebalance_qty_offer_amount = cartDeliveryQtyOfferDiscount;
-    const delivery_rebalance_qty_offer = delivery_rebalance_qty_offer_amount > 0;
+    const delivery_rebalance_qty_offer = deliveryPriceRebalanceAmount > 0;
     const delivery_rebalance_amount_snapshot = deliveryPriceRebalanceAmount;
     const internal_delivery_fee = deliverySplit.visibleDelivery;
     const delivery_fee = settings.free_delivery_enabled ? 0 : internal_delivery_fee;
@@ -1707,7 +1707,7 @@ useEffect(() => {
       const importLegacySubtotal=Math.max(0,subtotal-importRebalanceAmount*totalQty);
       const special_offer_discount=Math.round(importLegacySubtotal*(rate/100)*100)/100;
       const delivery_rebalance_qty_offer_amount=importRebalanceAmount>0?Math.round(importRebalanceAmount*Math.max(0,totalQty-1)*100)/100:0;
-      const delivery_rebalance_qty_offer=delivery_rebalance_qty_offer_amount>0;
+      const delivery_rebalance_qty_offer=importRebalanceAmount>0;
       const total_amount=Math.round(Math.max(0,subtotal-special_offer_discount-delivery_rebalance_qty_offer_amount+delivery_fee));
       const nextOrderNum=requestedOrderId || nextSourceOrderNumber(source,newOrdersList);
       const fingerprint=makeOrderFingerprint(phone,orderItems);
@@ -2257,7 +2257,7 @@ useEffect(() => {
       const oldShape=(order.items||[]).map(it=>({sku:it.sku,product_name:it.product_name,variant_name:it.variant_name,quantity:it.quantity,unit_price:it.unit_price}));
       const newShape=nextItems.map(it=>({sku:it.sku,product_name:it.product_name,variant_name:it.variant_name,quantity:it.quantity,unit_price:it.unit_price}));
       const changed=JSON.stringify(oldShape)!==JSON.stringify(newShape);
-      updates.set(id,{items:nextItems,subtotal,special_offer_discount,delivery_rebalance_qty_offer:order.delivery_rebalance_qty_offer,delivery_rebalance_qty_offer_amount,delivery_rebalance_amount_snapshot:order.delivery_rebalance_amount_snapshot,delivery_visible_fee_snapshot:order.delivery_visible_fee_snapshot,delivery_fee,gift_wrap_selected,gift_wrap_fee,total_amount,is_advance_required:adv,advance_amount:adv?Math.round(total_amount*pct/100):0,call_center_status:'Confirmed',order_status:'Processing',call_center_updated_at:now,stock_allocated:false,stock_status:'Waiting for Stock',...(confirmedAddress?{address:confirmedAddress}:{}),...(confirmedCity?{city:confirmedCity}:{}),...(confirmedDistrict?{district:confirmedDistrict}:{}),...(cityChanged?{fardar_city:undefined,city_verified:false,city_mapping_source:undefined}:{}),product_change_history:changed?[...(order.product_change_history||[]),{changed_at:now,changed_by:'Call Center Confirm Upload',old_items:oldShape,new_items:newShape,reason:reason||undefined}]:(order.product_change_history||[]),notes:[order.notes,cancelled.length?`Call Center cancelled ${cancelled.length} item row(s).`:'',reason?`Call Center: ${reason}`:''].filter(Boolean).join(' | ')});
+      updates.set(id,{items:nextItems,subtotal,special_offer_discount,delivery_rebalance_qty_offer:useDeliveryQtyOffer,delivery_rebalance_qty_offer_amount,delivery_rebalance_amount_snapshot:order.delivery_rebalance_amount_snapshot,delivery_visible_fee_snapshot:order.delivery_visible_fee_snapshot,delivery_fee,gift_wrap_selected,gift_wrap_fee,total_amount,is_advance_required:adv,advance_amount:adv?Math.round(total_amount*pct/100):0,call_center_status:'Confirmed',order_status:'Processing',call_center_updated_at:now,stock_allocated:false,stock_status:'Waiting for Stock',...(confirmedAddress?{address:confirmedAddress}:{}),...(confirmedCity?{city:confirmedCity}:{}),...(confirmedDistrict?{district:confirmedDistrict}:{}),...(cityChanged?{fardar_city:undefined,city_verified:false,city_mapping_source:undefined}:{}),product_change_history:changed?[...(order.product_change_history||[]),{changed_at:now,changed_by:'Call Center Confirm Upload',old_items:oldShape,new_items:newShape,reason:reason||undefined}]:(order.product_change_history||[]),notes:[order.notes,cancelled.length?`Call Center cancelled ${cancelled.length} item row(s).`:'',reason?`Call Center: ${reason}`:''].filter(Boolean).join(' | ')});
       orderNumbers.push(id);
     });
 
@@ -2906,7 +2906,7 @@ useEffect(() => {
       internal_delivery_fee: Math.max(0, Number(settings.delivery_fee || 0)),
       delivery_included_in_item_price: Boolean(settings.free_delivery_enabled),
       special_offer_discount: discount,
-      delivery_rebalance_qty_offer: deliveryRebalanceQtyOffer > 0,
+      delivery_rebalance_qty_offer: testRebalanceAmount > 0,
       delivery_rebalance_qty_offer_amount: deliveryRebalanceQtyOffer,
       delivery_rebalance_amount_snapshot: testRebalanceAmount,
       delivery_visible_fee_snapshot: testDeliverySplit.visibleDelivery,
