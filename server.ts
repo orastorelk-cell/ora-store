@@ -31,6 +31,16 @@ const attachOrderSheetMetadataServer = async (orders:any[]) => {
   }
 };
 
+const orderSheetCombinedDiscountServer = (order:any) => {
+  const itemSpecial=(Array.isArray(order?.items)?order.items:[]).reduce(
+    (sum:number,row:any)=>sum + Math.max(0,Number(row?.supplier_offer_discount_per_unit||0))*Math.max(1,Number(row?.quantity||1)),
+    0,
+  );
+  return Math.max(0,
+    Math.round((itemSpecial + Math.max(0,Number(order?.special_offer_discount||0)) + Math.max(0,Number(order?.delivery_rebalance_offset||0)))*100)/100
+  );
+};
+
 const buildOrderSheetRowServer = (order: any, item: any, isFirst: boolean, settings: Record<string, any>) => ({
   'Order ID': String(order?.order_number || ''),
   'Customer Name': isFirst ? String(order?.customer_name || '') : '',
@@ -43,7 +53,7 @@ const buildOrderSheetRowServer = (order: any, item: any, isFirst: boolean, setti
   'Unit Price (Rs)': Number(item?.unit_price ?? item?.price ?? order?.items?.[0]?.unit_price ?? 0),
   'Line Total (Rs)': Number(item?.subtotal ?? (Math.max(1, Number(item?.quantity ?? item?.qty ?? 1)) * Number(item?.unit_price ?? item?.price ?? order?.items?.[0]?.unit_price ?? 0))),
   'Offer': isFirst ? orderQtyOfferLabelServer(order,settings) : '',
-  'Discount (Rs)': isFirst ? Number(order?.special_offer_discount || 0) : '',
+  'Discount (Rs)': isFirst ? orderSheetCombinedDiscountServer(order) : '',
   'Normal Total (Rs)': isFirst ? Number(order?.subtotal || 0) : '',
   'Delivery Fee (Rs)': isFirst ? Number(order?.delivery_fee || 0) : '',
   'Final Total (Rs)': isFirst ? Number(order?.total_amount ?? order?.total ?? 0) : '',
