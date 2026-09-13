@@ -118,7 +118,7 @@ export const specialOfferPercentageRulePatch = () => ({
       const offerControl = `                  {(() => {
                     const enabled = Boolean(productForm.auto_round_special_offer_enabled);
                     const offerPercent = Math.max(1, Math.min(80, Number(productForm.auto_round_special_offer_percent || 5)));
-                    const customerPrice = displayUnitPrice(productForm as any, settings);
+                    const customerPrice = productFormCustomerItemPrice;
                     const existingSavedOffer = productForm.discount_enabled !== false && Number(productForm.discount_price || 0) > 0 && Number(productForm.discount_price || 0) < Number(productForm.selling_price || 0);
                     const preview = calculateRoundSpecialOffer({ currentPrice:customerPrice, enabled, percent:offerPercent, hasExistingDiscount:existingSavedOffer });
                     return <div className="rounded-xl border border-orange-500/25 bg-orange-500/5 p-3">
