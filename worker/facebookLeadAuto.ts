@@ -146,25 +146,49 @@ const appendLog = async (
   }
 };
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const graphGet = async (env: Env, path: string, fields: string) => {
   const accessToken = envText(env, 'META_PAGE_ACCESS_TOKEN');
   const version = envText(env, 'META_GRAPH_API_VERSION');
   if (!accessToken) throw new Error('META_PAGE_ACCESS_TOKEN is not configured.');
   if (!/^v\d+\.\d+$/.test(version)) throw new Error('META_GRAPH_API_VERSION is not configured (example: vXX.X).');
 
-  const url = new URL(`https://graph.facebook.com/${version}/${encodeURIComponent(path)}`);
-  url.searchParams.set('fields', fields);
-  const response = await fetch(url, {
-    headers: {
-      authorization: `Bearer ${accessToken}`,
-      accept: 'application/json',
-    },
-  });
-  const data: any = await response.json().catch(() => ({}));
-  if (!response.ok || data?.error) {
-    throw new Error(data?.error?.message || `Meta Graph API ${response.status}`);
+  const retryDelays = [0, 1500, 5000];
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < retryDelays.length; attempt += 1) {
+    if (retryDelays[attempt] > 0) await sleep(retryDelays[attempt]);
+
+    const url = new URL(`https://graph.facebook.com/${version}/${encodeURIComponent(path)}`);
+    url.searchParams.set('fields', fields);
+
+    const response = await fetch(url, {
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        accept: 'application/json',
+      },
+    });
+    const data: any = await response.json().catch(() => ({}));
+
+    if (response.ok && !data?.error) return data;
+
+    const code = Number(data?.error?.code || 0);
+    const message = String(data?.error?.message || `Meta Graph API ${response.status}`);
+    lastError = new Error(code ? `${message} (#${code})` : message);
+
+    // Short retries are only for transient/rate-limit failures. Permanent
+    // permission/validation errors are returned immediately so recovery can
+    // log them without adding unnecessary Graph API traffic.
+    const retryable =
+      response.status === 429 ||
+      response.status >= 500 ||
+      [1, 2, 4, 17, 32, 613, 80004, 80005].includes(code);
+
+    if (!retryable) throw lastError;
   }
-  return data;
+
+  throw lastError || new Error('Meta Graph API request failed.');
 };
 
 const normalizeFieldName = (value: unknown) =>
