@@ -209,6 +209,8 @@ export interface Order {
   fardar_delivery_fee?: number;
   delivery_included_in_item_price?: boolean;
   special_offer_discount?: number;
+  /** Hidden system adjustment that keeps the old order total unchanged after the Rs.500 -> Rs.250 delivery rebalance. It is NOT a Qty Offer. */
+  delivery_rebalance_offset?: number;
   call_center_status?: 'Pending' | 'Confirmed' | 'No Answer' | 'Cancelled' | 'Reschedule';
   call_center_updated_at?: string;
   cancelled_at?: string;
