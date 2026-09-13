@@ -283,18 +283,19 @@ oraRecalcOrder_ = function(sh, orderId) {
   actualProductsTotal = oraRound_(actualProductsTotal);
   normalTotal = oraRound_(normalTotal);
   var rate = oraQtyOfferRateFromRules_(rules, totalQty);
-  var qtyDiscount = Math.min(actualProductsTotal, Math.max(0, oraRound_(actualProductsTotal * rate / 100)));
   var specialDiscount = Math.max(0, oraRound_(normalTotal - actualProductsTotal));
-  // The delivery rebalance offset is NOT a Qty Offer. It only cancels the extra
-  // Rs.250 embedded in each additional unit so changing Delivery 500 -> 250
-  // never changes the historical/customer order total.
   var rebalanceAmount = Math.max(0, oraNum_(rules.delivery_price_rebalance_amount || rules.delivery_price_rebalance_unit_shift || 0));
-  var deliveryRebalanceOffset = rules.delivery_price_rebalance_enabled === false
-    ? 0
-    : Math.max(0, oraRound_(rebalanceAmount * Math.max(0, totalQty - 1)));
-  var displayOfferDiscount = oraRound_(specialDiscount + qtyDiscount);
-  var combinedDiscount = oraRound_(displayOfferDiscount + deliveryRebalanceOffset);
-  rules.delivery_rebalance_offset = deliveryRebalanceOffset;
+  var useDeliveryQtyOffer = rules.delivery_rebalance_qty_offer === true;
+  var qtyBase = useDeliveryQtyOffer ? Math.max(0, actualProductsTotal - rebalanceAmount * totalQty) : actualProductsTotal;
+  var qtyDiscount = Math.min(qtyBase, Math.max(0, oraRound_(qtyBase * rate / 100)));
+  // For NEW marked orders, every extra embedded Rs.250 is shown as Qty Offer.
+  // Old orders have no marker and therefore remain untouched by this rule.
+  var deliveryQtyOffer = useDeliveryQtyOffer
+    ? Math.max(0, oraRound_(rebalanceAmount * Math.max(0, totalQty - 1)))
+    : 0;
+  var displayOfferDiscount = oraRound_(specialDiscount + qtyDiscount + deliveryQtyOffer);
+  var combinedDiscount = displayOfferDiscount;
+  rules.delivery_rebalance_qty_offer_amount = deliveryQtyOffer;
   var delivery = hm['Delivery Fee (Rs)'] ? Math.max(0, oraNum_(sh.getRange(firstRow, hm['Delivery Fee (Rs)']).getDisplayValue())) : 0;
   var giftWrap = hm['Gift Wrap'] ? sh.getRange(firstRow, hm['Gift Wrap']).getDisplayValue() : 'NO';
   var wrapCost = hm['Wrapping Cost (Rs)'] ? Math.max(0, oraNum_(sh.getRange(firstRow, hm['Wrapping Cost (Rs)']).getDisplayValue())) : 0;
