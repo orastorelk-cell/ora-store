@@ -344,6 +344,24 @@ export const OraAssistant: React.FC = () => {
 
   const packingLine = (order: VerifiedOrder) => {
     if (!order.packing_pdf_downloaded) return '';
+
+    // Delivery CSV/upload status has priority over the older packing flag.
+    // Once an order is handed to the courier or marked Delivered, do not keep
+    // showing the customer that it is still being prepared.
+    const deliveryState = [
+      order.delivery_status,
+      order.tracking_status,
+      order.status,
+      order.dispatch_status,
+    ].filter(Boolean).join(' ').toLowerCase();
+
+    if (
+      deliveryState.includes('delivered') ||
+      deliveryState.includes('shipped') ||
+      deliveryState.includes('handed over') ||
+      deliveryState.includes('cancelled')
+    ) return '';
+
     if (lang === 'si') return '📦 ඔබගේ ඇණවුම බෙදාහැරීම සඳහා සූදානම් කරමින් පවතී. Courier වෙත භාරදුන් පසු Delivery status එක update වේ.';
     if (lang === 'ta') return '📦 உங்கள் ஆர்டர் டெலிவரிக்காக தயாராகிக் கொண்டிருக்கிறது. Courier-க்கு ஒப்படைத்த பிறகு Delivery status update ஆகும்.';
     return '📦 Your order is being prepared for delivery. The delivery status will update after it is handed over to the courier.';
