@@ -3097,12 +3097,12 @@ useEffect(() => {
   // the component products and continues through the existing FIFO allocator.
   const repriceAutoBundles=(rows:Product[], pricingSettings:StoreSettings=settings)=>{
     const productMap=new Map(rows.map(p=>[p.id,p] as [string,Product]));
-    const includedDelivery=pricingSettings.free_delivery_enabled?Math.max(0,Number(pricingSettings.delivery_fee||0)):0;
-    const bundleShift=pricingSettings.delivery_price_rebalance_enabled?Math.max(0,Number(pricingSettings.delivery_price_rebalance_amount||0)):0;
+    const bundleDeliverySplit=deliverySplitForSettings(pricingSettings);
+    const bundlePerOrderDisplayDelivery=bundleDeliverySplit.embeddedAmount + (pricingSettings.free_delivery_enabled?bundleDeliverySplit.visibleDelivery:0);
     return rows.map(bundle=>{
       if(normalizedProductType(bundle)!=='bundle' || bundle.bundle_auto_price!==true || !(bundle.bundle_components||[]).length) return bundle;
       const componentUnits=(bundle.bundle_components||[]).reduce((sum,component)=>sum+Math.max(1,Number(component.quantity||1)),0);
-      const extraComponentShift=bundleShift*Math.max(0,componentUnits-1);
+      const extraComponentShift=bundlePerOrderDisplayDelivery*Math.max(0,componentUnits-1);
       const componentDisplayTotal=(bundle.bundle_components||[]).reduce((sum,component)=>{
         const child=productMap.get(component.product_id); if(!child)return sum;
         const variant=variantById(child,component.variant_id);
@@ -3110,7 +3110,7 @@ useEffect(() => {
       },0);
       const discount=Math.max(0,Number(bundle.bundle_discount_amount ?? 50));
       const customerDisplay=Math.max(0,componentDisplayTotal-discount-extraComponentShift);
-      const baseSelling=Math.max(0,customerDisplay-includedDelivery);
+      const baseSelling=Math.max(0,customerDisplay-bundlePerOrderDisplayDelivery);
       const rawBuying=(bundle.bundle_components||[]).reduce((sum,component)=>{
         const child=productMap.get(component.product_id); if(!child)return sum;
         const variant=variantById(child,component.variant_id);
@@ -3119,7 +3119,7 @@ useEffect(() => {
       // Delivery-price rebalance is customer-facing only; actual bundle buying cost must stay unchanged.
       const buying=Math.max(0,rawBuying);
       if(Math.abs(Number(bundle.selling_price||0)-baseSelling)<0.001 && Math.abs(Number(bundle.buying_price||0)-buying)<0.001) return bundle;
-      return {...bundle,buying_price:buying,selling_price:baseSelling,discount_price:baseSelling,discount_enabled:false};
+      return {...bundle,buying_price:buying,selling_price:baseSelling,delivery_price_shift_applied:0,discount_price:baseSelling,discount_enabled:false};
     });
   };
   const allCurrentSkus=(excludeProductId?:string)=>new Set(products.filter(p=>p.id!==excludeProductId).flatMap(p=>[String(p.sku||'').toUpperCase(),...(p.variants||[]).map(v=>String(v.sku||'').toUpperCase())]).filter(Boolean));
@@ -3204,6 +3204,39 @@ useEffect(() => {
   // Settings
   const updateSettings = (newSettings: Partial<StoreSettings>) => {
     const nextSettings={...settings,...newSettings};
+
+    // One delivery control owns the whole flow:
+    // base fee (e.g. 500) + split % (e.g. 50) =>
+    // Rs.250 embedded in item display + Rs.250 shown as Delivery.
+    // The embedded part is NOT profit and is never stored as new-product profit.
+    if (
+      'delivery_base_fee' in newSettings ||
+      'delivery_rebalance_percent' in newSettings ||
+      'delivery_price_rebalance_original_fee' in newSettings ||
+      'delivery_price_rebalance_amount' in newSettings ||
+      'delivery_price_rebalance_enabled' in newSettings
+    ) {
+      const currentSplit=deliverySplitForSettings(settings);
+      const base=Math.max(0,Number(
+        newSettings.delivery_base_fee ??
+        newSettings.delivery_price_rebalance_original_fee ??
+        currentSplit.baseFee
+      ));
+      let percent=Math.max(0,Math.min(100,Number(newSettings.delivery_rebalance_percent ?? currentSplit.percent) || 0));
+      if ('delivery_price_rebalance_enabled' in newSettings && newSettings.delivery_price_rebalance_enabled === false) percent=0;
+      if ('delivery_price_rebalance_amount' in newSettings && !('delivery_rebalance_percent' in newSettings) && base>0) {
+        percent=Math.max(0,Math.min(100,(Math.max(0,Number(newSettings.delivery_price_rebalance_amount||0))/base)*100));
+      }
+      const embedded=Math.round(base*(percent/100)*100)/100;
+      const visible=Math.round(Math.max(0,base-embedded)*100)/100;
+      nextSettings.delivery_base_fee=base;
+      nextSettings.delivery_rebalance_percent=Math.round(percent*100)/100;
+      nextSettings.delivery_price_rebalance_original_fee=base;
+      nextSettings.delivery_price_rebalance_amount=embedded;
+      nextSettings.delivery_price_rebalance_enabled=embedded>0;
+      nextSettings.delivery_fee=visible;
+    }
+
     const changedEntries = Object.entries(newSettings).filter(([key,value]) => {
       try { return JSON.stringify((settings as any)[key]) !== JSON.stringify(value); }
       catch { return (settings as any)[key] !== value; }
@@ -3211,6 +3244,8 @@ useEffect(() => {
     setSettings(nextSettings);
     if (
       'delivery_fee' in newSettings ||
+      'delivery_base_fee' in newSettings ||
+      'delivery_rebalance_percent' in newSettings ||
       'free_delivery_enabled' in newSettings ||
       'delivery_price_rebalance_enabled' in newSettings ||
       'delivery_price_rebalance_amount' in newSettings
