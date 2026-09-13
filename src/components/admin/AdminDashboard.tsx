@@ -101,7 +101,7 @@ import { PackingExpensesPanel } from './PackingExpensesPanel';
 import { getCustomerMembership } from '../../lib/membership';
 import { slugifyCategory, suggestCategoryFields } from '../../lib/categoryAuto';
 import { suggestProductMetadata } from '../../lib/productAutoPopular';
-import { buildVariantSku, normalizedProductType, productDisplayStock, productPriceRange, variantById, displayUnitPrice, oraProfitForBuyingPrice, repriceAfterBuyingCostChange, supplierPricePreview, variantOptions } from '../../lib/productVariants';
+import { buildVariantSku, deliveryAdjustedUnitBase, deliverySplitForSettings, normalizedProductType, productDisplayStock, productPriceRange, regularDisplayUnitPrice, variantById, displayUnitPrice, oraProfitForBuyingPrice, repriceAfterBuyingCostChange, supplierPricePreview, variantOptions } from '../../lib/productVariants';
 import { compressImageFile, uploadPublicImage, uploadRawImageFile } from '../../lib/imageUpload';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 import { createProductBackup, PRODUCT_BACKUP_MAX_BYTES, validateProductBackup } from '../../lib/productBackup';
