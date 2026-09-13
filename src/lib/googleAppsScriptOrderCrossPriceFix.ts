@@ -285,16 +285,23 @@ oraRecalcOrder_ = function(sh, orderId) {
   var rate = oraQtyOfferRateFromRules_(rules, totalQty);
   var qtyDiscount = Math.min(actualProductsTotal, Math.max(0, oraRound_(actualProductsTotal * rate / 100)));
   var specialDiscount = Math.max(0, oraRound_(normalTotal - actualProductsTotal));
-  // Only the configured Qty Offer can add a quantity-based discount.
-  // Delivery rebalance metadata is display/accounting context, not a Qty Offer.
-  var combinedDiscount = oraRound_(specialDiscount + qtyDiscount);
+  // The delivery rebalance offset is NOT a Qty Offer. It only cancels the extra
+  // Rs.250 embedded in each additional unit so changing Delivery 500 -> 250
+  // never changes the historical/customer order total.
+  var rebalanceAmount = Math.max(0, oraNum_(rules.delivery_price_rebalance_amount || rules.delivery_price_rebalance_unit_shift || 0));
+  var deliveryRebalanceOffset = rules.delivery_price_rebalance_enabled === false
+    ? 0
+    : Math.max(0, oraRound_(rebalanceAmount * Math.max(0, totalQty - 1)));
+  var displayOfferDiscount = oraRound_(specialDiscount + qtyDiscount);
+  var combinedDiscount = oraRound_(displayOfferDiscount + deliveryRebalanceOffset);
+  rules.delivery_rebalance_offset = deliveryRebalanceOffset;
   var delivery = hm['Delivery Fee (Rs)'] ? Math.max(0, oraNum_(sh.getRange(firstRow, hm['Delivery Fee (Rs)']).getDisplayValue())) : 0;
   var giftWrap = hm['Gift Wrap'] ? sh.getRange(firstRow, hm['Gift Wrap']).getDisplayValue() : 'NO';
   var wrapCost = hm['Wrapping Cost (Rs)'] ? Math.max(0, oraNum_(sh.getRange(firstRow, hm['Wrapping Cost (Rs)']).getDisplayValue())) : 0;
   var wrapping = oraYes_(giftWrap) ? wrapCost : 0;
   var finalTotal = Math.max(0, oraRound_(normalTotal - combinedDiscount + delivery + wrapping));
 
-  if (hm['Offer']) sh.getRange(firstRow, hm['Offer']).setValue(oraOfferLabelFromParts_(normalTotal, combinedDiscount));
+  if (hm['Offer']) sh.getRange(firstRow, hm['Offer']).setValue(oraOfferLabelFromParts_(normalTotal, displayOfferDiscount));
   if (hm['Discount (Rs)']) sh.getRange(firstRow, hm['Discount (Rs)']).setValue(combinedDiscount);
   if (hm['Normal Total (Rs)']) sh.getRange(firstRow, hm['Normal Total (Rs)']).setValue(normalTotal);
   if (hm['Final Total (Rs)']) sh.getRange(firstRow, hm['Final Total (Rs)']).setValue(finalTotal);
