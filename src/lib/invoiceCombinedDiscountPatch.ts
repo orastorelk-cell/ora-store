@@ -20,7 +20,8 @@ export const invoiceCombinedDiscountPatch = () => ({
 
     if (id.endsWith('/src/lib/exactInvoiceTemplateBase.ts')) {
       const oldLines = `    ...(supplierOfferDiscount > 0 ? [{ label:'Special Offer', value:\`- \${money(supplierOfferDiscount)}\` }] : []),\n    ...(qtyOfferDiscount > 0 ? [{ label:'Qty Offer', value:\`- \${money(qtyOfferDiscount)}\` }] : []),`;
-      const newLines = `    ...((supplierOfferDiscount + qtyOfferDiscount) > 0 ? [{ label:'Offer Discount', value:\`- \${money(supplierOfferDiscount + qtyOfferDiscount)}\` }] : []),`;
+      const newLines = `    ...((supplierOfferDiscount + qtyOfferDiscount) > 0 ? [{ label:'Offer Discount', value:\`- \${money(supplierOfferDiscount + qtyOfferDiscount)}\` }] : []),
+    ...((Number((order as any).delivery_rebalance_offset || 0) > 0) ? [{ label:'Delivery Adjustment', value:\`- \${money(Number((order as any).delivery_rebalance_offset || 0))}\` }] : []),`;
       text = replaceRequired(text, oldLines, newLines, 'invoice discount summary rows');
       return { code: text, map: null };
     }
@@ -31,7 +32,8 @@ export const invoiceCombinedDiscountPatch = () => ({
       text = replaceRequired(text, oldAllDiscount, newAllDiscount, 'repair combined discount source');
 
       const oldDiscountField = `    special_offer_discount:qtyOffer,`;
-      const newDiscountField = `    special_offer_discount:Math.max(0,Math.round((allDiscount-displaySpecial)*100)/100),`;
+      const newDiscountField = `    special_offer_discount:Math.max(0,Number((order as any).special_offer_discount||0)),
+    delivery_rebalance_offset:Math.max(0,Math.round((allDiscount-displaySpecial-Math.max(0,Number((order as any).special_offer_discount||0)))*100)/100),`;
       text = replaceRequired(text, oldDiscountField, newDiscountField, 'repair invoice discount snapshot');
 
       return { code: text, map: null };
