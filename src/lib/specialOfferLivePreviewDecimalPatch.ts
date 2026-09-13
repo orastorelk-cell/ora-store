@@ -68,6 +68,13 @@ export const specialOfferLivePreviewDecimalPatch = () => ({
                     })()}`;
     text = replaceRequired(text, oldPricePreview, newPricePreview, 'LIVE PREVIEW crossed price');
 
+    text = replaceRequired(
+      text,
+      '<p className="font-black">Customer display: Rs. {((productForm.discount_enabled && productForm.discount_price > 0 && productForm.discount_price < productForm.selling_price ? productForm.discount_price : productForm.selling_price) + (settings.free_delivery_enabled ? Math.max(0, Number(settings.delivery_fee || 0)) : 0)).toLocaleString()}</p>',
+      '<p className="font-black">Customer display: Rs. {displayUnitPrice(productForm as any, settings).toLocaleString()}</p>',
+      'admin breakdown storefront customer price',
+    );
+
     return { code: text, map: null };
   },
 });
