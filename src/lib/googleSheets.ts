@@ -62,16 +62,23 @@ const orderQtyOfferLabel = (order: any): string => {
     (sum: number, item: any) => sum + Math.max(1, Number(item?.quantity || 1)),
     0,
   );
-  const discount = Math.max(0, roundMoney(order?.special_offer_discount || order?.discount || 0));
-  return discount > 0 ? `Qty Offer Rs. ${discount} (${totalQty} items)` : 'No Qty Offer';
+  const autoQty = Math.max(0, roundMoney(order?.delivery_rebalance_qty_offer_amount || 0));
+  const manualQty = Math.max(0, roundMoney(order?.special_offer_discount || order?.discount || 0));
+  const labels: string[] = [];
+  if (autoQty > 0) labels.push(`Qty Offer Rs. ${autoQty} (${totalQty} items)`);
+  if (manualQty > 0) labels.push(`Multi-Buy Rs. ${manualQty} (${totalQty} items)`);
+  return labels.length ? labels.join(' + ') : 'No Qty Offer';
 };
 
 const sheetQtyOfferRules = (settings: Record<string, any>, order?: any) => JSON.stringify({
   enabled: settings?.multi_buy_discount_enabled !== false,
   delivery_price_rebalance_enabled: settings?.delivery_price_rebalance_enabled === true,
   delivery_rebalance_qty_offer: order?.delivery_rebalance_qty_offer === true,
-  delivery_price_rebalance_amount: Math.max(0, Number(settings?.delivery_price_rebalance_amount || 0)),
-  delivery_price_rebalance_original_fee: Math.max(0, Number(settings?.delivery_price_rebalance_original_fee || 0)),
+  delivery_rebalance_qty_offer_amount: Math.max(0, Number(order?.delivery_rebalance_qty_offer_amount || 0)),
+  delivery_price_rebalance_amount: Math.max(0, Number(order?.delivery_rebalance_amount_snapshot ?? settings?.delivery_price_rebalance_amount ?? 0)),
+  delivery_visible_fee_snapshot: Math.max(0, Number(order?.delivery_visible_fee_snapshot ?? settings?.delivery_fee ?? 0)),
+  delivery_price_rebalance_original_fee: Math.max(0, Number(settings?.delivery_base_fee ?? settings?.delivery_price_rebalance_original_fee ?? 0)),
+  delivery_rebalance_percent: Math.max(0, Number(settings?.delivery_rebalance_percent || 0)),
   tiers: [
     { min:Number(settings?.multi_buy_tier1_min ?? 2), max:Number(settings?.multi_buy_tier1_max ?? 3), rate:Number(settings?.multi_buy_tier1_rate ?? 5) },
     { min:Number(settings?.multi_buy_tier2_min ?? 4), max:Number(settings?.multi_buy_tier2_max ?? 5), rate:Number(settings?.multi_buy_tier2_rate ?? 7.5) },
