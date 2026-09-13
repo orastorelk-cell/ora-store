@@ -1,6 +1,7 @@
-const sheetQtyOfferRulesServer = (settings: Record<string, any>) => JSON.stringify({
+const sheetQtyOfferRulesServer = (settings: Record<string, any>, order?: any) => JSON.stringify({
   enabled: settings?.multi_buy_discount_enabled !== false,
   delivery_price_rebalance_enabled: settings?.delivery_price_rebalance_enabled === true,
+  delivery_rebalance_qty_offer: order?.delivery_rebalance_qty_offer === true,
   delivery_price_rebalance_amount: Math.max(0, Number(settings?.delivery_price_rebalance_amount || 0)),
   delivery_price_rebalance_original_fee: Math.max(0, Number(settings?.delivery_price_rebalance_original_fee || 0)),
   tiers: [
@@ -19,11 +20,10 @@ const attachOrderSheetMetadataServer = async (orders:any[]) => {
   try {
     const state=await readSharedStorefrontState();
     const settings=(state?.settings&&typeof state.settings==='object')?state.settings:{};
-    const qtyRules=sheetQtyOfferRulesServer(settings);
     for(const order of Array.isArray(orders)?orders:[]){
       if(!order || typeof order!=='object') continue;
       order.offer_label=orderQtyOfferLabelServer(order,settings);
-      order.sheet_qty_offer_rules=qtyRules;
+      order.sheet_qty_offer_rules=sheetQtyOfferRulesServer(settings,order);
       order.sheet_wrapping_cost=sheetWrappingFeeServer(order,settings);
     }
   } catch (error:any) {
@@ -37,7 +37,7 @@ const orderSheetCombinedDiscountServer = (order:any) => {
     0,
   );
   return Math.max(0,
-    Math.round((itemSpecial + Math.max(0,Number(order?.special_offer_discount||0)) + Math.max(0,Number(order?.delivery_rebalance_offset||0)))*100)/100
+    Math.round((itemSpecial + Math.max(0,Number(order?.special_offer_discount||0)))*100)/100
   );
 };
 
@@ -62,7 +62,7 @@ const buildOrderSheetRowServer = (order: any, item: any, isFirst: boolean, setti
   'Order Action': isFirst ? 'PENDING' : '',
   'Gift Wrap': isFirst ? (order?.gift_wrap_selected ? 'YES' : 'NO') : '',
   'Wrapping Cost (Rs)': isFirst ? sheetWrappingFeeServer(order,settings) : '',
-  'Qty Offer Rules': isFirst ? sheetQtyOfferRulesServer(settings) : '',
+  'Qty Offer Rules': isFirst ? sheetQtyOfferRulesServer(settings,order) : '',
   // Transport-only pricing metadata. Apps Script reads these keys before writing
   // visible columns so crossed/offer prices remain tied to the order snapshot.
   regular_unit_price: Number(item?.regular_unit_price || 0),
