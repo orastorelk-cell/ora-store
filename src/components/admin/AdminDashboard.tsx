@@ -2806,10 +2806,17 @@ Suitable For:
   const priceIncreaseVariant = priceIncreaseProduct && priceIncreaseVariantId ? variantById(priceIncreaseProduct, priceIncreaseVariantId) : undefined;
   const priceIncreaseTarget = priceIncreaseVariant || priceIncreaseProduct;
   const priceIncreaseCurrentBuying = Math.max(0, Number(priceIncreaseTarget?.buying_price || 0));
-  const priceIncreaseCurrentSelling = Math.max(0, Number(priceIncreaseTarget?.selling_price || 0));
-  const priceIncreasePreviewSelling = priceIncreaseTarget && priceIncreaseNewCost > 0
-    ? Math.round((priceIncreaseNewCost + oraProfitForBuyingPrice(priceIncreaseNewCost) + autoDeliveryReserve) * 100) / 100
+  const priceIncreaseCurrentSelling = priceIncreaseProduct && priceIncreaseTarget
+    ? (priceIncreaseVariant
+        ? displayUnitPrice(priceIncreaseProduct, settings, priceIncreaseVariant)
+        : displayUnitPrice(priceIncreaseProduct, settings))
     : 0;
+  const priceIncreasePreviewBase = priceIncreaseTarget && priceIncreaseNewCost > 0
+    ? Math.round((priceIncreaseNewCost + oraProfitForBuyingPrice(priceIncreaseNewCost)) * 100) / 100
+    : 0;
+  const priceIncreasePreviewSelling = Math.round(
+    (priceIncreasePreviewBase + autoDeliveryReserve + (settings.free_delivery_enabled ? visibleDeliveryCharge : 0)) * 100
+  ) / 100;
   const priceIncreaseOfferPercent = priceIncreaseProduct
     ? roundSpecialOfferPercentForSelection(priceIncreaseProduct, priceIncreaseVariant)
     : 0;
@@ -2831,7 +2838,7 @@ Suitable For:
       return;
     }
     const now=new Date().toISOString();
-    const newSelling=Math.round((newCost + oraProfitForBuyingPrice(newCost) + autoDeliveryReserve)*100)/100;
+    const newSelling=Math.round((newCost + oraProfitForBuyingPrice(newCost))*100)/100;
     const applyIncrease=(target:Product|ProductVariant):Product|ProductVariant=>({
       ...target,
       buying_price:newCost,
@@ -2842,7 +2849,7 @@ Suitable For:
       supplier_offer_enabled:false,
       supplier_offer_saved_at:undefined,
       auto_price_enabled:true,
-      delivery_price_shift_applied:autoDeliveryReserve,
+      delivery_price_shift_applied:0,
       price_history:[...(target.price_history||[]),{
         changed_at:now,
         reason:`Future price increase only: buying Rs. ${Number(target.buying_price||0)} -> Rs. ${newCost}; selling Rs. ${Number(target.selling_price||0)} -> Rs. ${newSelling}. Historical orders/invoices stay unchanged.`,
@@ -2863,7 +2870,7 @@ Suitable For:
     }
 
     setPriceIncreaseMessage(
-      `Saved for FUTURE orders only. Buying: Rs. ${priceIncreaseCurrentBuying.toLocaleString()} → Rs. ${newCost.toLocaleString()} • Customer item price: Rs. ${priceIncreaseCurrentSelling.toLocaleString()} → Rs. ${newSelling.toLocaleString()}. Old system orders, old invoices and old Sheet order prices were not rewritten.`
+      `Saved for FUTURE orders only. Buying: Rs. ${priceIncreaseCurrentBuying.toLocaleString()} → Rs. ${newCost.toLocaleString()} • Customer item price: Rs. ${priceIncreaseCurrentSelling.toLocaleString()} → Rs. ${priceIncreasePreviewSelling.toLocaleString()}. Delivery split stays separate from profit. Old system orders, invoices and Sheet rows were not rewritten.`
     );
   };
 
