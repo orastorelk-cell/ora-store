@@ -7,9 +7,10 @@ const replaceRequired = (text: string, from: string, to: string, label: string) 
 /**
  * Invoice discount source-of-truth fix.
  *
- * Call Center / Confirm CSV already stores one combined Discount (Rs) value that
- * includes crossed-price Special Offer + Qty Offer. The invoice must show that
- * exact combined amount instead of accidentally showing only the Qty Offer part.
+ * Keep the invoice math tied to the confirmed combined Discount (Rs), but render
+ * the customer-facing breakdown as two clear rows:
+ * - Item Discount = crossed/reference-price saving from the item(s)
+ * - Qty Offer = manual multi-buy discount + automatic delivery Qty Offer
  */
 export const invoiceCombinedDiscountPatch = () => ({
   name: 'ora-invoice-combined-discount-patch',
@@ -20,7 +21,7 @@ export const invoiceCombinedDiscountPatch = () => ({
 
     if (id.endsWith('/src/lib/exactInvoiceTemplateBase.ts')) {
       const oldLines = `    ...(supplierOfferDiscount > 0 ? [{ label:'Special Offer', value:\`- \${money(supplierOfferDiscount)}\` }] : []),\n    ...(qtyOfferDiscount > 0 ? [{ label:'Qty Offer', value:\`- \${money(qtyOfferDiscount)}\` }] : []),`;
-      const newLines = `    ...((supplierOfferDiscount + qtyOfferDiscount + Math.max(0, Number((order as any).delivery_rebalance_qty_offer_amount || 0))) > 0 ? [{ label:'Offer Discount', value:\`- \${money(supplierOfferDiscount + qtyOfferDiscount + Math.max(0, Number((order as any).delivery_rebalance_qty_offer_amount || 0)))}\` }] : []),`;
+      const newLines = `    ...(supplierOfferDiscount > 0 ? [{ label:'Item Discount', value:\`- \${money(supplierOfferDiscount)}\` }] : []),\n    ...((qtyOfferDiscount + Math.max(0, Number((order as any).delivery_rebalance_qty_offer_amount || 0))) > 0 ? [{ label:'Qty Offer', value:\`- \${money(qtyOfferDiscount + Math.max(0, Number((order as any).delivery_rebalance_qty_offer_amount || 0)))}\` }] : []),`;
       text = replaceRequired(text, oldLines, newLines, 'invoice discount summary rows');
       return { code: text, map: null };
     }
