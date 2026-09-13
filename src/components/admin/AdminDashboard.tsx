@@ -7285,7 +7285,8 @@ Suitable For:
                   <p className="font-black text-emerald-300">Price breakdown (Admin only)</p>
                   <p>Buying: Rs. {Number(productForm.buying_price||0).toLocaleString()}</p>
                   <p>Profit: Rs. {Math.max(0, Number(productForm.selling_price||0)-Number(productForm.buying_price||0)).toLocaleString()} {productAutoPricing ? '(Auto)' : '(Custom)'}</p>
-                  <p>Delivery reserve: Rs. {Math.max(0, Number(settings.delivery_fee||0)).toLocaleString()}</p>
+                  <p>Delivery share in item: Rs. {autoDeliveryReserve.toLocaleString()} <span className="text-neutral-500">(not profit)</span></p>
+                  <p>Delivery shown separately: Rs. {visibleDeliveryCharge.toLocaleString()}</p>
                   <p className="font-black">Customer display: Rs. {((productForm.discount_enabled && productForm.discount_price > 0 && productForm.discount_price < productForm.selling_price ? productForm.discount_price : productForm.selling_price) + (settings.free_delivery_enabled ? Math.max(0, Number(settings.delivery_fee || 0)) : 0)).toLocaleString()}</p>
                 </div>
               </aside>
