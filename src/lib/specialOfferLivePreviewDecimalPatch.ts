@@ -44,8 +44,12 @@ export const specialOfferLivePreviewDecimalPatch = () => ({
                       percent: roundSpecialOfferPercentForSelection(productForm),
                       hasExistingDiscount: savedDiscountActive,
                     });
+                    const regularDisplayedPrice = regularDisplayUnitPrice(productForm as any, settings);
+                    const savedDiscountPercent = savedDiscountActive && regularDisplayedPrice > actualPrice
+                      ? Math.max(1, Math.round(((regularDisplayedPrice - actualPrice) / Math.max(1, regularDisplayedPrice)) * 100))
+                      : 0;
                     const badgeText = savedDiscountActive
-                      ? (Math.max(1,Math.round(((Number(productForm.selling_price||0)-Number(productForm.discount_price||0))/Math.max(1,Number(productForm.selling_price||0)))*100)) + '% OFF')
+                      ? (savedDiscountPercent + '% OFF')
                       : specialOffer.active ? (specialOffer.percent + '% OFF') : '';
                     return <div className="relative aspect-square bg-gray-100"><img src={productForm.images[0] || 'https://placehold.co/600x600?text=O-RA'} alt="Product preview" className="h-full w-full object-cover" />{badgeText && <div className="absolute left-3 top-3 rounded-xl bg-orange-600 px-3 py-1.5 text-sm font-black text-white shadow-lg">{badgeText}</div>}</div>;
                   })()}`;
