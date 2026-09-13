@@ -1115,18 +1115,12 @@ type OraSheetSyncResult = {
 
 const orderQtyOfferLabelServer = (order:any, settings:Record<string,any>) => {
   const qty=(Array.isArray(order?.items)?order.items:[]).reduce((sum:number,it:any)=>sum+Math.max(1,Number(it?.quantity||1)),0);
-  const discount=Math.max(0,Number(order?.special_offer_discount||0));
-  if(discount<=0) return 'No Qty Offer';
-  if(settings?.multi_buy_discount_enabled !== false){
-    const tiers=[
-      {min:Number(settings.multi_buy_tier1_min??2),max:Number(settings.multi_buy_tier1_max??3),rate:Number(settings.multi_buy_tier1_rate??5)},
-      {min:Number(settings.multi_buy_tier2_min??4),max:Number(settings.multi_buy_tier2_max??5),rate:Number(settings.multi_buy_tier2_rate??7.5)},
-      {min:Number(settings.multi_buy_tier3_min??6),max:Number(settings.multi_buy_tier3_max??10),rate:Number(settings.multi_buy_tier3_rate??10)},
-    ];
-    const tier=tiers.find((t,index)=>qty>=t.min&&(index===tiers.length-1||qty<=t.max)&&t.rate>0);
-    if(tier) return `Qty Offer ${tier.rate}% (${qty} items)`;
-  }
-  return `Order Offer Rs. ${Math.round(discount*100)/100}`;
+  const autoQty=Math.max(0,Number(order?.delivery_rebalance_qty_offer_amount||0));
+  const manualQty=Math.max(0,Number(order?.special_offer_discount||0));
+  const labels:string[]=[];
+  if(autoQty>0) labels.push(`Qty Offer Rs. ${Math.round(autoQty*100)/100} (${qty} items)`);
+  if(manualQty>0) labels.push(`Multi-Buy Rs. ${Math.round(manualQty*100)/100} (${qty} items)`);
+  return labels.length?labels.join(' + '):'No Qty Offer';
 };
 
 const buildOrderSheetPayloadServer = (order:any, settings:Record<string,any>) => ({
