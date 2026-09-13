@@ -110,7 +110,7 @@ export const stockHistoryDateFiltersPatch = () => ({
     if (!text.includes('setStockMovementDate(e.target.value)')) {
       const marker = [
         '                  {stockItemSearch && (',
-        "                    <button type="button" onClick={()=>setStockItemSearch('')}",
+        '                    <button type="button" onClick={()=>setStockItemSearch(\'\')}',
         '                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-neutral-400 hover:text-white">',
         '                      Clear',
         '                    </button>',
@@ -121,7 +121,7 @@ export const stockHistoryDateFiltersPatch = () => ({
       ].join('\n');
       const replacement = [
         '                  {stockItemSearch && (',
-        "                    <button type="button" onClick={()=>setStockItemSearch('')}",
+        '                    <button type="button" onClick={()=>setStockItemSearch(\'\')}',
         '                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-neutral-400 hover:text-white">',
         '                      Clear',
         '                    </button>',
