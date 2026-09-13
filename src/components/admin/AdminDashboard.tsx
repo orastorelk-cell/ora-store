@@ -704,6 +704,14 @@ export const AdminDashboard: React.FC = () => {
   const autoDeliveryReserve = adminDeliverySplit.embeddedAmount;
   const visibleDeliveryCharge = adminDeliverySplit.visibleDelivery;
   const profitForBuyingPrice = (buyingPrice: number) => oraProfitForBuyingPrice(buyingPrice);
+  const productFormAppliedShift = Math.max(0, Number(productForm.delivery_price_shift_applied || 0));
+  const productFormSavedActual = Number(
+    productForm.discount_enabled && Number(productForm.discount_price || 0) > 0 && Number(productForm.discount_price || 0) < Number(productForm.selling_price || 0)
+      ? productForm.discount_price
+      : productForm.selling_price
+  );
+  const productFormCustomerItemPrice = Math.max(0, productFormSavedActual - productFormAppliedShift + autoDeliveryReserve + (settings.free_delivery_enabled ? visibleDeliveryCharge : 0));
+  const productFormRegularItemPrice = Math.max(0, Number(productForm.selling_price || 0) - productFormAppliedShift + autoDeliveryReserve + (settings.free_delivery_enabled ? visibleDeliveryCharge : 0));
 
   // Global running Item Code. The first product after FULL RESET is typed manually
   // (example S0001). After that Auto Code follows the same prefix/number pattern.
