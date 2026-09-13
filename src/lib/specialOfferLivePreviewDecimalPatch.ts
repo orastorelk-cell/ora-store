@@ -36,9 +36,8 @@ export const specialOfferLivePreviewDecimalPatch = () => ({
 
     const oldImagePreview = `<div className="relative aspect-square bg-gray-100"><img src={productForm.images[0] || 'https://placehold.co/600x600?text=O-RA'} alt="Product preview" className="h-full w-full object-cover" />{productForm.discount_enabled && productForm.discount_price > 0 && productForm.discount_price < productForm.selling_price && <div className="absolute left-3 top-3 rounded-xl bg-orange-600 px-3 py-1.5 text-sm font-black text-white shadow-lg">{Math.max(1,Math.round(((productForm.selling_price-productForm.discount_price)/Math.max(1,productForm.selling_price))*100))}% OFF</div>}</div>`;
     const newImagePreview = `{(() => {
-                    const deliveryReserve = settings.free_delivery_enabled ? Math.max(0, Number(settings.delivery_fee || 0)) : 0;
                     const savedDiscountActive = productForm.discount_enabled && Number(productForm.discount_price || 0) > 0 && Number(productForm.discount_price || 0) < Number(productForm.selling_price || 0);
-                    const actualPrice = (savedDiscountActive ? Number(productForm.discount_price || 0) : Number(productForm.selling_price || 0)) + deliveryReserve;
+                    const actualPrice = displayUnitPrice(productForm as any, settings);
                     const specialOffer = calculateRoundSpecialOffer({
                       currentPrice: actualPrice,
                       enabled: Boolean(productForm.auto_round_special_offer_enabled),
@@ -54,9 +53,8 @@ export const specialOfferLivePreviewDecimalPatch = () => ({
 
     const oldPricePreview = `<div className="pt-1">{productForm.discount_enabled && productForm.discount_price > 0 && productForm.discount_price < productForm.selling_price && <p className="text-sm font-bold text-gray-400 line-through">Rs. {(productForm.selling_price + (settings.free_delivery_enabled ? Math.max(0, Number(settings.delivery_fee || 0)) : 0)).toLocaleString()}</p>}<p className="text-xl font-black text-orange-600">Rs. {((productForm.discount_enabled && productForm.discount_price > 0 && productForm.discount_price < productForm.selling_price ? productForm.discount_price : productForm.selling_price) + (settings.free_delivery_enabled ? Math.max(0, Number(settings.delivery_fee || 0)) : 0)).toLocaleString()}</p>{settings.free_delivery_enabled ? <p className="text-[10px] font-bold text-emerald-600">🚚 FREE Islandwide Delivery</p> : <p className="text-[10px] text-gray-500">Delivery added at checkout</p>}</div>`;
     const newPricePreview = `{(() => {
-                      const deliveryReserve = settings.free_delivery_enabled ? Math.max(0, Number(settings.delivery_fee || 0)) : 0;
                       const savedDiscountActive = productForm.discount_enabled && Number(productForm.discount_price || 0) > 0 && Number(productForm.discount_price || 0) < Number(productForm.selling_price || 0);
-                      const actualPrice = (savedDiscountActive ? Number(productForm.discount_price || 0) : Number(productForm.selling_price || 0)) + deliveryReserve;
+                      const actualPrice = displayUnitPrice(productForm as any, settings);
                       const specialOffer = calculateRoundSpecialOffer({
                         currentPrice: actualPrice,
                         enabled: Boolean(productForm.auto_round_special_offer_enabled),
@@ -64,7 +62,7 @@ export const specialOfferLivePreviewDecimalPatch = () => ({
                         hasExistingDiscount: savedDiscountActive,
                       });
                       const crossedPrice = savedDiscountActive
-                        ? Number(productForm.selling_price || 0) + deliveryReserve
+                        ? regularDisplayUnitPrice(productForm as any, settings)
                         : specialOffer.active ? specialOffer.regularPrice : 0;
                       return <div className="pt-1">{crossedPrice > actualPrice && <p className="text-sm font-bold text-gray-400 line-through">Rs. {crossedPrice.toLocaleString()}</p>}<div className="flex flex-wrap items-center gap-2"><p className="text-xl font-black text-orange-600">Rs. {actualPrice.toLocaleString()}</p>{specialOffer.active && <span className="rounded-full bg-orange-100 px-2 py-1 text-[9px] font-black text-orange-700">SPECIAL OFFER</span>}</div>{settings.free_delivery_enabled ? <p className="text-[10px] font-bold text-emerald-600">🚚 FREE Islandwide Delivery</p> : <p className="text-[10px] text-gray-500">Delivery added at checkout</p>}</div>;
                     })()}`;
