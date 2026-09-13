@@ -40,7 +40,7 @@ const orderSheetCombinedDiscountServer = (order:any) => {
     0,
   );
   return Math.max(0,
-    Math.round((itemSpecial + Math.max(0,Number(order?.special_offer_discount||0)))*100)/100
+    Math.round((itemSpecial + Math.max(0,Number(order?.delivery_rebalance_qty_offer_amount||0)) + Math.max(0,Number(order?.special_offer_discount||0)))*100)/100
   );
 };
 
