@@ -39,6 +39,7 @@ export const CheckoutModal: React.FC = () => {
     cartSubtotal,
     cartItemCount,
     cartSpecialOfferDiscount,
+    cartDeliveryQtyOfferDiscount,
     cartMultiBuyDiscountRate,
     cartFinalProductsTotal,
     settings,
