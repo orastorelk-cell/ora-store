@@ -66,9 +66,10 @@ const orderQtyOfferLabel = (order: any): string => {
   return discount > 0 ? `Qty Offer Rs. ${discount} (${totalQty} items)` : 'No Qty Offer';
 };
 
-const sheetQtyOfferRules = (settings: Record<string, any>) => JSON.stringify({
+const sheetQtyOfferRules = (settings: Record<string, any>, order?: any) => JSON.stringify({
   enabled: settings?.multi_buy_discount_enabled !== false,
   delivery_price_rebalance_enabled: settings?.delivery_price_rebalance_enabled === true,
+  delivery_rebalance_qty_offer: order?.delivery_rebalance_qty_offer === true,
   delivery_price_rebalance_amount: Math.max(0, Number(settings?.delivery_price_rebalance_amount || 0)),
   delivery_price_rebalance_original_fee: Math.max(0, Number(settings?.delivery_price_rebalance_original_fee || 0)),
   tiers: [
@@ -174,7 +175,7 @@ const buildOrderSheetRow = (order: any, item: any, isFirst: boolean, settings:Re
     'Final Total (Rs)': isFirst ? roundMoney(order?.total_amount || 0) : '',
     'Gift Wrap': isFirst ? (order?.gift_wrap_selected ? 'YES' : 'NO') : '',
     'Wrapping Cost (Rs)': isFirst ? sheetWrappingFee(order,settings) : '',
-    'Qty Offer Rules': isFirst ? sheetQtyOfferRules(settings) : '',
+    'Qty Offer Rules': isFirst ? sheetQtyOfferRules(settings, order) : '',
     // Hidden transport metadata consumed by the Apps Script pricing layer before
     // it writes visible columns. This keeps the exact crossed/offer snapshot even
     // if the catalog changes later.
