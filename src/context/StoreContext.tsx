@@ -30,7 +30,7 @@ import {
   initialStaffAccounts,
 } from '../data/initialData';
 import { syncOrderToGoogleSheets, syncOrdersBatchToGoogleSheets, syncProductCatalogToGoogleSheets, clearGoogleSheetTestData, clearGoogleSheetLiveStartData, deleteOrderFromGoogleSheets } from '../lib/googleSheets';
-import { buildOrderItemSnapshot, displayUnitPrice, effectiveBuyingPrice, findProductSelection, normalizeProductForStorage, normalizedProductType, productDisplayStock, variantById, variantBySku, repriceAfterBuyingCostChange } from '../lib/productVariants';
+import { buildOrderItemSnapshot, deliverySplitForSettings, displayUnitPrice, effectiveBuyingPrice, findProductSelection, normalizeProductForStorage, normalizedProductType, productDisplayStock, variantById, variantBySku, repriceAfterBuyingCostChange } from '../lib/productVariants';
 
 export interface BulkOrderItemInput {
   order_id?: string;
@@ -142,7 +142,10 @@ interface StoreContextType {
   clearCart: () => void;
   cartSubtotal: number;
   cartItemCount: number;
+  /** Manual percentage multi-buy discount only. */
   cartSpecialOfferDiscount: number;
+  /** Automatic fixed Qty Offer created by the delivery split only. */
+  cartDeliveryQtyOfferDiscount: number;
   cartMultiBuyDiscountRate: number;
   cartFinalProductsTotal: number;
 
@@ -1282,14 +1285,17 @@ useEffect(() => {
   };
 
   const cartMultiBuyDiscountRate = getMultiBuyDiscountRate(cartItemCount);
-  const deliveryPriceRebalanceAmount = settings.delivery_price_rebalance_enabled
-    ? Math.max(0, Number(settings.delivery_price_rebalance_amount || 0))
-    : 0;
+  const deliverySplit = deliverySplitForSettings(settings);
+  const deliveryPriceRebalanceAmount = deliverySplit.embeddedAmount;
+  // Manual percentage Qty Offer is calculated only on the real product-price part.
+  // The automatic delivery Qty Offer is a separate fixed amount so the two systems
+  // can never interfere with each other.
   const cartLegacySubtotal = Math.max(0, cartSubtotal - deliveryPriceRebalanceAmount * cartItemCount);
-  const cartLegacyQtyDiscount = Math.round(cartLegacySubtotal * (cartMultiBuyDiscountRate / 100) * 100) / 100;
-  const cartDeliveryRebalanceDiscount = deliveryPriceRebalanceAmount * Math.max(0, cartItemCount - 1);
-  const cartSpecialOfferDiscount = Math.round((cartLegacyQtyDiscount + cartDeliveryRebalanceDiscount) * 100) / 100;
-  const cartFinalProductsTotal = Math.max(0, cartSubtotal - cartSpecialOfferDiscount);
+  const cartSpecialOfferDiscount = Math.round(cartLegacySubtotal * (cartMultiBuyDiscountRate / 100) * 100) / 100;
+  const cartDeliveryQtyOfferDiscount = deliveryPriceRebalanceAmount > 0
+    ? Math.round(deliveryPriceRebalanceAmount * Math.max(0, cartItemCount - 1) * 100) / 100
+    : 0;
+  const cartFinalProductsTotal = Math.max(0, cartSubtotal - cartSpecialOfferDiscount - cartDeliveryQtyOfferDiscount);
 
 
   const normalizePhone = (value: string) => String(value || '').replace(/\D/g, '').replace(/^94(?=7\d{8}$)/, '0');
@@ -1451,12 +1457,14 @@ useEffect(() => {
     const totalQuantity = cart.reduce((sum, item) => sum + item.quantity, 0);
     const subtotal = cartSubtotal;
     const special_offer_discount = cartSpecialOfferDiscount;
-    const delivery_rebalance_qty_offer = settings.delivery_price_rebalance_enabled === true;
-    const internal_delivery_fee = Math.max(0, Number(settings.delivery_fee || 0));
+    const delivery_rebalance_qty_offer_amount = cartDeliveryQtyOfferDiscount;
+    const delivery_rebalance_qty_offer = delivery_rebalance_qty_offer_amount > 0;
+    const delivery_rebalance_amount_snapshot = deliveryPriceRebalanceAmount;
+    const internal_delivery_fee = deliverySplit.visibleDelivery;
     const delivery_fee = settings.free_delivery_enabled ? 0 : internal_delivery_fee;
     const gift_wrap_selected = Boolean(settings.gift_wrap_enabled && formData.gift_wrap_selected);
     const gift_wrap_fee = gift_wrap_selected ? Math.max(0, Number(settings.gift_wrap_fee || 0)) : 0;
-    const total_amount = Math.max(0, subtotal - special_offer_discount + delivery_fee + gift_wrap_fee);
+    const total_amount = Math.max(0, subtotal - special_offer_discount - delivery_rebalance_qty_offer_amount + delivery_fee + gift_wrap_fee);
 
     // Configurable Advance Payment Rule (Main Admin controls threshold and percentage)
     const advanceQtyThreshold = Math.max(0, Number(settings.advance_qty_threshold ?? 4));
@@ -1485,6 +1493,9 @@ useEffect(() => {
       delivery_included_in_item_price: Boolean(settings.free_delivery_enabled),
       special_offer_discount,
       delivery_rebalance_qty_offer,
+      delivery_rebalance_qty_offer_amount,
+      delivery_rebalance_amount_snapshot,
+      delivery_visible_fee_snapshot: internal_delivery_fee,
       gift_wrap_selected,
       gift_wrap_fee,
       total_amount,
@@ -1688,16 +1699,16 @@ useEffect(() => {
 
       const totalQty=orderItems.reduce((n,it)=>n+it.quantity,0);
       const subtotal=orderItems.reduce((n,it)=>n+it.subtotal,0);
-      const internal_delivery_fee=Math.max(0,Number(settings.delivery_fee||0));
+      const importDeliverySplit=deliverySplitForSettings(settings);
+      const internal_delivery_fee=importDeliverySplit.visibleDelivery;
       const delivery_fee=settings.free_delivery_enabled?0:internal_delivery_fee;
       const rate=getMultiBuyDiscountRate(totalQty);
-      const importRebalanceAmount=settings.delivery_price_rebalance_enabled?Math.max(0,Number(settings.delivery_price_rebalance_amount||0)):0;
+      const importRebalanceAmount=importDeliverySplit.embeddedAmount;
       const importLegacySubtotal=Math.max(0,subtotal-importRebalanceAmount*totalQty);
-      const importLegacyQtyDiscount=Math.round(importLegacySubtotal*(rate/100)*100)/100;
-      const deliveryRebalanceQtyOffer=Math.round(importRebalanceAmount*Math.max(0,totalQty-1)*100)/100;
-      const special_offer_discount=Math.round((importLegacyQtyDiscount+deliveryRebalanceQtyOffer)*100)/100;
-      const delivery_rebalance_qty_offer=settings.delivery_price_rebalance_enabled===true;
-      const total_amount=Math.round(Math.max(0,subtotal-special_offer_discount+delivery_fee));
+      const special_offer_discount=Math.round(importLegacySubtotal*(rate/100)*100)/100;
+      const delivery_rebalance_qty_offer_amount=importRebalanceAmount>0?Math.round(importRebalanceAmount*Math.max(0,totalQty-1)*100)/100:0;
+      const delivery_rebalance_qty_offer=delivery_rebalance_qty_offer_amount>0;
+      const total_amount=Math.round(Math.max(0,subtotal-special_offer_discount-delivery_rebalance_qty_offer_amount+delivery_fee));
       const nextOrderNum=requestedOrderId || nextSourceOrderNumber(source,newOrdersList);
       const fingerprint=makeOrderFingerprint(phone,orderItems);
       const duplicateDayCutoff=Date.now()-24*60*60*1000;
@@ -1712,6 +1723,7 @@ useEffect(() => {
         payment_method, payment_status:'Pending', order_status:isConfirmed?'Processing':'New Orders',
         items:orderItems, subtotal, delivery_fee, internal_delivery_fee,
         delivery_included_in_item_price:Boolean(settings.free_delivery_enabled), special_offer_discount, delivery_rebalance_qty_offer,
+        delivery_rebalance_qty_offer_amount, delivery_rebalance_amount_snapshot:importRebalanceAmount, delivery_visible_fee_snapshot:internal_delivery_fee,
         gift_wrap_selected:false,gift_wrap_fee:0,total_amount,
         is_advance_required:totalQty>threshold, advance_amount:totalQty>threshold?Math.round(total_amount*pct/100):0,
         advance_confirmed:false, order_source:source,
@@ -2222,16 +2234,21 @@ useEffect(() => {
       const totalQty=nextItems.reduce((n,it)=>n+it.quantity,0);
       const subtotal=nextItems.reduce((n,it)=>n+it.subtotal,0);
       const rate=getMultiBuyDiscountRate(totalQty);
-      const confirmRebalanceAmount=settings.delivery_price_rebalance_enabled?Math.max(0,Number(settings.delivery_price_rebalance_amount||0)):0;
-      const useDeliveryQtyOffer=order.delivery_rebalance_qty_offer===true;
+      const useDeliveryQtyOffer=order.delivery_rebalance_qty_offer===true || Number(order.delivery_rebalance_amount_snapshot||0)>0;
+      const confirmRebalanceAmount=useDeliveryQtyOffer
+        ? Math.max(0,Number(order.delivery_rebalance_amount_snapshot ?? settings.delivery_price_rebalance_amount ?? 0))
+        : 0;
       const legacySubtotal=Math.max(0,subtotal-confirmRebalanceAmount*totalQty);
-      const realQtyOffer=Math.round(legacySubtotal*(rate/100)*100)/100;
-      const deliveryQtyOffer=useDeliveryQtyOffer?Math.round(confirmRebalanceAmount*Math.max(0,totalQty-1)*100)/100:0;
       const special_offer_discount=useDeliveryQtyOffer
-        ? Math.round((realQtyOffer+deliveryQtyOffer)*100)/100
+        ? Math.round(legacySubtotal*(rate/100)*100)/100
         : Math.max(0,Number(order.special_offer_discount||0));
-      const delivery_fee=settings.free_delivery_enabled?0:Math.max(0,Number(settings.delivery_fee||0));
-      const total_amount=Math.round(Math.max(0,subtotal-special_offer_discount+delivery_fee+gift_wrap_fee));
+      const delivery_rebalance_qty_offer_amount=useDeliveryQtyOffer
+        ? Math.round(confirmRebalanceAmount*Math.max(0,totalQty-1)*100)/100
+        : Math.max(0,Number(order.delivery_rebalance_qty_offer_amount||0));
+      const delivery_fee=useDeliveryQtyOffer
+        ? (settings.free_delivery_enabled?0:Math.max(0,Number(order.delivery_visible_fee_snapshot ?? settings.delivery_fee ?? 0)))
+        : Math.max(0,Number(order.delivery_fee||0));
+      const total_amount=Math.round(Math.max(0,subtotal-special_offer_discount-delivery_rebalance_qty_offer_amount+delivery_fee+gift_wrap_fee));
       const threshold=Math.max(0,Number(settings.advance_qty_threshold??4)),adv=totalQty>threshold,pct=Math.min(100,Math.max(1,Number(settings.advance_percentage??50)));
       const confirmedAddress=addressI>=0?String(rows.map(c=>c[addressI]).find(v=>String(v||'').trim())||'').trim():'';
       const confirmedCity=cityI>=0?String(rows.map(c=>c[cityI]).find(v=>String(v||'').trim())||'').trim():'';
@@ -2240,7 +2257,7 @@ useEffect(() => {
       const oldShape=(order.items||[]).map(it=>({sku:it.sku,product_name:it.product_name,variant_name:it.variant_name,quantity:it.quantity,unit_price:it.unit_price}));
       const newShape=nextItems.map(it=>({sku:it.sku,product_name:it.product_name,variant_name:it.variant_name,quantity:it.quantity,unit_price:it.unit_price}));
       const changed=JSON.stringify(oldShape)!==JSON.stringify(newShape);
-      updates.set(id,{items:nextItems,subtotal,special_offer_discount,delivery_rebalance_qty_offer:order.delivery_rebalance_qty_offer,delivery_fee,gift_wrap_selected,gift_wrap_fee,total_amount,is_advance_required:adv,advance_amount:adv?Math.round(total_amount*pct/100):0,call_center_status:'Confirmed',order_status:'Processing',call_center_updated_at:now,stock_allocated:false,stock_status:'Waiting for Stock',...(confirmedAddress?{address:confirmedAddress}:{}),...(confirmedCity?{city:confirmedCity}:{}),...(confirmedDistrict?{district:confirmedDistrict}:{}),...(cityChanged?{fardar_city:undefined,city_verified:false,city_mapping_source:undefined}:{}),product_change_history:changed?[...(order.product_change_history||[]),{changed_at:now,changed_by:'Call Center Confirm Upload',old_items:oldShape,new_items:newShape,reason:reason||undefined}]:(order.product_change_history||[]),notes:[order.notes,cancelled.length?`Call Center cancelled ${cancelled.length} item row(s).`:'',reason?`Call Center: ${reason}`:''].filter(Boolean).join(' | ')});
+      updates.set(id,{items:nextItems,subtotal,special_offer_discount,delivery_rebalance_qty_offer:order.delivery_rebalance_qty_offer,delivery_rebalance_qty_offer_amount,delivery_rebalance_amount_snapshot:order.delivery_rebalance_amount_snapshot,delivery_visible_fee_snapshot:order.delivery_visible_fee_snapshot,delivery_fee,gift_wrap_selected,gift_wrap_fee,total_amount,is_advance_required:adv,advance_amount:adv?Math.round(total_amount*pct/100):0,call_center_status:'Confirmed',order_status:'Processing',call_center_updated_at:now,stock_allocated:false,stock_status:'Waiting for Stock',...(confirmedAddress?{address:confirmedAddress}:{}),...(confirmedCity?{city:confirmedCity}:{}),...(confirmedDistrict?{district:confirmedDistrict}:{}),...(cityChanged?{fardar_city:undefined,city_verified:false,city_mapping_source:undefined}:{}),product_change_history:changed?[...(order.product_change_history||[]),{changed_at:now,changed_by:'Call Center Confirm Upload',old_items:oldShape,new_items:newShape,reason:reason||undefined}]:(order.product_change_history||[]),notes:[order.notes,cancelled.length?`Call Center cancelled ${cancelled.length} item row(s).`:'',reason?`Call Center: ${reason}`:''].filter(Boolean).join(' | ')});
       orderNumbers.push(id);
     });
 
@@ -2863,13 +2880,13 @@ useEffect(() => {
     const subtotal = testItems.reduce((sum, item) => sum + Number(item.subtotal || 0), 0);
     const totalQty = testItems.reduce((sum, item) => sum + Math.max(1, Number(item.quantity || 1)), 0);
     const discountRate = getMultiBuyDiscountRate(totalQty);
-    const testRebalanceAmount = settings.delivery_price_rebalance_enabled ? Math.max(0, Number(settings.delivery_price_rebalance_amount || 0)) : 0;
+    const testDeliverySplit = deliverySplitForSettings(settings);
+    const testRebalanceAmount = testDeliverySplit.embeddedAmount;
     const testLegacySubtotal = Math.max(0, subtotal - testRebalanceAmount * totalQty);
-    const testLegacyQtyDiscount = Math.round(testLegacySubtotal * (discountRate / 100) * 100) / 100;
-    const deliveryRebalanceQtyOffer = Math.round(testRebalanceAmount * Math.max(0, totalQty - 1) * 100) / 100;
-    const discount = Math.round((testLegacyQtyDiscount + deliveryRebalanceQtyOffer) * 100) / 100;
-    const deliveryFee = settings.free_delivery_enabled ? 0 : Math.max(0, Number(settings.delivery_fee || 0));
-    const totalAmount = Math.round(Math.max(0, subtotal - discount + deliveryFee) * 100) / 100;
+    const discount = Math.round(testLegacySubtotal * (discountRate / 100) * 100) / 100;
+    const deliveryRebalanceQtyOffer = testRebalanceAmount > 0 ? Math.round(testRebalanceAmount * Math.max(0, totalQty - 1) * 100) / 100 : 0;
+    const deliveryFee = settings.free_delivery_enabled ? 0 : testDeliverySplit.visibleDelivery;
+    const totalAmount = Math.round(Math.max(0, subtotal - discount - deliveryRebalanceQtyOffer + deliveryFee) * 100) / 100;
     const now = new Date().toISOString();
 
     const testOrder: Order = {
@@ -2889,7 +2906,10 @@ useEffect(() => {
       internal_delivery_fee: Math.max(0, Number(settings.delivery_fee || 0)),
       delivery_included_in_item_price: Boolean(settings.free_delivery_enabled),
       special_offer_discount: discount,
-      delivery_rebalance_qty_offer: settings.delivery_price_rebalance_enabled === true,
+      delivery_rebalance_qty_offer: deliveryRebalanceQtyOffer > 0,
+      delivery_rebalance_qty_offer_amount: deliveryRebalanceQtyOffer,
+      delivery_rebalance_amount_snapshot: testRebalanceAmount,
+      delivery_visible_fee_snapshot: testDeliverySplit.visibleDelivery,
       gift_wrap_selected: false,
       gift_wrap_fee: 0,
       total_amount: totalAmount,
@@ -3283,6 +3303,7 @@ useEffect(() => {
         cartSubtotal,
         cartItemCount,
         cartSpecialOfferDiscount,
+        cartDeliveryQtyOfferDiscount,
         cartMultiBuyDiscountRate,
         cartFinalProductsTotal,
         placeOrder,
