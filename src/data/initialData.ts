@@ -313,6 +313,11 @@ export const initialStockHistory: StockHistory[] = [
 
 export const initialSettings: StoreSettings = {
   delivery_fee: 500,
+  delivery_base_fee: 500,
+  delivery_rebalance_percent: 0,
+  delivery_price_rebalance_enabled: false,
+  delivery_price_rebalance_amount: 0,
+  delivery_price_rebalance_original_fee: 500,
   free_delivery_enabled: false,
   multi_buy_discount_enabled: true,
   multi_buy_tier1_min: 2,
