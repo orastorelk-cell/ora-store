@@ -1,6 +1,7 @@
 import type { Order, Product, ProductVariant, StoreSettings } from '../src/types';
 import {
   buildOrderItemSnapshot,
+  deliverySplitForSettings,
   displayUnitPrice,
   findProductSelection,
   normalizedProductType,
@@ -480,17 +481,17 @@ const buildFacebookOrder = async (
 
   const item = buildPendingLeadItem(products, settings, code, variantValue, quantity);
   const subtotal = Number(item.subtotal || 0);
-  const internalDeliveryFee = Math.max(0, Number(settings.delivery_fee || 0));
+  const deliverySplit = deliverySplitForSettings(settings);
+  const internalDeliveryFee = deliverySplit.visibleDelivery;
   const deliveryFee = settings.free_delivery_enabled ? 0 : internalDeliveryFee;
   const discountRate = multiBuyRate(quantity, settings);
-  const rebalanceAmount = settings.delivery_price_rebalance_enabled
-    ? Math.max(0, Number(settings.delivery_price_rebalance_amount || 0))
-    : 0;
+  const rebalanceAmount = deliverySplit.embeddedAmount;
   const legacySubtotal = Math.max(0, subtotal - rebalanceAmount * quantity);
-  const normalQtyOffer = Math.round(legacySubtotal * (discountRate / 100) * 100) / 100;
-  const deliveryQtyOffer = Math.round(rebalanceAmount * Math.max(0, quantity - 1) * 100) / 100;
-  const specialOfferDiscount = Math.round((normalQtyOffer + deliveryQtyOffer) * 100) / 100;
-  const totalAmount = Math.round(Math.max(0, subtotal - specialOfferDiscount + deliveryFee));
+  const specialOfferDiscount = Math.round(legacySubtotal * (discountRate / 100) * 100) / 100;
+  const deliveryQtyOffer = rebalanceAmount > 0
+    ? Math.round(rebalanceAmount * Math.max(0, quantity - 1) * 100) / 100
+    : 0;
+  const totalAmount = Math.round(Math.max(0, subtotal - specialOfferDiscount - deliveryQtyOffer + deliveryFee));
   const threshold = Math.max(0, Number(settings.advance_qty_threshold ?? 4));
   const pct = Math.min(100, Math.max(1, Number(settings.advance_percentage ?? 50)));
   const importedAt = new Date().toISOString();
@@ -517,7 +518,10 @@ const buildFacebookOrder = async (
     internal_delivery_fee: internalDeliveryFee,
     delivery_included_in_item_price: Boolean(settings.free_delivery_enabled),
     special_offer_discount: specialOfferDiscount,
-    delivery_rebalance_qty_offer: settings.delivery_price_rebalance_enabled === true,
+    delivery_rebalance_qty_offer: deliveryQtyOffer > 0,
+    delivery_rebalance_qty_offer_amount: deliveryQtyOffer,
+    delivery_rebalance_amount_snapshot: rebalanceAmount,
+    delivery_visible_fee_snapshot: internalDeliveryFee,
     gift_wrap_selected: false,
     gift_wrap_fee: 0,
     total_amount: totalAmount,
