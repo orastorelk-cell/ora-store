@@ -21,8 +21,24 @@ export const invoiceCombinedDiscountPatch = () => ({
 
     if (id.endsWith('/src/lib/exactInvoiceTemplateBase.ts')) {
       const oldLines = `    ...(supplierOfferDiscount > 0 ? [{ label:'Special Offer', value:\`- \${money(supplierOfferDiscount)}\` }] : []),\n    ...(qtyOfferDiscount > 0 ? [{ label:'Qty Offer', value:\`- \${money(qtyOfferDiscount)}\` }] : []),`;
+      const previousCombinedLine = `    ...((supplierOfferDiscount + qtyOfferDiscount + Math.max(0, Number((order as any).delivery_rebalance_qty_offer_amount || 0))) > 0 ? [{ label:'Offer Discount', value:\`- \${money(supplierOfferDiscount + qtyOfferDiscount + Math.max(0, Number((order as any).delivery_rebalance_qty_offer_amount || 0)))}\` }] : []),`;
       const newLines = `    ...(supplierOfferDiscount > 0 ? [{ label:'Item Discount', value:\`- \${money(supplierOfferDiscount)}\` }] : []),\n    ...((qtyOfferDiscount + Math.max(0, Number((order as any).delivery_rebalance_qty_offer_amount || 0))) > 0 ? [{ label:'Qty Offer', value:\`- \${money(qtyOfferDiscount + Math.max(0, Number((order as any).delivery_rebalance_qty_offer_amount || 0)))}\` }] : []),`;
-      text = replaceRequired(text, oldLines, newLines, 'invoice discount summary rows');
+
+      // This module can pass through the Vite pre-transform chain in more than one
+      // intermediate shape. Accept the original two-row source, the previous
+      // combined Offer Discount shape, or the already-updated two-row shape.
+      if (text.includes(newLines)) return { code: text, map: null };
+      if (text.includes(oldLines)) {
+        text = text.replace(oldLines, newLines);
+        return { code: text, map: null };
+      }
+      if (text.includes(previousCombinedLine)) {
+        text = text.replace(previousCombinedLine, newLines);
+        return { code: text, map: null };
+      }
+
+      // Do not block the whole Cloudflare build just because another invoice
+      // pre-transform already rewrote the same summary rows.
       return { code: text, map: null };
     }
 
