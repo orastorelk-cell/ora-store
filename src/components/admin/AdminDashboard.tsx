@@ -4403,9 +4403,52 @@ Suitable For:
                     </span>
 
                     {order.is_replacement_order && (
-                      <span className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-black text-cyan-300">
-                        RE-DELIVERY • COD 0
-                      </span>
+                      <>
+                        <span className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-black text-cyan-300">
+                          RE-DELIVERY • COD 0
+                        </span>
+                        <button
+                          type="button"
+                          disabled={
+                            !order.waybill_number ||
+                            order.dispatch_status === 'Handed Over' ||
+                            Boolean(
+                              order.fardar_csv_exported_at &&
+                              order.fardar_csv_exported_waybill &&
+                              String(order.fardar_csv_exported_waybill) === String(order.waybill_number || '')
+                            )
+                          }
+                          onClick={()=>void downloadFardarUploadCsv(
+                            [order],
+                            `replacement-${order.replacement_of_order_number || order.order_number}`
+                          )}
+                          className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-black text-emerald-300 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:border-neutral-700 disabled:bg-neutral-800 disabled:text-neutral-500"
+                          title={
+                            !order.waybill_number
+                              ? 'Waiting for a new waybill.'
+                              : order.dispatch_status === 'Handed Over'
+                                ? 'Already handed over to courier.'
+                                : (
+                                  order.fardar_csv_exported_at &&
+                                  order.fardar_csv_exported_waybill &&
+                                  String(order.fardar_csv_exported_waybill) === String(order.waybill_number || '')
+                                )
+                                  ? 'Fardar CSV already downloaded for this waybill.'
+                                  : 'Download this Rs.0 re-delivery as a single-row Fardar upload CSV.'
+                          }
+                        >
+                          <Download className="h-3 w-3" />
+                          {!order.waybill_number
+                            ? 'Waiting Waybill'
+                            : (
+                              order.fardar_csv_exported_at &&
+                              order.fardar_csv_exported_waybill &&
+                              String(order.fardar_csv_exported_waybill) === String(order.waybill_number || '')
+                            )
+                              ? 'Fardar CSV Exported'
+                              : 'Fardar Upload CSV'}
+                        </button>
+                      </>
                     )}
 
                     <button
