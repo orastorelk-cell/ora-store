@@ -180,6 +180,12 @@ interface StoreContextType {
     importedOrderNumbers: string[];
     ignoredCount: number;
   }>;
+  createMissingItemReplacement: (input: {
+    originalOrderId: string;
+    itemIndex: number;
+    quantity: number;
+    reason?: string;
+  }) => Promise<Order>;
   updateOrderStatus: (orderId: string, status: OrderStatus) => void;
   cancelOrderDirect: (orderId: string, reason: string, cancelledBy?: string) => Promise<{ success: boolean; message: string }>;
   updateOrderDeliveryDetails: (orderId: string, details: { address: string; city: string; district?: string }) => Promise<{ success: boolean; sheetSynced: boolean; message: string }>;
@@ -1633,6 +1639,140 @@ useEffect(() => {
     // This keeps fresh browsers/devices independent from private webhook settings
     // and means the Admin PC does not need to be open after the site is deployed.
     clearCart();
+    return savedOrder;
+  };
+
+  const createMissingItemReplacement = async (input: {
+    originalOrderId: string;
+    itemIndex: number;
+    quantity: number;
+    reason?: string;
+  }): Promise<Order> => {
+    const original = orders.find((order) => order.id === input.originalOrderId);
+    if (!original) throw new Error('Original order was not found.');
+    if (original.is_replacement_order) throw new Error('Create a replacement from the original customer order, not from another replacement.');
+    if (!original.stock_allocated) throw new Error('The original order has no allocated-stock record. Use this flow only for an item that was already deducted from stock.');
+    if (!(original.order_status === 'Delivered' || original.order_status === 'Shipped' || original.dispatch_status === 'Handed Over')) {
+      throw new Error('Missing Item Re-delivery is available only after the original parcel was shipped / handed over / delivered.');
+    }
+
+    const itemIndex = Math.max(0, Math.floor(Number(input.itemIndex || 0)));
+    const sourceItem = original.items?.[itemIndex];
+    if (!sourceItem) throw new Error('Select the missing item.');
+    const orderedQty = Math.max(1, Math.floor(Number(sourceItem.quantity || 1)));
+    const quantity = Math.max(1, Math.floor(Number(input.quantity || 1)));
+    if (quantity > orderedQty) throw new Error(`Replacement quantity cannot be more than the original quantity (${orderedQty}).`);
+
+    const sameSku = String(sourceItem.sku || '').trim().toUpperCase();
+    const existingReplacement = orders.find((order) =>
+      order.is_replacement_order === true &&
+      order.order_status !== 'Cancelled' &&
+      order.replacement_of_order_id === original.id &&
+      String(order.replacement_item_sku || '').trim().toUpperCase() === sameSku
+    );
+    if (existingReplacement) {
+      throw new Error(`A replacement for this item already exists: ${existingReplacement.order_number}.`);
+    }
+
+    const now = new Date().toISOString();
+    const actor = adminUser?.name || 'Admin';
+    const reason = String(input.reason || 'Packing shortage - item missing from original parcel').trim();
+    if (!reason) throw new Error('Replacement reason is required.');
+
+    // IMPORTANT: the original order already deducted this physical unit.
+    // Do NOT add it back to catalog stock and do NOT let FIFO deduct it again.
+    // The replacement starts as Allocated so shipping the warehouse-left unit
+    // changes physical stock 1 -> 0 while system stock correctly remains 0.
+    const replacementItem: Order['items'][number] = {
+      ...sourceItem,
+      quantity,
+      unit_price: 0,
+      subtotal: 0,
+    };
+
+    const replacement: Order = {
+      id: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? `ord-${crypto.randomUUID()}`
+        : `ord-repl-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+      order_number: nextSourceOrderNumber('Manual Admin'),
+      customer_name: original.customer_name,
+      phone: original.phone,
+      whatsapp: original.whatsapp,
+      address: original.address,
+      city: original.city,
+      district: original.district,
+      fardar_city: original.fardar_city,
+      city_verified: original.city_verified,
+      city_mapping_source: original.city_mapping_source,
+      payment_method: 'COD',
+      payment_status: 'Paid',
+      order_status: 'Processing',
+      items: [replacementItem],
+      subtotal: 0,
+      delivery_fee: 0,
+      internal_delivery_fee: 0,
+      delivery_included_in_item_price: false,
+      special_offer_discount: 0,
+      delivery_rebalance_qty_offer: false,
+      delivery_rebalance_qty_offer_amount: 0,
+      delivery_rebalance_amount_snapshot: 0,
+      delivery_visible_fee_snapshot: 0,
+      gift_wrap_selected: false,
+      gift_wrap_fee: 0,
+      total_amount: 0,
+      is_advance_required: false,
+      advance_amount: 0,
+      advance_confirmed: true,
+      order_source: 'Manual Admin',
+      call_center_status: 'Confirmed',
+      is_synced_google_sheets: true,
+      courier_name: original.courier_name || settings.courier_provider || 'Fardar',
+      tracking_status: 'Not Shipped',
+      delivery_status: 'Pending',
+      stock_status: 'Allocated',
+      stock_allocated: true,
+      stock_allocated_at: now,
+      stock_allocated_by: `Missing-item replacement • ${actor}`,
+      is_duplicate_order: false,
+      dispatch_status: 'Not Scanned',
+      is_replacement_order: true,
+      replacement_of_order_id: original.id,
+      replacement_of_order_number: original.order_number,
+      replacement_of_waybill: original.waybill_number,
+      replacement_item_sku: sourceItem.sku,
+      replacement_qty: quantity,
+      replacement_reason: reason,
+      replacement_created_by: actor,
+      notes: [
+        'MISSING ITEM RE-DELIVERY',
+        `Original Order: ${original.order_number}`,
+        original.waybill_number ? `Original Waybill: ${original.waybill_number}` : '',
+        `${sourceItem.sku} x${quantity}`,
+        'COD Rs. 0',
+        'Delivery Rs. 0',
+        'Stock already deducted by original order - no additional stock movement',
+        reason,
+      ].filter(Boolean).join(' | '),
+      created_at: now,
+    };
+
+    const saved = await staffBulkOrderSaveAndSheetSync([replacement]);
+    const savedOrder = saved.orders?.[0];
+    if (!savedOrder) throw new Error('Replacement order could not be saved on the server.');
+
+    setOrders((prev) => [
+      savedOrder,
+      ...prev.filter((order) => order.id !== savedOrder.id && order.order_number !== savedOrder.order_number),
+    ]);
+
+    logActivity({
+      action: 'Missing Item Re-delivery Created',
+      module: 'Orders',
+      target_id: savedOrder.id,
+      target_label: savedOrder.order_number,
+      details: `Original ${original.order_number}${original.waybill_number ? ` / WB ${original.waybill_number}` : ''} • ${sourceItem.sku} x${quantity} • COD Rs. 0 • stock unchanged`,
+    });
+
     return savedOrder;
   };
 
@@ -3383,6 +3523,7 @@ useEffect(() => {
         cartFinalProductsTotal,
         placeOrder,
         importBulkOrders,
+        createMissingItemReplacement,
         updateOrderStatus,
         cancelOrderDirect,
         updateOrderDeliveryDetails,
