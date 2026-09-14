@@ -191,6 +191,7 @@ export const AdminDashboard: React.FC = () => {
     updateSettings,
     placeOrder,
     importBulkOrders,
+    createMissingItemReplacement,
     addToCart,
     clearCart,
     adminUser,
@@ -253,6 +254,11 @@ export const AdminDashboard: React.FC = () => {
   const [isDeleteOrderOpen, setIsDeleteOrderOpen] = useState(false);
   const [deleteOrderReason, setDeleteOrderReason] = useState('');
   const [deleteOrderBusy, setDeleteOrderBusy] = useState(false);
+  const [replacementOrderId, setReplacementOrderId] = useState('');
+  const [replacementItemIndex, setReplacementItemIndex] = useState(0);
+  const [replacementQty, setReplacementQty] = useState(1);
+  const [replacementReason, setReplacementReason] = useState('Packing shortage - item missing from original parcel');
+  const [replacementBusy, setReplacementBusy] = useState(false);
   const [orderTimelineOpenId, setOrderTimelineOpenId] = useState('');
   const [copiedScript, setCopiedScript] = useState(false);
   const [selectedLeadItemCode, setSelectedLeadItemCode] = useState(products[0]?.sku || '');
@@ -4396,6 +4402,12 @@ Suitable For:
                       {order.order_status}
                     </span>
 
+                    {order.is_replacement_order && (
+                      <span className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-black text-cyan-300">
+                        RE-DELIVERY • COD 0
+                      </span>
+                    )}
+
                     <button
                       type="button"
                       onClick={()=>setOrderTimelineOpenId(prev=>prev===order.id?'':order.id)}
@@ -4405,6 +4417,25 @@ Suitable For:
                       <History className="h-3 w-3"/>
                       {orderTimelineOpenId===order.id?'Hide History Map':'View History Map'}
                     </button>
+
+                    {!order.is_replacement_order &&
+                      Boolean(order.stock_allocated) &&
+                      (order.order_status === 'Delivered' || order.order_status === 'Shipped' || order.dispatch_status === 'Handed Over') && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReplacementOrderId(order.id);
+                          setReplacementItemIndex(0);
+                          setReplacementQty(1);
+                          setReplacementReason('Packing shortage - item missing from original parcel');
+                        }}
+                        className="inline-flex items-center gap-1 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-black text-cyan-300 hover:bg-cyan-500/20"
+                        title="Create a Rs.0 re-delivery for an item that was already deducted in this original order"
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                        Missing Item Re-delivery
+                      </button>
+                    )}
 
                     {order.order_status !== 'Cancelled' && (
                       <button
@@ -4517,6 +4548,16 @@ Suitable For:
                             : 'Not Handed Over Yet'}
                           {order.dispatch_scanned_by ? ` • ${order.dispatch_scanned_by}` : ''}
                         </p>
+                      </div>
+                    )}
+                    {order.is_replacement_order && (
+                      <div className="mt-1 rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-2.5 py-2 text-[10px]">
+                        <p className="font-bold text-cyan-300">Missing Item Re-delivery • Customer Charge Rs. 0</p>
+                        <p className="mt-0.5 text-neutral-400">
+                          Original: <span className="font-mono text-white">{order.replacement_of_order_number || '-'}</span>
+                          {order.replacement_of_waybill ? <> • Old Waybill: <span className="font-mono text-white">{order.replacement_of_waybill}</span></> : null}
+                        </p>
+                        <p className="mt-0.5 text-neutral-500">Stock was already deducted by the original order; this re-delivery does not deduct stock again.</p>
                       </div>
                     )}
                     {order.is_duplicate_order && <p className="font-bold text-red-400">Duplicate Order • Invoice Blocked</p>}
@@ -7306,6 +7347,157 @@ Suitable For:
 
         </main>
       </div>
+
+      {/* Missing item / packing error re-delivery modal */}
+      {replacementOrderId && (() => {
+        const original = orders.find((order) => order.id === replacementOrderId);
+        if (!original) return null;
+        const item = original.items?.[replacementItemIndex];
+        const maxQty = Math.max(1, Number(item?.quantity || 1));
+        const existingReplacement = item
+          ? orders.find((order) =>
+              order.is_replacement_order === true &&
+              order.order_status !== 'Cancelled' &&
+              order.replacement_of_order_id === original.id &&
+              String(order.replacement_item_sku || '').trim().toUpperCase() === String(item.sku || '').trim().toUpperCase()
+            )
+          : undefined;
+
+        return (
+          <div className="fixed inset-0 z-[75] flex items-center justify-center bg-neutral-950/85 p-4 backdrop-blur-sm">
+            <div className="w-full max-w-xl rounded-2xl border border-cyan-500/30 bg-neutral-900 p-5 shadow-2xl">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-black text-white">Missing Item Re-delivery</h3>
+                  <p className="mt-1 text-xs text-neutral-400">
+                    Original <b className="font-mono text-amber-300">{original.order_number}</b>
+                    {original.waybill_number ? <> • Waybill <b className="font-mono text-blue-300">{original.waybill_number}</b></> : null}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={replacementBusy}
+                  onClick={() => setReplacementOrderId('')}
+                  className="rounded-lg p-2 text-neutral-400 hover:bg-neutral-800 hover:text-white disabled:opacity-40"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="mt-4 rounded-xl border border-emerald-500/25 bg-emerald-500/10 p-3 text-[11px] text-emerald-100">
+                <b>Safe stock handling:</b> original order already deducted this unit. The re-delivery is marked Stock Allocated, so system stock is not increased or deducted again. Original order and old waybill remain unchanged.
+              </div>
+
+              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="text-xs font-bold text-neutral-300">
+                  Missing Item
+                  <select
+                    value={replacementItemIndex}
+                    onChange={(e) => {
+                      setReplacementItemIndex(Number(e.target.value));
+                      setReplacementQty(1);
+                    }}
+                    className="mt-1 w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2.5 text-sm text-white"
+                  >
+                    {(original.items || []).map((row, index) => (
+                      <option key={`${row.sku}-${index}`} value={index}>
+                        {row.sku} • {row.product_name}{row.variant_name ? ` - ${row.variant_name}` : ''} • Ordered x{row.quantity}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="text-xs font-bold text-neutral-300">
+                  Re-delivery Qty
+                  <input
+                    type="number"
+                    min={1}
+                    max={maxQty}
+                    value={replacementQty}
+                    onChange={(e) => setReplacementQty(Math.min(maxQty, Math.max(1, Math.floor(Number(e.target.value || 1)))))}
+                    className="mt-1 w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2.5 text-sm text-white"
+                  />
+                </label>
+              </div>
+
+              <label className="mt-3 block text-xs font-bold text-neutral-300">
+                Reason / Note
+                <textarea
+                  rows={3}
+                  value={replacementReason}
+                  onChange={(e) => setReplacementReason(e.target.value)}
+                  className="mt-1 w-full resize-none rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2.5 text-sm text-white"
+                />
+              </label>
+
+              <div className="mt-4 grid grid-cols-3 gap-2 text-center text-[10px] font-bold">
+                <div className="rounded-xl border border-neutral-700 bg-neutral-950 p-3 text-neutral-300">
+                  COD<br/><span className="text-base text-emerald-400">Rs. 0</span>
+                </div>
+                <div className="rounded-xl border border-neutral-700 bg-neutral-950 p-3 text-neutral-300">
+                  Delivery<br/><span className="text-base text-emerald-400">Rs. 0</span>
+                </div>
+                <div className="rounded-xl border border-neutral-700 bg-neutral-950 p-3 text-neutral-300">
+                  Stock Change<br/><span className="text-base text-emerald-400">0</span>
+                </div>
+              </div>
+
+              {existingReplacement && (
+                <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs font-bold text-red-200">
+                  A re-delivery already exists for this item: {existingReplacement.order_number}. Duplicate creation is blocked.
+                </div>
+              )}
+
+              <p className="mt-3 text-[10px] text-neutral-500">
+                After creation, the normal O-RA fulfilment flow will assign the next available waybill and place this Rs.0 order in the packing invoice queue. If no waybill is available, import a new waybill first/next as usual.
+              </p>
+
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={replacementBusy}
+                  onClick={() => setReplacementOrderId('')}
+                  className="rounded-xl border border-neutral-700 px-4 py-2 text-xs font-bold text-neutral-300 hover:bg-neutral-800 disabled:opacity-40"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={replacementBusy || !item || !replacementReason.trim() || Boolean(existingReplacement)}
+                  onClick={async () => {
+                    if (!item) return;
+                    if (!window.confirm(
+                      `Create Rs.0 re-delivery?\n\nOriginal: ${original.order_number}\nOld Waybill: ${original.waybill_number || '-'}\nItem: ${item.sku} x${replacementQty}\nCOD: Rs. 0\nStock change: 0`
+                    )) return;
+                    setReplacementBusy(true);
+                    try {
+                      const created = await createMissingItemReplacement({
+                        originalOrderId: original.id,
+                        itemIndex: replacementItemIndex,
+                        quantity: replacementQty,
+                        reason: replacementReason,
+                      });
+                      setReplacementOrderId('');
+                      setOrderSearch(created.order_number);
+                      alert(
+                        `Re-delivery ${created.order_number} created successfully.\n\nCOD: Rs. 0\nDelivery: Rs. 0\nStock change: 0\n\nThe normal system flow will assign the next available new waybill.`
+                      );
+                    } catch (error:any) {
+                      alert(error?.message || 'Missing item re-delivery could not be created.');
+                    } finally {
+                      setReplacementBusy(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-2 rounded-xl bg-cyan-500 px-4 py-2 text-xs font-black text-neutral-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <RotateCcw className="h-4 w-4" />
+                  {replacementBusy ? 'Creating...' : 'Create Rs.0 Re-delivery'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Delete selected order modal */}
       {isDeleteOrderOpen && selectedDeleteOrderId && (() => {
