@@ -317,6 +317,15 @@ export interface Order {
   risk_status?: 'Normal' | 'Suspicious' | 'Blocked';
   abuse_note?: string;
   is_test_order?: boolean;
+  /** Missing-item / packing-error re-delivery. The original paid order stays unchanged. */
+  is_replacement_order?: boolean;
+  replacement_of_order_id?: string;
+  replacement_of_order_number?: string;
+  replacement_of_waybill?: string;
+  replacement_item_sku?: string;
+  replacement_qty?: number;
+  replacement_reason?: string;
+  replacement_created_by?: string;
   platform_lead_id?: string;
   platform_lead_created_at?: string;
   lead_import_key?: string;
