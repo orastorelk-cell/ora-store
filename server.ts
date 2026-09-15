@@ -1777,6 +1777,25 @@ const getOrderSnapshots = async (): Promise<any[]> => {
   }
   return readOrderSnapshotsLocal().sort((a,b)=>new Date(b.created_at||0).getTime()-new Date(a.created_at||0).getTime());
 };
+// Normalize only customer-entered human-readable order text.
+ // Lowercase English words get an initial capital, while existing uppercase/mixed
+ // casing, numbers, phone/WhatsApp, IDs, SKUs, notes and product data stay untouched.
+ const capitalizeLowercaseWords = (value: unknown) =>
+   String(value || '')
+     .trim()
+     .replace(/\b[a-z][a-z']*\b/g, (word) => word.charAt(0).toUpperCase() + word.slice(1));
+
+ const normalizeIncomingOrderText = (order:any) => {
+   if(!order || typeof order !== 'object') return order;
+   order.customer_name = capitalizeLowercaseWords(order.customer_name);
+   order.address = capitalizeLowercaseWords(order.address);
+   order.city = capitalizeLowercaseWords(order.city);
+   if(order.district !== undefined && order.district !== null) {
+     order.district = capitalizeLowercaseWords(order.district);
+   }
+   return order;
+ };
+
 const saveOrderSnapshot = async (order:any) => {
   if(!order?.id || !order?.order_number) throw new Error('Invalid order snapshot');
   const now=new Date().toISOString();
@@ -1836,7 +1855,7 @@ const saveOrderSnapshotsBatch = async (orders:any[]) => {
 
 app.post('/api/orders', async (req,res)=>{
   try{
-    const order=req.body?.order;
+    const order=normalizeIncomingOrderText(req.body?.order);
     const deferSheetSync=Boolean(req.body?.defer_sheet_sync);
     const waitSheetSync=Boolean(req.body?.wait_sheet_sync);
     if(!order?.id || !order?.order_number || !order?.customer_name || !Array.isArray(order?.items)) {
@@ -1955,7 +1974,7 @@ app.post('/api/orders', async (req,res)=>{
 // then mirrors the whole batch to Google Sheets in one request.
 app.post('/api/admin/orders/bulk-import', requireStaffAnyPermission(['lead_import','orders']), async (req,res)=>{
   try{
-    const incoming=Array.isArray(req.body?.orders)?req.body.orders.slice(0,1000):[];
+    const incoming=Array.isArray(req.body?.orders)?req.body.orders.slice(0,1000).map((order:any)=>normalizeIncomingOrderText(order)):[];
     if(!incoming.length) return res.status(400).json({error:'No orders were supplied.'});
     const invalid=incoming.find((o:any)=>!o?.id||!o?.order_number||!o?.customer_name||!Array.isArray(o?.items)||!o.items.length);
     if(invalid) return res.status(400).json({error:`Invalid order payload: ${String(invalid?.order_number||invalid?.id||'unknown')}`});
