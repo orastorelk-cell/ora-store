@@ -19,11 +19,30 @@ export const confirmUploadVariantChangePatch = () => ({
         // from the old variant while the invoice snapshot showed the new variant.
         const requestedVariant=variantI>=0?String(c[variantI]||'').trim():'';
         const existingCandidate=sameExistingItem(indexedExisting)?indexedExisting:(order.items||[]).find(it=>sameExistingItem(it));
-        const existingVariant=String(existingCandidate?.variant_name||'').trim();
-        const variantChanged=Boolean(requestedVariant && existingVariant && requestedVariant.toLowerCase()!==existingVariant.toLowerCase());
+        const existingVariant=String(
+          existingCandidate?.variant_name ||
+          (existingCandidate?.bundle_components || []).map((component:any)=>String(component?.variant_name||'').trim()).find(Boolean) ||
+          ''
+        ).trim();
+        // A requested Sheet variant is authoritative even when an older combo snapshot
+        // did not store a top-level variant_name. Blank old metadata must rebuild too.
+        const variantChanged=Boolean(requestedVariant && requestedVariant.toLowerCase()!==existingVariant.toLowerCase());
         const existingItem=!applyRequested && !variantChanged ? existingCandidate : undefined;`;
 
-    const next = code.replace(oldLine, replacement);
+    let next = code.replace(oldLine, replacement);
+
+    // confirmUploadPackingBatchPatch builds a fresh snapshot when variantChanged=true.
+    // For combo packs, the resolved bundle component already points at the selected
+    // child variant; also persist the Sheet-selected variant at item level so invoice,
+    // Fardar CSV, later uploads and future comparisons all read the same value.
+    const freshItemLine = "            const freshItem=buildOrderItemSnapshot(selection.product,qty,settings,selection.variant,products);";
+    if (next.includes(freshItemLine) && !next.includes("freshItem.variant_name=requestedVariant")) {
+      next = next.replace(
+        freshItemLine,
+        freshItemLine + "\n            if(normalizedProductType(selection.product)==='bundle' && requestedVariant) freshItem.variant_name=requestedVariant;"
+      );
+    }
+
     return next === code ? null : { code: next, map: null };
   },
 });
