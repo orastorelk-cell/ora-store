@@ -159,6 +159,18 @@ export const adminDashboardFardarHistoryDurablePatch = () => ({
       'Saved Batches {activeSavedConfirmBatches.length}'
     );
 
+    const packingBatchMarker = '               const batch = uploadBatches[source];';
+    if (text.includes(packingBatchMarker)) {
+      const packingBatchReplacement = String.raw`               const durableLatestBatch = Array.from(durableSourceBatchMap.entries())
+                 .filter(([key]) => key.startsWith(source + '::'))
+                 .map(([, value]) => value)
+                 .sort((a,b) => new Date(b.at).getTime() - new Date(a.at).getTime())[0];
+               const batch = uploadBatches[source]?.orderNumbers?.length
+                 ? uploadBatches[source]
+                 : durableLatestBatch;`;
+      text = text.replace(packingBatchMarker, packingBatchReplacement);
+    }
+
     const oldEmpty = '<div className="rounded-2xl border border-dashed border-gray-300 bg-gray-50 p-5 text-center text-xs font-bold text-gray-500">No Confirm / Cancel upload history for this date.</div>';
     const newEmpty = '<div className="rounded-2xl border border-dashed border-gray-300 bg-gray-50 p-5 text-center text-xs font-bold text-gray-500">{selectedDateOrders.length > 0 ? `${selectedDateOrders.length} historical order(s) recovered from saved Confirm timestamps. Use Download Date CSV above.` : \'No Confirm / Cancel upload history for this date.\'}</div>';
     if (!text.includes(oldEmpty)) throw new Error('[O-RA Fardar durable history] empty-state marker not found');
