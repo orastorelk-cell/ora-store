@@ -81,6 +81,49 @@ export const adminDashboardFardarHistoryDurablePatch = () => ({
         const activeSavedConfirmBatches = mergedConfirmHistory.filter(batch =>
           batch.orderNumbers.some(orderNumber => activeOrderNumbers.has(orderNumber))
         );
+
+        // Packing's "Last Upload Result" was browser-session state only. After a
+        // refresh/login, an already-confirmed durable batch could disappear even
+        // though the orders (and their confirm_upload_batch_id) were still saved.
+        // Reconstruct the latest source batches from durable orders so the existing
+        // Packing Fardar CSV button remains available without changing live order logic.
+        const durableSourceBatchMap = new Map<string, {
+          orderNumbers: string[];
+          uploaded: number;
+          failed: number;
+          ignored: number;
+          errors: string[];
+          fileCount: number;
+          at: string;
+        }>();
+        orders.forEach(order => {
+          if (order.call_center_status !== 'Confirmed' && order.call_center_status !== 'Cancelled') return;
+          const rawBatch = String((order as any).confirm_upload_batch_id || '').trim();
+          if (!rawBatch) return;
+          const sourceKey = order.order_source === 'Website'
+            ? 'Website'
+            : order.order_source === 'Facebook Ads'
+              ? 'Facebook'
+              : 'TikTok';
+          const key = sourceKey + '::' + rawBatch;
+          const at = String((order as any).call_center_updated_at || order.created_at || '');
+          const existing = durableSourceBatchMap.get(key);
+          if (existing) {
+            if (!existing.orderNumbers.includes(order.order_number)) existing.orderNumbers.push(order.order_number);
+            existing.uploaded = existing.orderNumbers.length;
+            if (new Date(at).getTime() < new Date(existing.at).getTime()) existing.at = at;
+          } else {
+            durableSourceBatchMap.set(key, {
+              orderNumbers: [order.order_number],
+              uploaded: 1,
+              failed: 0,
+              ignored: 0,
+              errors: [],
+              fileCount: 1,
+              at,
+            });
+          }
+        });
         const fardarHistoryDates = Array.from(new Set(
           activeSavedConfirmBatches.map(batch => unifiedHistoryDateKey(batch.at)).filter(Boolean)
         )).sort().reverse();
