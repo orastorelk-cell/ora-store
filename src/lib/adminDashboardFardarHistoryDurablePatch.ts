@@ -176,6 +176,57 @@ export const adminDashboardFardarHistoryDurablePatch = () => ({
     if (!text.includes(oldEmpty)) throw new Error('[O-RA Fardar durable history] empty-state marker not found');
     text = text.replace(oldEmpty, newEmpty);
 
+    // Keep the Fardar download controls available after export: New stays duplicate-safe,
+    // while Re-download Full is available from the same Packing batch when an intentional
+    // second download is needed.
+    const fardarBatchReadyMarker = String.raw`              const fardarNewReady = batchOrders.filter(o =>
+                o.call_center_status === 'Confirmed' &&
+                o.stock_allocated &&
+                Boolean(o.waybill_number) &&
+                o.order_status !== 'Cancelled' &&
+                o.dispatch_status !== 'Handed Over' &&
+                !(
+                  o.fardar_csv_exported_at &&
+                  o.fardar_csv_exported_waybill &&
+                  String(o.fardar_csv_exported_waybill) === String(o.waybill_number || '')
+                )
+              );`;
+    if (text.includes(fardarBatchReadyMarker) && !text.includes('const fardarFullReady = batchOrders.filter')) {
+      text = text.replace(
+        fardarBatchReadyMarker,
+        fardarBatchReadyMarker + String.raw`
+              const fardarFullReady = batchOrders.filter(o =>
+                o.call_center_status === 'Confirmed' &&
+                o.stock_allocated &&
+                Boolean(o.waybill_number) &&
+                o.order_status !== 'Cancelled'
+              );`
+      );
+    }
+
+    const fardarButtonMarker = String.raw`                    <button
+                      type="button"
+                      disabled={fardarNewReady.length === 0}
+                      onClick={()=>void downloadFardarUploadCsv(batchOrders)}
+                      className="rounded-xl border border-violet-500/30 bg-violet-500/10 px-4 py-2.5 text-xs font-black text-violet-300 disabled:opacity-40"
+                    >
+                      <Download className="mr-1 inline h-4 w-4"/> Fardar Upload CSV ({fardarNewReady.length} New)
+                    </button>`;
+    if (text.includes(fardarButtonMarker) && !text.includes('Fardar Upload CSV (Re-download')) {
+      text = text.replace(
+        fardarButtonMarker,
+        fardarButtonMarker + String.raw`
+                    <button
+                      type="button"
+                      disabled={fardarFullReady.length === 0}
+                      onClick={()=>void downloadFardarUploadCsv(batchOrders, 'FULL-' + (batch.at ? new Date(batch.at).toISOString().slice(0,10) : 'saved'), true)}
+                      className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-xs font-black text-emerald-300 disabled:opacity-40"
+                    >
+                      <Download className="mr-1 inline h-4 w-4"/> Fardar Upload CSV (Re-download {fardarFullReady.length})
+                    </button>`
+      );
+    }
+
     return { code: text, map: null };
   },
 });
