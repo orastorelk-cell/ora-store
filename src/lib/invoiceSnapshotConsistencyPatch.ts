@@ -49,7 +49,22 @@ export const invoiceSnapshotConsistencyPatch = () => ({
       text = replaceRequired(text, renderOld, renderNew, 'normal invoice confirmed total render');
 
       const oldItemChecks = `    if(repairMoney(e.unit_price)>0 && Math.abs(repairMoney(e.unit_price)-repairMoney(a.unit_price))>0.01) reasons.push('item '+(i+1)+' price');\n    if(repairMoney(e.line_total)>0 && Math.abs(repairMoney(e.line_total)-repairMoney(a.subtotal))>0.01) reasons.push('item '+(i+1)+' total');`;
-      const newItemChecks = `    const actualUnit=repairMoney(a.unit_price);\n    const referenceUnit=Math.max(actualUnit,repairMoney((a as any).regular_unit_price),actualUnit+repairMoney((a as any).supplier_offer_discount_per_unit));\n    const referenceLine=Math.round(referenceUnit*Math.max(1,Number(a.quantity||1))*100)/100;\n    if(repairMoney(e.unit_price)>0 && Math.abs(repairMoney(e.unit_price)-referenceUnit)>0.01) reasons.push('item '+(i+1)+' price');\n    if(repairMoney(e.line_total)>0 && Math.abs(repairMoney(e.line_total)-referenceLine)>0.01) reasons.push('item '+(i+1)+' total');`;
+      const newItemChecks = `    const actualUnit=repairMoney(a.unit_price);
+    const historicalRegular=repairMoney((a as any).regular_unit_price);
+    const historicalOfferReference=actualUnit+repairMoney((a as any).supplier_offer_discount_per_unit);
+    const expectedUnit=repairMoney(e.unit_price);
+    const unitMatchesActual=expectedUnit>0 && Math.abs(expectedUnit-actualUnit)<=0.01;
+    const unitMatchesHistoricalRegular=expectedUnit>0 && historicalRegular>0 && Math.abs(expectedUnit-historicalRegular)<=0.01;
+    const unitMatchesHistoricalOffer=expectedUnit>0 && historicalOfferReference>0 && Math.abs(expectedUnit-historicalOfferReference)<=0.01;
+    if(expectedUnit>0 && !(unitMatchesActual || unitMatchesHistoricalRegular || unitMatchesHistoricalOffer)) reasons.push('item '+(i+1)+' price');
+    const actualLine=repairMoney(a.subtotal);
+    const historicalRegularLine=Math.round(historicalRegular*Math.max(1,Number(a.quantity||1))*100)/100;
+    const historicalOfferLine=Math.round(historicalOfferReference*Math.max(1,Number(a.quantity||1))*100)/100;
+    const expectedLine=repairMoney(e.line_total);
+    const lineMatchesActual=expectedLine>0 && Math.abs(expectedLine-actualLine)<=0.01;
+    const lineMatchesHistoricalRegular=expectedLine>0 && historicalRegular>0 && Math.abs(expectedLine-historicalRegularLine)<=0.01;
+    const lineMatchesHistoricalOffer=expectedLine>0 && historicalOfferReference>0 && Math.abs(expectedLine-historicalOfferLine)<=0.01;
+    if(expectedLine>0 && !(lineMatchesActual || lineMatchesHistoricalRegular || lineMatchesHistoricalOffer)) reasons.push('item '+(i+1)+' total');`;
       text = replaceRequired(text, oldItemChecks, newItemChecks, 'crossed-price safety checks');
 
       const oldFinalCheck = `  if(repairMoney(snapshot.final_total)>0 && Math.abs(repairMoney(snapshot.final_total)-repairMoney(order.total_amount))>0.01) reasons.push('final total');`;
