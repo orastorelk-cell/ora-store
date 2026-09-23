@@ -65,7 +65,7 @@ export const confirmUploadCrossPriceSnapshotPatch = () => ({
     // Newer Confirm Upload packing logic may already have expanded the item
     // snapshot block to preserve historical same-product variant pricing. Enhance
     // that transformed block in-place instead of requiring the older marker.
-    if (text.includes('const historicalSibling=!applyRequested')) {
+    if (text.includes('const historicalSibling=!applyRequested') || text.includes('const historicalSibling=(order.items||[]).find')) {
       const existingOld = String.raw`        if(existingItem){
           const preservedUnit=Math.max(0,Number(existingItem.unit_price||0));
           nextItems.push({...existingItem,quantity:qty,subtotal:Math.round(preservedUnit*qty*100)/100});
