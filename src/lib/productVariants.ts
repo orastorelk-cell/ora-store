@@ -350,22 +350,9 @@ export const findProductSelection = (
   const clean = normalizeSku(code);
   if (!clean) return null;
 
-  // When a Google Sheet / Call Center row contains both an Item Code and an
-  // explicit Variant / Color, the human-selected Variant / Color is the
-  // authoritative choice. The Item Code may still be the previous variant SKU
-  // (for example R0008-BLUE while Variant / Color says Pink).
-  //
-  // Resolve an exact variant SKU only as a fallback. This preserves legacy CSVs
-  // that have no Variant / Color column while preventing an old variant SKU from
-  // overriding an explicit new selection.
   for (const product of products) {
     const variant = variantBySku(product, clean);
-    if (!variant) continue;
-
-    const explicitVariant = variantByOption(product, variantValue) || variantBySku(product, variantValue);
-    if (explicitVariant) return { product, variant: explicitVariant };
-
-    return { product, variant };
+    if (variant) return { product, variant };
   }
 
   const product = products.find(p => normalizeSku(p.sku) === clean);

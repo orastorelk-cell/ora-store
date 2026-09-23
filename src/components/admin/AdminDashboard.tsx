@@ -1123,18 +1123,11 @@ Suitable For:
     return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
   };
   const dispatchTodayKey = dispatchLocalDayKey(new Date().toISOString());
-  // Dispatch readiness starts when the invoice is GENERATED/LOCKED — not when the PDF is downloaded.
-  // Fardar CSV export is also a valid operational readiness marker for orders that already have
-  // stock + waybill. Packing must never block the Dispatch scan list just because nobody downloaded
-  // the invoice PDF again.
   const dispatchReadyDate = (order: Order) =>
-    order.invoice_generated_at ||
-    order.fardar_csv_exported_at ||
-    order.invoice_pack_downloaded_at ||
-    order.created_at;
+    order.invoice_pack_downloaded_at || order.invoice_generated_at || order.created_at;
   const dispatchReadyToday = orders.filter((o) =>
-    Boolean(o.invoice_generated_at || o.invoice_locked || o.invoice_number || o.fardar_csv_exported_at) &&
-    Boolean(o.stock_allocated) &&
+    o.invoice_locked &&
+    o.stock_allocated &&
     Boolean(o.waybill_number) &&
     o.dispatch_status !== 'Handed Over' &&
     o.order_status !== 'Cancelled' &&
@@ -1505,6 +1498,7 @@ Suitable For:
     a.download=source==='Facebook Ads'?'ora_facebook_order_template.csv':'ora_tiktok_order_template.csv';
     document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
   };
+
   const downloadDecisionTemplate = (source: 'Website'|'Facebook Ads'|'TikTok Ads' = 'Website') => {
     const prefix = source === 'Facebook Ads' ? 'FB' : source === 'TikTok Ads' ? 'TK' : 'WEB';
     const headers = [
@@ -3003,7 +2997,8 @@ Suitable For:
     const name = productForm.name_en.trim();
     if (!name) return;
     const auto = suggestProductMetadata(name, categories);
-    setProductForm((prev) => {      if (prev.name_en.trim() !== name) return prev;
+    setProductForm((prev) => {
+      if (prev.name_en.trim() !== name) return prev;
       const nextTags = auto.search_keywords || prev.search_keywords;
       if (nextTags === prev.search_keywords) return prev;
       return { ...prev, search_keywords: nextTags };
@@ -4502,7 +4497,8 @@ Suitable For:
                           );
                           if(reason===null) return;
                           const cleanReason=reason.trim();
-                          if(!cleanReason){ alert('Cancel reason is required.'); return; }                          if(!window.confirm(`Cancel ${order.order_number}?\n\nReason: ${cleanReason}\n\nThis changes the O-RA order to Cancelled.`)) return;
+                          if(!cleanReason){ alert('Cancel reason is required.'); return; }
+                          if(!window.confirm(`Cancel ${order.order_number}?\n\nReason: ${cleanReason}\n\nThis changes the O-RA order to Cancelled.`)) return;
                           try{
                             const result=await cancelOrderDirect(order.id,cleanReason,adminUser?.name || 'Admin');
                             alert(result.message);
@@ -6001,7 +5997,8 @@ Suitable For:
                           }}
                         />
                       ) : (
-                        <b className="text-black text-lg">{brandingDraft.brand_store_name || 'O-RA'}</b>                      )}
+                        <b className="text-black text-lg">{brandingDraft.brand_store_name || 'O-RA'}</b>
+                      )}
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                       <span className="px-2 py-1 rounded-full bg-gray-100 text-gray-700 text-[9px] font-bold">EN / සිං</span>
@@ -7501,3 +7498,1137 @@ Suitable For:
               <div className="mt-5 flex justify-end gap-2">
                 <button
                   type="button"
+                  disabled={replacementBusy}
+                  onClick={() => setReplacementOrderId('')}
+                  className="rounded-xl border border-neutral-700 px-4 py-2 text-xs font-bold text-neutral-300 hover:bg-neutral-800 disabled:opacity-40"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={replacementBusy || !item || !replacementReason.trim() || Boolean(existingReplacement)}
+                  onClick={async () => {
+                    if (!item) return;
+                    if (!window.confirm(
+                      `Create Rs.0 re-delivery?\n\nOriginal: ${original.order_number}\nOld Waybill: ${original.waybill_number || '-'}\nItem: ${item.sku} x${replacementQty}\nCOD: Rs. 0\nStock change: 0`
+                    )) return;
+                    setReplacementBusy(true);
+                    try {
+                      const created = await createMissingItemReplacement({
+                        originalOrderId: original.id,
+                        itemIndex: replacementItemIndex,
+                        quantity: replacementQty,
+                        reason: replacementReason,
+                      });
+                      setReplacementOrderId('');
+                      setOrderSearch(created.order_number);
+                      alert(
+                        `Re-delivery ${created.order_number} created successfully.\n\nCOD: Rs. 0\nDelivery: Rs. 0\nStock change: 0\n\nThe normal system flow will assign the next available new waybill.`
+                      );
+                    } catch (error:any) {
+                      alert(error?.message || 'Missing item re-delivery could not be created.');
+                    } finally {
+                      setReplacementBusy(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-2 rounded-xl bg-cyan-500 px-4 py-2 text-xs font-black text-neutral-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <RotateCcw className="h-4 w-4" />
+                  {replacementBusy ? 'Creating...' : 'Create Rs.0 Re-delivery'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Delete selected order modal */}
+      {isDeleteOrderOpen && selectedDeleteOrderId && (() => {
+        const target = orders.find((o) => o.id === selectedDeleteOrderId);
+        if (!target) return null;
+        return (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-neutral-950/85 backdrop-blur-sm">
+            <div className="w-full max-w-md rounded-2xl border border-red-500/30 bg-neutral-900 p-5 shadow-2xl">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-black text-white">Delete Order {target.order_number}</h3>
+                  <p className="mt-1 text-xs text-neutral-400">A reason is required and will be recorded in Activity Log.</p>
+                </div>
+                <button type="button" onClick={() => !deleteOrderBusy && setIsDeleteOrderOpen(false)} className="rounded-lg p-2 text-neutral-400 hover:bg-neutral-800 hover:text-white"><X className="w-4 h-4" /></button>
+              </div>
+
+              {(target.order_status === 'Shipped' || target.order_status === 'Delivered' || target.dispatch_status === 'Handed Over') && (
+                <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs font-bold text-amber-200">
+                  This order is already shipped/delivered and is protected from deletion. Use the return/delivery flow instead.
+                </div>
+              )}
+
+              <label className="mt-4 block text-xs font-bold text-neutral-300">Delete Reason *</label>
+              <select
+                value={deleteOrderReason}
+                onChange={(e) => setDeleteOrderReason(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2.5 text-sm text-white"
+              >
+                <option value="">Select a reason...</option>
+                <option value="Customer requested cancellation">Customer requested cancellation</option>
+                <option value="Duplicate / fake order">Duplicate / fake order</option>
+                <option value="Wrong / test order entry">Wrong / test order entry</option>
+                <option value="Invalid customer details">Invalid customer details</option>
+                <option value="Admin cleanup - not required">Admin cleanup - not required</option>
+              </select>
+              <textarea
+                value={deleteOrderReason.startsWith('Other: ') ? deleteOrderReason.slice(7) : ''}
+                onChange={(e) => setDeleteOrderReason(e.target.value.trimStart() ? `Other: ${e.target.value}` : '')}
+                placeholder="Or type another reason..."
+                rows={3}
+                className="mt-2 w-full resize-none rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2.5 text-sm text-white placeholder:text-neutral-600"
+              />
+
+              <div className="mt-4 flex justify-end gap-2">
+                <button type="button" disabled={deleteOrderBusy} onClick={() => setIsDeleteOrderOpen(false)} className="rounded-xl border border-neutral-700 px-4 py-2 text-xs font-bold text-neutral-300 hover:bg-neutral-800">Cancel</button>
+                <button
+                  type="button"
+                  disabled={deleteOrderBusy || deleteOrderReason.trim().length < 3 || target.order_status === 'Shipped' || target.order_status === 'Delivered' || target.dispatch_status === 'Handed Over'}
+                  onClick={async () => {
+                    setDeleteOrderBusy(true);
+                    const result = await deleteOrder(target.id, deleteOrderReason, adminUser?.name || 'Admin');
+                    setDeleteOrderBusy(false);
+                    if (!result.success) { alert(result.message); return; }
+                    setIsDeleteOrderOpen(false);
+                    setSelectedDeleteOrderId('');
+                    setDeleteOrderReason('');
+                    alert(result.message);
+                  }}
+                  className="inline-flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-xs font-black text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Trash2 className="w-4 h-4" /> {deleteOrderBusy ? 'Deleting...' : 'Delete Order'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Change Password Modal */}
+      {isChangePasswordOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-neutral-950/80 backdrop-blur-md">
+          <div className="relative w-full max-w-sm bg-neutral-900 border border-amber-500/30 rounded-2xl p-6 space-y-4">
+            <button
+              onClick={() => setIsChangePasswordOpen(false)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-neutral-950 text-neutral-400 hover:text-white"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <h3 className="text-base font-bold text-white flex items-center space-x-2">
+              <KeyRound className="w-5 h-5 text-amber-400" />
+              <span>Change Your Password</span>
+            </h3>
+
+            <form onSubmit={handleChangePassword} className="space-y-3 text-xs">
+              <div>
+                <label className="block text-neutral-300 mb-1">Current Password *</label>
+                <input
+                  type="password"
+                  required
+                  value={passwordForm.currentPassword}
+                  onChange={(e) => setPasswordForm({ ...passwordForm, currentPassword: e.target.value })}
+                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-neutral-300 mb-1">New Password *</label>
+                <input
+                  type="password"
+                  required
+                  value={passwordForm.newPassword}
+                  onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })}
+                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-neutral-300 mb-1">Confirm New Password *</label>
+                <input
+                  type="password"
+                  required
+                  value={passwordForm.confirmPassword}
+                  onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })}
+                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white"
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-3 rounded-xl bg-amber-500 text-neutral-950 font-bold text-xs hover:bg-amber-400"
+              >
+                Update Password
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add Staff Account Modal */}
+      {isAddStaffModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-neutral-950/80 backdrop-blur-md">
+          <div className="relative w-full max-w-2xl bg-neutral-900 border border-amber-500/30 rounded-2xl p-6 space-y-4">
+            <button
+              onClick={() => setIsAddStaffModalOpen(false)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-neutral-950 text-neutral-400 hover:text-white"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <h3 className="text-base font-bold text-white flex items-center space-x-2">
+              <UserPlus className="w-5 h-5 text-amber-400" />
+              <span>Create Staff Account</span>
+            </h3>
+
+            <form onSubmit={handleAddStaffAccount} className="space-y-3 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-neutral-300 mb-1">Username *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. kamal"
+                    value={staffForm.username}
+                    onChange={(e) => setStaffForm({ ...staffForm, username: e.target.value })}
+                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-neutral-300 mb-1">Password *</label>
+                  <input
+                    type="password"
+                    required
+                    value={staffForm.password}
+                    onChange={(e) => setStaffForm({ ...staffForm, password: e.target.value })}
+                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-neutral-300 mb-1">Staff Full Name *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Kamal Perera"
+                  value={staffForm.name}
+                  onChange={(e) => setStaffForm({ ...staffForm, name: e.target.value })}
+                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-neutral-300 mb-1">Email Address (Optional)</label>
+                <input
+                  type="email"
+                  placeholder="staff@gmail.com"
+                  value={staffForm.email}
+                  onChange={(e) => setStaffForm({ ...staffForm, email: e.target.value })}
+                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-neutral-300 mb-2">Staff Module Access *</label>
+                <div className="max-h-72 overflow-y-auto rounded-xl border border-neutral-800 bg-neutral-950">
+                  {allPermissionIds.filter((id)=>id!=='user_access').map((perm)=><div key={perm} className="flex items-center justify-between gap-3 border-b border-neutral-800 px-3 py-2 last:border-b-0"><span className="text-[10px] font-bold text-neutral-300">{permissionLabels[perm]}</span><select value={accessLevelFromList(staffForm.permissions,perm)} onChange={(e)=>setStaffForm({...staffForm,permissions:setAccessLevelInList(staffForm.permissions,perm,e.target.value as StaffAccessLevel)})} className="w-36 rounded-lg border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-[10px] font-bold text-white"><option value="none">No Access</option><option value="view">View Only</option><option value="edit">Edit / Manage</option></select></div>)}
+                </div>
+                <div className="mt-3 rounded-xl border border-blue-500/20 bg-blue-500/5 p-3"><p className="mb-2 text-[10px] font-black text-blue-300">SPECIAL ACTIONS</p><div className="space-y-2">{specialActionRows.map((action)=><label key={action.id} className="flex items-center gap-2 text-[10px] font-bold text-neutral-300"><input type="checkbox" className="accent-blue-500" checked={staffForm.permissions.includes(`action:${action.id}`)} onChange={(e)=>{const token=`action:${action.id}`;setStaffForm({...staffForm,permissions:e.target.checked?Array.from(new Set([...staffForm.permissions,token])):staffForm.permissions.filter((p)=>p!==token)})}}/>{action.label}</label>)}</div></div>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-3 rounded-xl bg-amber-500 text-neutral-950 font-bold text-xs hover:bg-amber-400"
+              >
+                Create Staff Account
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* System Reset Double-Confirmation Modal */}
+      {isResetConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-neutral-950/90 backdrop-blur-md">
+          <div className="relative w-full max-w-md bg-neutral-900 border border-red-500/50 rounded-2xl p-6 space-y-4 text-center">
+            <button
+              onClick={() => setIsResetConfirmOpen(false)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-neutral-950 text-neutral-400 hover:text-white"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="w-12 h-12 rounded-full bg-red-950 border border-red-500/40 text-red-400 flex items-center justify-center mx-auto">
+              <ShieldAlert className="w-6 h-6" />
+            </div>
+
+            <div>
+              <h3 className="text-base font-bold text-white">Confirm FULL LIVE START RESET</h3>
+              <p className="text-xs text-neutral-400 mt-1">
+                This permanently clears Products/Variants/Combos/Categories, stock/purchases, Web/FB/TikTok orders & leads, customers, returns, payments and other operational/demo data. Linked Google Sheet order rows are cleared too. Website Info & Policy text, login/staff accounts, Google Sheet URL, technical/API connections, branding and invoice design are kept. Bank/contact/BR fields are cleared for real details.
+              </p>
+            </div>
+
+            <div className="bg-neutral-950 p-3 rounded-xl border border-neutral-800 text-left space-y-2">
+              <label className="block text-xs font-bold text-red-400">
+                To confirm, type <span className="text-white bg-red-950 px-1 py-0.5 rounded font-mono">RESET ORA</span> below:
+              </label>
+              <input
+                type="text"
+                value={resetTypedConfirm}
+                onChange={(e) => setResetTypedConfirm(e.target.value)}
+                placeholder="Type RESET ORA"
+                className="w-full bg-neutral-900 border border-neutral-800 rounded-xl px-3 py-2 text-white font-mono text-center font-bold text-sm tracking-widest focus:border-red-500"
+              />
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => setIsResetConfirmOpen(false)}
+                className="flex-1 py-2.5 rounded-xl bg-neutral-800 text-neutral-300 font-bold text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleResetSystemData}
+                disabled={resetTypedConfirm.trim().toUpperCase() !== 'RESET ORA'}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 disabled:opacity-40 text-white font-bold text-xs hover:bg-red-700 transition-colors"
+              >
+                Yes, Clear Demo Data & Start Live
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk CSV Order Import Modal */}
+      {isBulkOrderOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-neutral-950/80 backdrop-blur-md overflow-y-auto">
+          <div className="relative w-full max-w-3xl bg-neutral-900 border border-emerald-500/40 rounded-2xl p-5 sm:p-6 space-y-5 my-auto max-h-[90vh] flex flex-col shadow-2xl">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
+              <div className="flex items-center space-x-3 text-emerald-400">
+                <FileSpreadsheet className="w-6 h-6" />
+                <div>
+                  <h3 className="text-base font-bold text-white">
+                    Bulk CSV Order Import (ඇණවුම් එකවර ඇතුළත් කිරීම)
+                  </h3>
+                  <p className="text-xs text-neutral-400">
+                    Upload FB/TikTok/Call orders via CSV file. Orders are accepted even without stock. Stock is allocated automatically only when physical stock is available.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsBulkOrderOpen(false)}
+                className="p-1.5 rounded-full bg-neutral-800 text-neutral-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-4">
+                <p className="text-xs font-black text-blue-300">Facebook Orders</p>
+                <p className="mt-1 text-[10px] text-neutral-400">Download a fresh template with the next available FB-xxxxxx IDs. Keep only the rows you need, fill confirmed orders, then upload below.</p>
+                <button type="button" onClick={()=>downloadSourceOrderTemplate('Facebook Ads')} className="mt-3 w-full rounded-lg bg-blue-500 px-3 py-2 text-[11px] font-black text-white">
+                  Download Facebook Template
+                </button>
+              </div>
+              <div className="rounded-xl border border-fuchsia-500/30 bg-fuchsia-500/5 p-4">
+                <p className="text-xs font-black text-fuchsia-300">TikTok Orders</p>
+                <p className="mt-1 text-[10px] text-neutral-400">Download a fresh template with the next available TK-xxxxxx IDs. Used IDs are rejected if an old template is uploaded again.</p>
+                <button type="button" onClick={()=>downloadSourceOrderTemplate('TikTok Ads')} className="mt-3 w-full rounded-lg bg-fuchsia-500 px-3 py-2 text-[11px] font-black text-white">
+                  Download TikTok Template
+                </button>
+              </div>
+            </div>
+
+            {/* Template Download & File Upload Zone */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Step 1: Download Template */}
+              <div className="bg-neutral-950 p-4 rounded-xl border border-neutral-800 space-y-2.5 flex flex-col justify-between">
+                <div>
+                  <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">
+                    Step 1: Download CSV Format
+                  </span>
+                  <p className="text-xs text-neutral-300 font-semibold mt-1">Get Sample CSV Template File</p>
+                  <p className="text-[11px] text-neutral-400 mt-0.5">
+                    Includes columns: <b>Item_Code, Quantity, Customer_Name, Phone, WhatsApp, Address, City, Channel_Source, Payment_Method</b>.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={downloadOrderCsvTemplate}
+                  className="w-full py-2.5 px-3 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30 font-bold text-xs flex items-center justify-center space-x-2 transition-colors"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Download Sample Template (.CSV)</span>
+                </button>
+              </div>
+
+              {/* Step 2: Upload CSV File */}
+              <div className="bg-neutral-950 p-4 rounded-xl border border-neutral-800 space-y-2.5 flex flex-col justify-between">
+                <div>
+                  <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider block">
+                    Step 2: Upload Completed CSV
+                  </span>
+                  <p className="text-xs text-neutral-300 font-semibold mt-1">Select CSV File from Computer</p>
+                  <p className="text-[11px] text-neutral-400 mt-0.5 truncate">
+                    {bulkCsvFileName ? `Selected: ${bulkCsvFileName}` : 'Choose .csv file containing orders.'}
+                  </p>
+                </div>
+                <label className="cursor-pointer w-full py-2.5 px-3 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-white font-bold text-xs flex items-center justify-center space-x-2 transition-colors border border-neutral-700">
+                  <Upload className="w-4 h-4 text-amber-400" />
+                  <span>{bulkCsvFileName ? 'Change CSV File' : 'Choose CSV File'}</span>
+                  <input
+                    type="file"
+                    accept=".csv, text/csv"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleCsvFileUpload(file);
+                    }}
+                  />
+                </label>
+              </div>
+            </div>
+
+            {/* Call Center Result CSV */}
+            <div className="rounded-xl border border-orange-500/30 bg-orange-500/5 p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-xs font-black text-orange-300">Call Center Result CSV</p>
+                  <p className="mt-1 text-[11px] text-neutral-400">Confirmed → Processing • No Answer → Pending • Cancelled → Cancelled. Stock is allocated only after confirmation.</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={downloadCallCenterCsvTemplate} className="rounded-lg border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-[11px] font-bold text-orange-300">
+                    <Download className="mr-1 inline h-4 w-4"/>Template
+                  </button>
+                  <label className="cursor-pointer rounded-lg bg-orange-500 px-3 py-2 text-[11px] font-black text-black">
+                    <Upload className="mr-1 inline h-4 w-4"/>Upload Results
+                    <input type="file" accept=".csv,text/csv" className="hidden" onChange={e=>e.target.files?.[0] && handleCallCenterCsvUpload(e.target.files[0])}/>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            {/* Parsed Preview Table */}
+            {parsedCsvRows.length > 0 && (
+              <div className="space-y-3 flex-1 overflow-hidden flex flex-col min-h-0">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-bold text-white">
+                    Parsed CSV Data Preview ({parsedCsvRows.length} Rows Found)
+                  </span>
+                  <div className="flex items-center space-x-3 text-[11px]">
+                    <span className="text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">
+                      ✓ Valid: {parsedCsvRows.filter((r) => r.isValid).length}
+                    </span>
+                    {parsedCsvRows.some((r) => !r.isValid) && (
+                      <span className="text-red-400 font-bold bg-red-500/10 px-2 py-0.5 rounded border border-red-500/30">
+                        ⚠ Errors: {parsedCsvRows.filter((r) => !r.isValid).length}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="overflow-auto border border-neutral-800 rounded-xl max-h-60 bg-neutral-950">
+                  <table className="w-full text-left text-xs text-neutral-300">
+                    <thead className="bg-neutral-900 text-neutral-400 uppercase text-[10px] sticky top-0 border-b border-neutral-800">
+                      <tr>
+                        <th className="p-2.5">#</th>
+                        <th className="p-2.5">Item Code</th>
+                        <th className="p-2.5">Product Name</th>
+                        <th className="p-2.5 text-center">Qty</th>
+                        <th className="p-2.5">Customer &amp; Phone</th>
+                        <th className="p-2.5">Address &amp; City</th>
+                        <th className="p-2.5">Channel</th>
+                        <th className="p-2.5 text-right">Total Price</th>
+                        <th className="p-2.5 text-center">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-neutral-800 font-sans">
+                      {parsedCsvRows.map((row, idx) => (
+                        <tr
+                          key={idx}
+                          className={row.isValid ? 'hover:bg-neutral-900/50' : 'bg-red-950/20 text-red-200'}
+                        >
+                          <td className="p-2.5 text-neutral-500 font-mono text-[10px]">{idx + 1}</td>
+                          <td className="p-2.5 font-mono font-bold text-amber-400">{row.item_code}</td>
+                          <td className="p-2.5">
+                            {row.product ? (
+                              <div className="flex items-center space-x-2">
+                                <img
+                                  src={row.product.images[0]}
+                                  alt=""
+                                  className="w-6 h-6 object-cover rounded border border-neutral-800"
+                                />
+                                <span className="font-semibold text-white truncate max-w-[140px]">
+                                  {row.product.name_en}
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="text-red-400 font-bold">Product Not Found</span>
+                            )}
+                          </td>
+                          <td className="p-2.5 text-center font-bold text-white">{row.quantity}</td>
+                          <td className="p-2.5">
+                            <p className="font-bold text-white text-[11px]">{row.customer_name || 'N/A'}</p>
+                            <p className="text-[10px] text-neutral-400 font-mono">{row.phone || 'N/A'}</p>
+                          </td>
+                          <td className="p-2.5 text-[11px] text-neutral-300 truncate max-w-[150px]">
+                            {row.address}, {row.city}
+                          </td>
+                          <td className="p-2.5">
+                            <span className="px-1.5 py-0.5 rounded bg-neutral-800 text-[10px] font-semibold text-neutral-300">
+                              {row.order_source}
+                            </span>
+                          </td>
+                          <td className="p-2.5 text-right font-mono font-bold text-emerald-400">
+                            {row.product
+                              ? `Rs. ${((row.product.discount_enabled !== false && row.product.discount_price && row.product.discount_price < row.product.selling_price ? row.product.discount_price : row.product.selling_price) * row.quantity + settings.delivery_fee).toLocaleString()}`
+                              : '—'}
+                          </td>
+                          <td className="p-2.5 text-center">
+                            {row.isValid ? (
+                              <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold">
+                                <CheckCircle2 className="w-3 h-3" />
+                                <span>Ready</span>
+                              </span>
+                            ) : (
+                              <span
+                                className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 border border-red-500/30 text-[10px] font-bold"
+                                title={row.errorReason}
+                              >
+                                <AlertTriangle className="w-3 h-3" />
+                                <span>{row.errorReason}</span>
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Footer Action Buttons */}
+            <div className="flex items-center justify-end space-x-3 pt-3 border-t border-neutral-800">
+              <button
+                type="button"
+                onClick={() => setIsBulkOrderOpen(false)}
+                className="px-4 py-2.5 rounded-xl bg-neutral-800 text-neutral-300 font-bold text-xs hover:bg-neutral-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isImportingBulk || parsedCsvRows.filter((r) => r.isValid).length === 0}
+                onClick={handleBulkImportSubmit}
+                className="px-5 py-2.5 rounded-xl bg-emerald-500 disabled:opacity-40 text-neutral-950 font-bold text-xs hover:bg-emerald-400 flex items-center space-x-2 transition-colors shadow-lg shadow-emerald-500/20"
+              >
+                {isImportingBulk ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Importing Orders &amp; Deducting Stock...</span>
+                  </>
+                ) : (
+                  <>
+                    <FileSpreadsheet className="w-4 h-4" />
+                    <span>
+                      Import {parsedCsvRows.filter((r) => r.isValid).length} Valid Orders Now
+                    </span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+
+      {/* Manual FB / Phone Order Entry Modal */}
+      {isManualOrderOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-neutral-950/80 backdrop-blur-md overflow-y-auto">
+          <div className="relative w-full max-w-md bg-neutral-900 border border-amber-500/30 rounded-2xl p-6 space-y-4 my-auto">
+            <button
+              onClick={() => setIsManualOrderOpen(false)}
+              className="absolute top-4 right-4 p-2 rounded-full bg-neutral-950 text-neutral-400"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <h3 className="text-base font-bold text-white">Manual Order Entry (FB / TikTok / Phone)</h3>
+            <p className="text-xs text-neutral-400">
+              Direct order entry that automatically deducts centralized stock.
+            </p>
+
+            <form onSubmit={handleManualOrderSubmit} className="space-y-3 text-xs">
+              <div>
+                <label className="block text-neutral-300 mb-1">Order Channel Source</label>
+                <select
+                  value={manualOrderForm.order_source}
+                  onChange={(e) => setManualOrderForm({ ...manualOrderForm, order_source: e.target.value as any })}
+                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white"
+                >
+                  <option value="Facebook Ads">Facebook Ads</option>
+                  <option value="TikTok Ads">TikTok Ads</option>
+                  <option value="Manual Admin">Call Center / Phone</option>
+                </select>
+              </div>
+
+              {/* Quick Item Code (SKU) Search for Call Center Staff */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between text-neutral-300">
+                  <label className="font-semibold flex items-center space-x-1">
+                    <Tag className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Quick Search by Item Code (SKU) or Name:</span>
+                  </label>
+                  {manualItemSearch && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setManualItemSearch('');
+                        if (products.length > 0) {
+                          setManualOrderForm((prev) => ({
+                            ...prev,
+                            selected_product_id: products[0].id,
+                          }));
+                        }
+                      }}
+                      className="text-[10px] text-amber-400 underline"
+                    >
+                      Clear Search
+                    </button>
+                  )}
+                </div>
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-neutral-500 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    placeholder="Type Item Code e.g. S0001 or name..."
+                    value={manualItemSearch}
+                    onChange={(e) => handleManualSearchInput(e.target.value)}
+                    className="w-full bg-neutral-950 border border-amber-500/40 rounded-xl pl-8 pr-3 py-2 text-white font-mono text-xs focus:border-amber-400"
+                  />
+                </div>
+              </div>
+
+              {/* Product Selector with Item Code */}
+              <div>
+                <label className="block text-neutral-300 mb-1 font-semibold">Select Product *</label>
+                <select
+                  value={selectedManualProduct?.id || manualOrderForm.selected_product_id}
+                  onChange={(e) => setManualOrderForm({ ...manualOrderForm, selected_product_id: e.target.value, selected_variant_id: '' })}
+                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white font-mono"
+                >
+                  {filteredManualProducts.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      [{p.sku}] {p.name_en} — Rs. {((p.discount_enabled !== false && p.discount_price && p.discount_price < p.selling_price ? p.discount_price : p.selling_price)).toLocaleString()} (In Stock: {p.stock_quantity})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {selectedManualProduct && normalizedProductType(selectedManualProduct) === 'variant' && (
+                <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 space-y-2">
+                  <label className="block text-xs font-black text-amber-300">Customer Color / Variant *</label>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {(selectedManualProduct.variants || []).filter(v=>v.status !== 'Draft').map(v => (
+                      <button key={v.id} type="button" onClick={()=>setManualOrderForm(prev=>({...prev,selected_variant_id:v.id}))}
+                        className={`rounded-xl border p-2 text-left ${manualOrderForm.selected_variant_id===v.id?'border-amber-400 bg-amber-500/15':'border-neutral-800 bg-neutral-950'}`}>
+                        {v.image && <img src={v.image} alt="" className="mb-1 h-10 w-full rounded-lg object-cover" />}
+                        <div className="font-bold text-white">{v.option_value}</div>
+                        <div className="text-[10px] font-mono text-neutral-400">{v.sku}</div>
+                        <div className="text-[10px] text-emerald-400">Rs. {displayUnitPrice(selectedManualProduct, settings, v).toLocaleString()} • Stock {v.stock_quantity}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Selected Item Preview Box */}
+              {selectedManualProduct && (
+                <div className="bg-neutral-950 p-2.5 rounded-xl border border-neutral-800 flex items-center space-x-3">
+                  <img src={variantById(selectedManualProduct,manualOrderForm.selected_variant_id)?.image || selectedManualProduct.images[0]} alt="" className="w-12 h-12 object-cover rounded-lg border border-neutral-800 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center space-x-2">
+                      <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 font-mono text-[10px] font-bold border border-amber-500/30">
+                        CODE: {variantById(selectedManualProduct,manualOrderForm.selected_variant_id)?.sku || selectedManualProduct.sku}
+                      </span>
+                      <span className="text-[10px] text-neutral-400 truncate capitalize">{selectedManualProduct.category_slug}</span>
+                    </div>
+                    <p className="font-bold text-white text-xs truncate mt-0.5">{selectedManualProduct.name_en}</p>
+                    <p className="text-[10px] text-emerald-400 font-semibold">
+                      Rs. {displayUnitPrice(selectedManualProduct, settings, variantById(selectedManualProduct,manualOrderForm.selected_variant_id)).toLocaleString()}{' '}
+                      <span className="text-neutral-500 font-normal">| Stock: {(variantById(selectedManualProduct,manualOrderForm.selected_variant_id)?.stock_quantity ?? productDisplayStock(selectedManualProduct, products))} units</span>
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-neutral-300 mb-1">Customer Name *</label>
+                  <input
+                    type="text"
+                    required
+                    value={manualOrderForm.customer_name}
+                    onChange={(e) => setManualOrderForm({ ...manualOrderForm, customer_name: e.target.value })}
+                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-neutral-300 mb-1">Phone Number *</label>
+                  <input
+                    type="tel"
+                    required
+                    value={manualOrderForm.phone}
+                    onChange={(e) => setManualOrderForm({ ...manualOrderForm, phone: e.target.value })}
+                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-neutral-300 mb-1">Address *</label>
+                  <input
+                    type="text"
+                    required
+                    value={manualOrderForm.address}
+                    onChange={(e) => setManualOrderForm({ ...manualOrderForm, address: e.target.value })}
+                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-neutral-300 mb-1">City *</label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      required
+                      value={manualOrderForm.city}
+                      onChange={(e) => handleManualCityChange(e.target.value)}
+                      className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white"
+                    />
+                    {manualCitySuggestions.length > 0 && (
+                      <div className="absolute z-50 left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded-xl border border-neutral-800 bg-neutral-950 shadow-xl">
+                        {manualCitySuggestions.map((suggestion, index) => (
+                          <button
+                            key={`${suggestion.city}-${suggestion.district}-${index}`}
+                            type="button"
+                            onClick={() => pickManualCity(suggestion)}
+                            className="w-full px-3 py-2 text-left text-white hover:bg-neutral-800 border-b border-neutral-800 last:border-b-0"
+                          >
+                            {suggestion.city} • {suggestion.district}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-neutral-300 mb-1">District *</label>
+                  <input
+                    type="text"
+                    required
+                    value={manualOrderForm.district}
+                    onChange={(e) => setManualOrderForm({ ...manualOrderForm, district: e.target.value })}
+                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-3 rounded-xl bg-amber-500 text-neutral-950 font-bold text-xs"
+              >
+                Submit & Deduct Stock
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Quick Stock Refill Modal */}
+      {isPurchaseOpen && (
+        <div className="fixed inset-0 z-[120] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (purchaseSaving) return;
+              setPurchaseSaving(true);
+              try {
+                if (!purchaseLines.length) throw new Error('Add at least one purchase item.');
+
+                const selectedKeys = new Set<string>();
+                const validated = purchaseLines.map((line,index) => {
+                  const product=products.find((p)=>p.id===line.product_id && normalizedProductType(p)!=='bundle');
+                  if(!product) throw new Error(`Line ${index+1}: enter a valid Item Code.`);
+                  const variant=normalizedProductType(product)==='variant' ? variantById(product,line.variant_id) : undefined;
+                  if(normalizedProductType(product)==='variant' && !variant) throw new Error(`Line ${index+1}: select the exact Color / Variant.`);
+                  if(Number(line.quantity_added)<=0) throw new Error(`Line ${index+1}: quantity must be greater than zero.`);
+                  if(Number(line.unit_buying_price)<0) throw new Error(`Line ${index+1}: buying price cannot be negative.`);
+
+                  const exactKey=`${product.id}::${variant?.id || 'base'}`;
+                  if(selectedKeys.has(exactKey)) throw new Error(`Line ${index+1}: the same item / variant is already added. Combine its quantity into one line.`);
+                  selectedKeys.add(exactKey);
+
+                  return {
+                    product,
+                    variant,
+                    quantity_added:Number(line.quantity_added),
+                    unit_buying_price:Number(line.unit_buying_price),
+                  };
+                });
+
+                const billImageUrl = purchaseBillFile ? await uploadPublicImage(purchaseBillFile, 'purchase-bill') : '';
+                const firstPoNumber=purchaseOrders.length+1;
+                validated.forEach((line,index)=>{
+                  addPurchaseOrder({
+                    supplier_name:purchaseForm.supplier_name,
+                    product_id:line.product.id,
+                    variant_id:line.variant?.id,
+                    quantity_added:line.quantity_added,
+                    unit_buying_price:line.unit_buying_price,
+                    invoice_ref:purchaseForm.invoice_ref,
+                    bill_image_url:billImageUrl || undefined,
+                    notes:purchaseForm.notes,
+                    performed_by:adminUser?.name || 'Admin',
+                    po_number:`PO-${new Date().getFullYear()}-${String(firstPoNumber+index).padStart(4,'0')}`,
+                  });
+                });
+
+                setPurchaseBillFile(null);
+                setPurchaseLines([]);
+                setIsPurchaseOpen(false);
+              } catch (error) {
+                alert(error instanceof Error ? error.message : 'Unable to save purchase.');
+              } finally {
+                setPurchaseSaving(false);
+              }
+            }}
+            className="w-full max-w-3xl max-h-[92vh] overflow-y-auto bg-neutral-950 border border-neutral-800 rounded-3xl p-5 space-y-4 shadow-2xl"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="font-bold text-white">Add Purchase / Stock In</h3>
+                <p className="text-xs text-neutral-500">One supplier bill can include multiple item codes and separate variants. Saving increases each exact stock line.</p>
+              </div>
+              <button type="button" onClick={() => { setPurchaseBillFile(null); setPurchaseLines([]); setIsPurchaseOpen(false); }} className="p-2 rounded-lg bg-neutral-900 text-neutral-400"><X className="w-4 h-4" /></button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className="text-xs text-neutral-400 sm:col-span-2">Supplier Name
+                <input required value={purchaseForm.supplier_name} onChange={(e) => setPurchaseForm({ ...purchaseForm, supplier_name: e.target.value })} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white" />
+              </label>
+              <label className="text-xs text-neutral-400">Supplier Invoice Ref
+                <input value={purchaseForm.invoice_ref} onChange={(e) => setPurchaseForm({ ...purchaseForm, invoice_ref: e.target.value })} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white" />
+              </label>
+              <label className="text-xs text-neutral-400">Bill Image <span className="text-neutral-600">(Optional • shared by all lines)</span>
+                <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e)=>setPurchaseBillFile(e.target.files?.[0] || null)} className="mt-1 block w-full rounded-xl border border-neutral-700 bg-neutral-900 px-3 py-2 text-xs text-neutral-300 file:mr-3 file:rounded-lg file:border-0 file:bg-amber-500 file:px-3 file:py-1.5 file:font-bold file:text-neutral-950" />
+                {purchaseBillFile && <span className="mt-1 block break-all text-[10px] text-emerald-400">Selected: {purchaseBillFile.name}</span>}
+              </label>
+            </div>
+
+            <div className="space-y-3">
+              {purchaseLines.map((line,index)=>{
+                const product=products.find((p)=>p.id===line.product_id);
+                const selectedPurchaseVariant=product && line.variant_id ? variantById(product,line.variant_id) : undefined;
+                const selectedPurchaseCode=String(selectedPurchaseVariant?.sku || product?.sku || '').trim().toUpperCase();
+                const purchaseSearchQuery=String(line.item_code || '').trim().toLowerCase();
+                const hasExactPurchaseSelection=Boolean(product && selectedPurchaseCode && selectedPurchaseCode===String(line.item_code || '').trim().toUpperCase());
+                const purchaseSearchResults = !purchaseSearchQuery || hasExactPurchaseSelection ? [] : products.flatMap((candidate)=>{
+                  const type=normalizedProductType(candidate);
+                  if(type==='bundle') return [];
+                  const productHaystack=[
+                    candidate.sku,
+                    candidate.name_en,
+                    candidate.name_si,
+                    candidate.search_keywords,
+                  ].map((value)=>String(value || '').toLowerCase());
+                  const productMatches=productHaystack.some((value)=>value.includes(purchaseSearchQuery));
+
+                  if(type==='variant'){
+                    return (candidate.variants || [])
+                      .filter((variant)=>variant.status!=='Draft')
+                      .filter((variant)=>{
+                        if(productMatches) return true;
+                        const variantHaystack=[
+                          variant.sku,
+                          variant.option_value,
+                          ...(variant.options || []).flatMap((option)=>[option.name,option.value]),
+                        ].map((value)=>String(value || '').toLowerCase());
+                        return variantHaystack.some((value)=>value.includes(purchaseSearchQuery));
+                      })
+                      .map((variant)=>({
+                        product:candidate,
+                        variant,
+                        sku:String(variant.sku || '').trim().toUpperCase(),
+                        label:`${candidate.name_en} • ${variant.option_value || variant.sku}`,
+                        stock:Number(variant.stock_quantity || 0),
+                        buying:Number(variant.buying_price || 0),
+                      }));
+                  }
+
+                  return productMatches ? [{
+                    product:candidate,
+                    variant:undefined as ProductVariant | undefined,
+                    sku:String(candidate.sku || '').trim().toUpperCase(),
+                    label:candidate.name_en,
+                    stock:Number(candidate.stock_quantity || 0),
+                    buying:Number(candidate.buying_price || 0),
+                  }] : [];
+                }).slice(0,10);
+                const lineTotal=Math.max(0,Number(line.quantity_added||0))*Math.max(0,Number(line.unit_buying_price||0));
+                return (
+                  <div key={line.id} className="rounded-2xl border border-neutral-800 bg-neutral-900/70 p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-black text-white">Purchase Item {index+1}</p>
+                        <p className="text-[10px] text-neutral-500">{product ? `${product.name_en} • ${product.sku}` : 'Enter an Item Code'}</p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={purchaseLines.length===1}
+                        onClick={()=>setPurchaseLines((prev)=>prev.filter((row)=>row.id!==line.id))}
+                        className="rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-red-300 disabled:cursor-not-allowed disabled:opacity-30"
+                        title="Remove this purchase line"
+                      >
+                        <Trash2 className="h-3.5 w-3.5"/>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="sm:col-span-2">
+                        <label className="text-xs text-neutral-400">Item Code or Item Name
+                          <input
+                            type="text"
+                            required
+                            value={line.item_code}
+                            onChange={(e)=>{
+                              const raw=e.target.value;
+                              const code=raw.trim().toUpperCase();
+                              setPurchaseLines((prev)=>prev.map((row)=>{
+                                if(row.id!==line.id) return row;
+
+                                let matchedProduct=products.find((p)=>normalizedProductType(p)!=='bundle' && String(p.sku||'').trim().toUpperCase()===code);
+                                let matchedVariantId='';
+                                let matchedVariant:ProductVariant | undefined;
+
+                                if(!matchedProduct && code){
+                                  for(const candidate of products){
+                                    if(normalizedProductType(candidate)!=='variant') continue;
+                                    const found=(candidate.variants||[]).find((v)=>String(v.sku||'').trim().toUpperCase()===code);
+                                    if(found){
+                                      matchedProduct=candidate;
+                                      matchedVariantId=found.id;
+                                      matchedVariant=found;
+                                      break;
+                                    }
+                                  }
+                                }
+
+                                if(!matchedProduct) return {...row,item_code:raw,product_id:'',variant_id:'',unit_buying_price:0};
+                                return {
+                                  ...row,
+                                  item_code:code,
+                                  product_id:matchedProduct.id,
+                                  variant_id:matchedVariantId,
+                                  unit_buying_price:Number(matchedVariant?.buying_price ?? matchedProduct.buying_price ?? 0),
+                                };
+                              }));
+                            }}
+                            placeholder="Type Item Code or part of Item Name..."
+                            autoComplete="off"
+                            className="mt-1 w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2.5 text-white"
+                          />
+                        </label>
+
+                        {purchaseSearchQuery && !hasExactPurchaseSelection && (
+                          <div className="mt-1 overflow-hidden rounded-xl border border-amber-500/30 bg-neutral-950 shadow-xl">
+                            {purchaseSearchResults.length ? (
+                              <div className="max-h-64 overflow-y-auto divide-y divide-neutral-800">
+                                {purchaseSearchResults.map((result)=>(
+                                  <button
+                                    key={`${line.id}-${result.sku}`}
+                                    type="button"
+                                    onClick={()=>setPurchaseLines((prev)=>prev.map((row)=>row.id===line.id ? {
+                                      ...row,
+                                      item_code:result.sku,
+                                      product_id:result.product.id,
+                                      variant_id:result.variant?.id || '',
+                                      unit_buying_price:result.buying,
+                                    } : row))}
+                                    className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-amber-500/10"
+                                  >
+                                    <div className="min-w-0">
+                                      <p className="truncate text-xs font-black text-white">{result.label}</p>
+                                      <p className="mt-0.5 font-mono text-[10px] font-bold text-amber-400">{result.sku}</p>
+                                    </div>
+                                    <div className="shrink-0 text-right">
+                                      <p className="text-[10px] font-bold text-neutral-400">Stock {result.stock}</p>
+                                      <p className="text-[9px] text-neutral-600">Buy Rs. {result.buying.toLocaleString()}</p>
+                                    </div>
+                                  </button>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="px-3 py-3 text-[10px] text-neutral-500">No matching Item Code / Item Name.</div>
+                            )}
+                          </div>
+                        )}
+                        <p className="mt-1 text-[9px] text-neutral-600">You can still type the exact Item Code, or search by any word from the product name.</p>
+                      </div>
+
+                      {product && normalizedProductType(product)==='variant' && (
+                        <label className="text-xs text-neutral-400 sm:col-span-2">Color / Variant *
+                          <select
+                            required
+                            value={line.variant_id}
+                            onChange={(e)=>{
+                              const variant=variantById(product,e.target.value);
+                              setPurchaseLines((prev)=>prev.map((row)=>row.id===line.id ? {
+                                ...row,
+                                variant_id:e.target.value,
+                                unit_buying_price:Number(variant?.buying_price ?? row.unit_buying_price),
+                              } : row));
+                            }}
+                            className="mt-1 w-full bg-neutral-950 border border-neutral-700 rounded-xl px-3 py-2 text-white"
+                          >
+                            <option value="">Select exact variant...</option>
+                            {(product.variants||[]).map((variant)=><option key={variant.id} value={variant.id}>{variant.option_value} — {variant.sku} — Stock {variant.stock_quantity}</option>)}
+                          </select>
+                        </label>
+                      )}
+
+                      <label className="text-xs text-neutral-400">Quantity
+                        <input
+                          required
+                          min="1"
+                          type="number"
+                          value={line.quantity_added}
+                          onChange={(e)=>setPurchaseLines((prev)=>prev.map((row)=>row.id===line.id ? {...row,quantity_added:Number(e.target.value)} : row))}
+                          className="mt-1 w-full bg-neutral-950 border border-neutral-700 rounded-xl px-3 py-2 text-white"
+                        />
+                      </label>
+                      <label className="text-xs text-neutral-400">Unit Buying Price
+                        <input
+                          required
+                          min="0"
+                          type="number"
+                          value={line.unit_buying_price}
+                          onChange={(e)=>setPurchaseLines((prev)=>prev.map((row)=>row.id===line.id ? {...row,unit_buying_price:Number(e.target.value)} : row))}
+                          className="mt-1 w-full bg-neutral-950 border border-neutral-700 rounded-xl px-3 py-2 text-white"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-xs">
+                      <span className="text-neutral-500">Line Total</span>
+                      <span className="float-right font-black text-amber-400">Rs. {lineTotal.toLocaleString()}</span>
+                    </div>
+                  </div>
+                );
+              })}
+
+              <button
+                type="button"
+                onClick={()=>setPurchaseLines((prev)=>[...prev,{
+                  id:`purchase-line-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+                  item_code:'',
+                  product_id:'',
+                  variant_id:'',
+                  quantity_added:1,
+                  unit_buying_price:0,
+                }])}
+                className="w-full rounded-xl border border-dashed border-amber-500/40 bg-amber-500/5 px-4 py-3 text-xs font-black text-amber-300 hover:bg-amber-500/10"
+              >
+                <PlusCircle className="mr-1.5 inline h-4 w-4"/> Add Another Item / Variant
+              </button>
+            </div>
+
+            <label className="block text-xs text-neutral-400">Notes
+              <textarea value={purchaseForm.notes} onChange={(e) => setPurchaseForm({ ...purchaseForm, notes: e.target.value })} className="mt-1 w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-2 text-white min-h-20" />
+            </label>
+
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3">
+              <p className="text-[10px] text-neutral-500">TOTAL BILL PURCHASE COST</p>
+              <p className="text-lg font-black text-amber-400">Rs. {purchaseLines.reduce((sum,line)=>sum+(Math.max(0,Number(line.quantity_added||0))*Math.max(0,Number(line.unit_buying_price||0))),0).toLocaleString()}</p>
+              <p className="mt-1 text-[9px] text-neutral-500">Each item / variant is recorded separately in Purchase History, but the same Supplier Invoice Ref and Bill Image are attached to every line from this bill.</p>
+            </div>
+
+            <button type="submit" disabled={purchaseSaving || !purchaseLines.length} className="w-full py-3 rounded-xl bg-amber-500 text-neutral-950 font-bold disabled:cursor-not-allowed disabled:opacity-50">
+              {purchaseSaving ? 'Saving Purchase Bill...' : `Save Bill & Increase Stock (${purchaseLines.length} line${purchaseLines.length===1?'':'s'})`}
+            </button>
+          </form>
+        </div>
+      )}
+
+      {stockAdjustModalProduct && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-neutral-950/80 backdrop-blur-md">
+          <div className="relative w-full max-w-sm bg-neutral-900 border border-amber-500/30 rounded-2xl p-6 space-y-4">
+            <button
+              onClick={() => { setStockAdjustModalProduct(null); setStockAdjustVariantId(''); }}
+              className="absolute top-4 right-4 p-2 rounded-full bg-neutral-950 text-neutral-400"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <h3 className="text-base font-bold text-white">Refill Inventory Stock</h3>
+            <p className="text-xs text-neutral-400">{stockAdjustModalProduct.name_en}</p>
+
+            <form onSubmit={handleStockAdjustSubmit} className="space-y-3 text-xs">
+              {normalizedProductType(stockAdjustModalProduct)==='variant' && (
+                <div>
+                  <label className="block text-neutral-300 mb-1">Color / Variant *</label>
+                  <select required value={stockAdjustVariantId} onChange={(e)=>setStockAdjustVariantId(e.target.value)} className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white">
+                    <option value="">Select exact variant...</option>{(stockAdjustModalProduct.variants||[]).map(v=><option key={v.id} value={v.id}>{v.option_value} — {v.sku} — Stock {v.stock_quantity}</option>)}
+                  </select>
+                </div>
+              )}
+              <div>
+                <label className="block text-neutral-300 mb-1">Quantity Change (+ / -)</label>
+                <input
+                  type="number"
+                  required
+                  value={stockChangeQty}
+                  onChange={(e) => setStockChangeQty(Number(e.target.value))}
+                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-neutral-300 mb-1">Reason / Note</label>
+                <input
+                  type="text"
+                  required
+                  value={stockReason}
+                  onChange={(e) => setStockReason(e.target.value)}
+                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-white"
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-3 rounded-xl bg-amber-500 text-neutral-950 font-bold text-xs"
+              >
+                Update Stock Quantity
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

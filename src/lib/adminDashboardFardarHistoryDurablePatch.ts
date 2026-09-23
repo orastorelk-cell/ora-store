@@ -222,7 +222,7 @@ export const adminDashboardFardarHistoryDurablePatch = () => ({
                       onClick={()=>void downloadFardarUploadCsv(batchOrders, 'FULL-' + (batch.at ? new Date(batch.at).toISOString().slice(0,10) : 'saved'), true)}
                       className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-xs font-black text-emerald-300 disabled:opacity-40"
                     >
-                      <Download className="mr-1 inline h-4 w-4"/> Download Previous Confirm Fardar CSV ({fardarFullReady.length})
+                      <Download className="mr-1 inline h-4 w-4"/> Fardar Upload CSV (Re-download {fardarFullReady.length})
                     </button>`
       );
     }
