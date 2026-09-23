@@ -30,7 +30,7 @@ import {
   initialStaffAccounts,
 } from '../data/initialData';
 import { syncOrderToGoogleSheets, syncOrdersBatchToGoogleSheets, syncProductCatalogToGoogleSheets, clearGoogleSheetTestData, clearGoogleSheetLiveStartData, deleteOrderFromGoogleSheets } from '../lib/googleSheets';
-import { buildOrderItemSnapshot, deliverySplitForSettings, displayUnitPrice, effectiveBuyingPrice, findProductSelection, normalizeProductForStorage, normalizedProductType, productDisplayStock, variantById, variantBySku, repriceAfterBuyingCostChange } from '../lib/productVariants';
+import { buildOrderItemSnapshot, deliverySplitForSettings, displayUnitPrice, effectiveBuyingPrice, findProductSelection, normalizeProductForStorage, normalizeSku, normalizedProductType, productDisplayStock, variantById, variantBySku, repriceAfterBuyingCostChange } from '../lib/productVariants';
 
 export interface BulkOrderItemInput {
   order_id?: string;
