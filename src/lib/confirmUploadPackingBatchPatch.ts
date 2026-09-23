@@ -111,10 +111,13 @@ export const confirmUploadPackingBatchPatch = () => ({
             const freshItem=buildOrderItemSnapshot(selection.product,qty,settings,selection.variant,products);
             const freshUnit=Math.max(0,Number(freshItem.unit_price||0));
             const freshMain=String(freshItem.main_sku||selection.product.sku||mainCode||'').trim().toUpperCase();
-            const historicalSibling=!applyRequested ? (order.items||[]).find(it=>{
+            // Same main product must keep the order's locked unit price even when
+            // Call Center explicitly applies a color/variant change. A color split
+            // must never turn one historical Rs.X item into a different catalog price.
+            const historicalSibling=(order.items||[]).find(it=>{
               const siblingMain=String(it.main_sku||it.sku||'').trim().toUpperCase();
               return Boolean(freshMain && siblingMain===freshMain);
-            }) : undefined;
+            });
             if(historicalSibling){
               const historicalActual=Math.max(0,Number(historicalSibling.unit_price||0)) || freshUnit;
               const historicalReference=Math.max(
@@ -141,7 +144,11 @@ export const confirmUploadPackingBatchPatch = () => ({
       if (!text.includes('const stableQtyOfferDiscount=')) {
         if (!text.includes(changedMarker)) throw new Error('[O-RA confirm invoice safety] changed-shape marker not found');
         const snapshotInsert = String.raw`
-      const stableQtyOfferDiscount=changed?special_offer_discount:Math.max(0,Number(order.special_offer_discount||0));
+      // If item rows/qty changed, recalculate the order-level multi-buy offer
+      // from the preserved item prices. Variant/color splitting must keep identical
+      // unit prices; the quantity offer belongs here, never inside one item's price.
+      const recalculatedQtyOfferDiscount=Math.round(legacySubtotal*(rate/100)*100)/100;
+      const stableQtyOfferDiscount=changed?recalculatedQtyOfferDiscount:Math.max(0,Number(order.special_offer_discount||0));
       const stableDeliveryQtyOffer=changed?delivery_rebalance_qty_offer_amount:Math.max(0,Number(order.delivery_rebalance_qty_offer_amount||0));
       const stableTotalAmount=Math.round(Math.max(0,subtotal-stableQtyOfferDiscount-stableDeliveryQtyOffer+delivery_fee+gift_wrap_fee));
       const csvMoney=(col:number)=>col>=0?Number(String(rows.map(c=>c[col]).find(v=>String(v||'').trim())||0).replace(/[^0-9.-]/g,'')):0;
