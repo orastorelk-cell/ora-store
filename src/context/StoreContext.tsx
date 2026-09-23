@@ -2400,7 +2400,32 @@ useEffect(() => {
         const selection=findProductSelection(products,actualCode||mainCode,variantValue);
         if(!selection){errors.push(`${id}: Item ${actualCode||mainCode} was not found in current Products.`);bad=true;return;}
         if(normalizedProductType(selection.product)==='variant'&&!selection.variant){errors.push(`${id}: Select a Color / Variant for ${selection.product.name_en} on row ${rowIndex+1}.`);bad=true;return;}
-        try{nextItems.push(buildOrderItemSnapshot(selection.product,qty,settings,selection.variant,products));}catch(e:any){errors.push(`${id}: ${e?.message||'Invalid item selection.'}`);bad=true;}
+        try{
+          const builtItem=buildOrderItemSnapshot(selection.product,qty,settings,selection.variant,products);
+          const priorItem=(order.items||[])[rowIndex];
+          const sameMainSku = priorItem
+            ? String(priorItem.main_sku||priorItem.sku||'').trim().toUpperCase() === String(builtItem.main_sku||builtItem.sku||'').trim().toUpperCase()
+            : false;
+          const sameProduct = Boolean(
+            priorItem && (
+              String(priorItem.product_id||'').trim()===String(builtItem.product_id||'').trim()
+              || sameMainSku
+            )
+          );
+          // Confirm Upload can intentionally change only the Variant / Color.
+          // Keep the locked order's existing money fields for the same main product,
+          // while taking the newly selected variant SKU/name/image/variant_id.
+          // This prevents a later catalog price change from repricing an old order.
+          if (sameProduct && priorItem) {
+            builtItem.buying_price=Number(priorItem.buying_price ?? builtItem.buying_price);
+            builtItem.effective_buying_price=Number(priorItem.effective_buying_price ?? priorItem.buying_price ?? builtItem.effective_buying_price);
+            builtItem.regular_unit_price=Number(priorItem.regular_unit_price ?? builtItem.regular_unit_price);
+            builtItem.supplier_offer_discount_per_unit=Number(priorItem.supplier_offer_discount_per_unit ?? builtItem.supplier_offer_discount_per_unit);
+            builtItem.unit_price=Number(priorItem.unit_price ?? builtItem.unit_price);
+            builtItem.subtotal=Number(priorItem.unit_price ?? builtItem.unit_price)*qty;
+          }
+          nextItems.push(builtItem);
+        }catch(e:any){errors.push(`${id}: ${e?.message||'Invalid item selection.'}`);bad=true;}
       });
       if(bad)return;
       const giftWrapRaw=giftWrapI>=0?String(rows.map(c=>c[giftWrapI]).find(v=>String(v||'').trim())||'').trim():'';
