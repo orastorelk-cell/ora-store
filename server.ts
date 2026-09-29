@@ -2398,6 +2398,12 @@ app.put('/api/orders/:id', requireAdminSession, async (req,res)=>{
     }
 
     if(existing){
+      // A restock batch is reserved before waybills are assigned. Older open
+      // dashboards may PUT an order snapshot without this newly reserved ID;
+      // keep the durable batch until the invoice is generated and locked.
+      if(String(existing.invoice_pack_batch_id || '').startsWith('PACK-RESTOCK-') && !order.invoice_pack_batch_id){
+        order.invoice_pack_batch_id=existing.invoice_pack_batch_id;
+      }
       const existingWaybill=String(existing.waybill_number || '').trim();
       const waybillProtected=Boolean(
         existingWaybill && (

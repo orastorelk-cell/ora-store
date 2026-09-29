@@ -133,7 +133,10 @@ export const waybillAssignmentAtomicPatch = () => ({
         return authoritativeWaybill || candidate.waybill_number;
       } catch (error: any) {
         const message = String(error?.message || error || '');
-        const duplicateConflict = /duplicate key|unique constraint|23505|order_snapshots_unique_waybill_idx/i.test(message);
+        // The server also returns a readable 409 when a number is already in
+        // its durable lock registry. That is the same stale-pool collision: move
+        // past this candidate instead of stopping on the first local number.
+        const duplicateConflict = /duplicate key|unique constraint|23505|order_snapshots_unique_waybill_idx|already locked\/used by|already assigned to another order/i.test(message);
 
         if (duplicateConflict) {
           // This number is already owned by another durable order, even if this
