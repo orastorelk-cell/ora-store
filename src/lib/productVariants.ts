@@ -295,17 +295,25 @@ export const variantBySku = (product: Product, sku?: string) => {
   return (product.variants || []).find(v => normalizeSku(v.sku) === target);
 };
 
+// Facebook lead choices may arrive as machine-readable slugs (e.g. "light_green")
+// even when the visible form option and catalog both say "Light Green".
+// Normalize separators for matching only; orders must keep the catalog label/SKU.
+const normalizeVariantChoice = (value: unknown) =>
+  String(value ?? '').normalize('NFKC').trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+
 export const variantByOption = (product: Product, option?: string) => {
-  const target = String(option || '').trim().toLowerCase();
+  const target = normalizeVariantChoice(option);
   if (!target) return undefined;
   return (product.variants || []).find((v) => {
-    const legacy = String(v.option_value || '').trim().toLowerCase();
-    const values = variantOptions(v).map((row) => row.value.toLowerCase());
-    const summary = variantOptionSummary(v).toLowerCase();
+    const legacy = normalizeVariantChoice(v.option_value);
+    const values = variantOptions(v).map((row) => normalizeVariantChoice(row.value));
+    const summary = normalizeVariantChoice(variantOptionSummary(v));
     return legacy === target || summary === target || values.includes(target);
   }) || (product.variants || []).find((v) => {
-    const legacy = String(v.option_value || '').trim().toLowerCase();
-    const summary = variantOptionSummary(v).toLowerCase();
+    // Preserve existing partial-name matching for legacy imports after exact
+    // normalized matching has had the first opportunity to select a variant.
+    const legacy = normalizeVariantChoice(v.option_value);
+    const summary = normalizeVariantChoice(variantOptionSummary(v));
     return Boolean(legacy && (legacy.includes(target) || target.includes(legacy))) || Boolean(summary && (summary.includes(target) || target.includes(summary)));
   });
 };
