@@ -6,6 +6,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "CLOUDFLARE_WORKERS": "1",
+    "ORA_R2_COMPRESSION_ENABLED": "1",
     "META_GRAPH_API_VERSION": "v26.0",
     "META_LEADS_AUTO_ENABLED": "1",
     "VITE_SUPABASE_URL": "https://xoipahpyxatdafhqkzcr.supabase.co",
