@@ -31,6 +31,7 @@ import {
 } from '../data/initialData';
 import { syncOrderToGoogleSheets, syncOrdersBatchToGoogleSheets, syncProductCatalogToGoogleSheets, clearGoogleSheetTestData, clearGoogleSheetLiveStartData, deleteOrderFromGoogleSheets } from '../lib/googleSheets';
 import { buildOrderItemSnapshot, deliverySplitForSettings, displayUnitPrice, effectiveBuyingPrice, findProductSelection, normalizeProductForStorage, normalizedProductType, productDisplayStock, variantById, variantBySku, repriceAfterBuyingCostChange } from '../lib/productVariants';
+import { canonicalJson, confirmCsvRequestWithRetry, saveConfirmCsvDecisions } from '../lib/confirmCsvSave';
 
 export interface BulkOrderItemInput {
   order_id?: string;
@@ -2477,27 +2478,22 @@ useEffect(() => {
     // Persist every Confirm/Cancel decision BEFORE changing the browser state.
     // Previously these writes were fire-and-forget, so a failed/late server write
     // could be overwritten by the next authoritative server refresh.
-    const durableUpdates=new Map<string,Order>();
+    const entries=[];
     for(const [orderNumber,patch] of updates.entries()){
       const original=existing.get(orderNumber);
       if(!original) continue;
-      const next={...original,...patch} as Order;
-      try{
-        await sharedStaffRequest(`/api/orders/${encodeURIComponent(next.id)}`,{
-          method:'PUT',
-          body:JSON.stringify({order:next}),
-        });
-        durableUpdates.set(orderNumber,next);
-      }catch(error:any){
-        errors.push(`${orderNumber}: Decision was NOT saved to the server. ${error?.message || 'Order update failed.'}`);
-      }
+      entries.push({id:String(original.id),order_number:orderNumber,expected:canonicalJson(original),patch,
+        clear_fields:['fardar_city','city_mapping_source'].filter(field=>Object.hasOwn(patch,field)&&(patch as any)[field]===undefined)});
     }
+    const savedDecisions=await saveConfirmCsvDecisions(entries,sharedStaffRequest);
+    const durableUpdates=new Map(Array.from(savedDecisions.saved,([number,order])=>[number,order as Order]));
+    errors.push(...savedDecisions.errors);
 
     // Confirm upload is one-way from Google Sheet -> O-RA. The Sheet may contain
     // corrected Address / City / District, so never echo the System order back and
     // risk overwriting those Call Center edits.
     setOrders(prev=>{
-      const recovered=[...prev,...persisted.filter(saved=>!prev.some(cur=>cur.id===saved.id))];
+      const recovered=[...prev,...Array.from(durableUpdates.values()).filter(saved=>!prev.some(cur=>cur.id===saved.id))];
       const next=recovered.map(o=>durableUpdates.get(o.order_number.toUpperCase()) || o);
       try{localStorage.setItem('ora_orders',JSON.stringify(next));}catch{}
       return next;

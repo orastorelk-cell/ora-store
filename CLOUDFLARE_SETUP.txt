@@ -75,7 +75,18 @@ LOSSLESS STORAGE COMPRESSION
   changing any uploaded bytes. Existing media URLs keep working. Customer
   submissions/receipts keep separate random keys. This does not delete images.
 
-DELIVERED CSV AND FACEBOOK AUDIT
+CONFIRM CSV, DELIVERED CSV AND FACEBOOK AUDIT
+- Confirm/Cancel CSV uses authenticated /api/orders/confirm-csv, at most 20
+  existing orders per atomic R2 write. The CSV parser/prices/payment modes remain
+  the same. It does not write Call Center corrections back to Google Sheets.
+- Confirm reads and writes retry transient 429/502/503/504 failures. A lost
+  successful response is safe to replay: unchanged decisions retain their
+  original packing group, notes/history and timestamps without another write.
+- Decisions include the original order as an optimistic precondition. Every
+  R2 CAS retry rechecks the current order and its invoice/stock/dispatch locks;
+  stale changes are reported per order, never acknowledged as saved.
+- Only complete, validated server acknowledgments update the browser results.
+  A failed durable read stops the upload; local browser orders are not used.
 - Authenticated order list/version reads use the Worker R2 path directly,
   avoiding repeated whole-table serialization through the SDK and Node bridge.
 - Decrypted table caches are checked against a fresh R2 ETag on every read.

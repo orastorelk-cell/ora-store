@@ -8,6 +8,8 @@ import { withR2DataFallback } from '../worker/r2RecoveryFallback';
 import { facebookLeadAuditHandler } from '../worker/facebookLeadAudit';
 import { compactR2StorageOnce } from '../worker/r2StorageCompression';
 import { r2MediaHandler } from '../worker/r2PublicMedia';
+import { canonicalJson, saveConfirmCsvDecisions, confirmCsvRequestWithRetry, validConfirmCsvEntries } from '../src/lib/confirmCsvSave';
+import { transformSync } from 'esbuild';
 
 class MemoryBucket {
   objects=new Map<string,{value:string;etag:string;customMetadata:any}>();
@@ -122,6 +124,114 @@ try {
   const newOrder={id:'imported',order_number:'FB-000900',customer_name:'Synthetic',phone:'0770000000',address:'Test',city:'Colombo',order_source:'Facebook Ads',payment_method:'COD',items:[{product_id:'p1',product_name:'Test',quantity:1,unit_price:5,subtotal:5}],created_at:new Date().toISOString()};
   const bulk=await request('/api/admin/orders/bulk-import','POST',{orders:[newOrder]},token);
   assert.equal(bulk.status,200,JSON.stringify(bulk.body));assert((await sdk.from('order_snapshots').select('*').eq('order_id','imported')).data?.length);
+
+  // Execute the production Confirm parser after every Vite business-rule patch.
+  // Reproduce 12 orders with 7 already committed, a failed R2 write, and a lost
+  // successful response. Retrying must retain the first seven packing groups.
+  const confirmOrders=Array.from({length:12},(_,i)=>({id:'confirm-'+i,order_number:'FB-'+String(2000+i).padStart(6,'0'),
+    customer_name:'Test Customer',phone:'0770000000',address:'Test Address',city:'Colombo',district:'Colombo',
+    order_source:'Facebook Ads',order_status:'New Orders',call_center_status:'Pending',notes:'Original note',
+    items:[{product_id:'p1',product_name:'Test Product',sku:'R1',main_sku:'R1',quantity:1,unit_price:100,subtotal:100,buying_price:50}],
+    subtotal:100,delivery_fee:250,total_amount:350,gift_wrap_selected:false,gift_wrap_fee:0,is_advance_required:false,advance_amount:0,
+    stock_allocated:false,created_at:'2026-10-02T00:00:00Z'}));
+  await sdk.from('order_snapshots').upsert(confirmOrders.map(order=>({order_id:order.id,order_number:order.order_number,payload:order})),{onConflict:'order_id'});
+  const viteConfig=(await (await import('vite')).loadConfigFromFile({command:'build',mode:'production'}))!.config as any;
+  let contextCode=fs.readFileSync('src/context/StoreContext.tsx','utf8');
+  for(const plugin of viteConfig.plugins.flat(Infinity)){
+    if(plugin?.name?.startsWith('ora-')&&typeof plugin.transform==='function'){
+      const result=await plugin.transform(contextCode,'/repo/src/context/StoreContext.tsx');
+      if(result)contextCode=typeof result==='string'?result:result.code;
+    }
+  }
+  const parserStart=contextCode.indexOf('  const importConfirmedOrdersCsv = async');
+  const parserEnd=contextCode.indexOf('  const importWebsiteConfirmedCsv',parserStart);
+  assert(parserStart>=0&&parserEnd>parserStart);
+  let confirmRequests=0,readFailure=false,writeFailure=false,loseAcknowledgment=false,committedEtag='';
+  const currentOrderKey=active.prefix+'order_snapshots.json';
+  const confirmStaffRequest=async(path:string,options:any={})=>{
+    if(path==='/api/orders'&&readFailure){readFailure=false;const error:any=new Error('simulated read 503');error.status=503;throw error;}
+    if(path.endsWith('/confirm-csv')){confirmRequests++;if(writeFailure){writeFailure=false;rawBucket.failKey=currentOrderKey;}}
+    const response=await fast(path,options.method||'GET',options.body?JSON.parse(options.body):undefined);
+    rawBucket.failKey='';const data:any=await response.json();
+    if(!response.ok){const error:any=new Error(data.error);error.status=response.status;throw error;}
+    if(path.endsWith('/confirm-csv')&&loseAcknowledgment){loseAcknowledgment=false;committedEtag=rawBucket.objects.get(currentOrderKey)!.etag;const error:any=new Error('response lost after commit');error.status=503;throw error;}
+    return data;
+  };
+  let displayedOrders:any[]=confirmOrders;
+  const storage=new Map<string,string>([['ora_orders',JSON.stringify(confirmOrders)]]);
+  const parserScope:any={canonicalJson,
+    saveConfirmCsvDecisions:(entries:any,request:any)=>saveConfirmCsvDecisions(entries,request,async()=>{}),
+    confirmCsvRequestWithRetry:(request:any,url:string,options:any)=>confirmCsvRequestWithRetry(request,url,options,async()=>{}),
+    getStaffSessionToken:()=>token,sharedStaffRequest:confirmStaffRequest,orders:confirmOrders,
+    products:[{id:'p1',sku:'R1',name_en:'Test Product'}],settings:{free_delivery_enabled:false,delivery_fee:250,advance_qty_threshold:4,advance_percentage:50},
+    findProductSelection:(products:any[])=>({product:products[0]}),normalizedProductType:()=>'simple',
+    getMultiBuyDiscountRate:()=>0,buildOrderItemSnapshot:()=>{throw new Error('Existing item price should be preserved.');},
+    localStorage:{getItem:(key:string)=>storage.get(key)||null,setItem:(key:string,value:string)=>storage.set(key,value)},
+    setOrders:(updater:any)=>{displayedOrders=updater(displayedOrders);},console};
+  const parser=transformSync(contextCode.slice(parserStart,parserEnd)+'\nglobalThis.runConfirm=importConfirmedOrdersCsv;',{loader:'ts',target:'es2022'}).code;
+  vm.runInNewContext(parser,parserScope);
+  const confirmCsv=(count:number)=>['Order ID,Item Code,Qty,Order Action,Customer Name,Address,City,District,Reason',
+    ...confirmOrders.slice(0,count).map(order=>`${order.order_number},R1,1,CONFIRM ORDER,Test Customer,Test Address,Colombo,Colombo,Verified`)].join('\n');
+  const seven=await parserScope.runConfirm(confirmCsv(7),undefined,'FIRST-SEVEN');
+  assert.equal(seven.confirmedCount,7);assert.equal(seven.errors.length,0);
+  const firstSeven=(await sdk.from('order_snapshots').select('payload').in('order_id',confirmOrders.slice(0,7).map(order=>order.id))).data!.map(row=>canonicalJson(row.payload));
+  readFailure=true;writeFailure=true;loseAcknowledgment=true;confirmRequests=0;
+  const twelve=await parserScope.runConfirm(confirmCsv(12),undefined,'RETRY-TWELVE');
+  assert.equal(twelve.confirmedCount,12);assert.equal(twelve.errors.length,0);assert.equal(confirmRequests,3);
+  assert.equal(rawBucket.objects.get(currentOrderKey)!.etag,committedEtag,'Lost-response retry must not write a second snapshot');
+  const confirmedRows=(await sdk.from('order_snapshots').select('payload').in('order_id',confirmOrders.map(order=>order.id))).data!;
+  assert.equal(confirmedRows.length,12);assert(confirmedRows.every(row=>row.payload.call_center_status==='Confirmed'&&row.payload.order_status==='Processing'));
+  assert.deepEqual(confirmedRows.slice(0,7).map(row=>canonicalJson(row.payload)),firstSeven,'Previously committed orders retain all fields exactly');
+  assert(confirmedRows.slice(7).every(row=>row.payload.confirm_upload_batch_id==='RETRY-TWELVE'));
+  assert(displayedOrders.every(order=>order.call_center_status==='Confirmed'),'Only verified server results update the UI');
+
+  const original=confirmedRows[7].payload;
+  const correction={id:original.id,order_number:original.order_number,expected:canonicalJson(original),patch:{call_center_status:'Confirmed',order_status:'Processing',items:original.items,customer_name:'Corrected'},clear_fields:[]};
+  assert(validConfirmCsvEntries([correction]));
+  assert.equal((await fast('/api/orders/confirm-csv','POST',{entries:[correction]},'invalid')).status,401);
+  assert.equal((await fast('/api/orders/confirm-csv','POST',{entries:[{...correction,patch:{...correction.patch,waybill_number:'NEW'}}]})).status,400);
+  assert.equal((await fast('/api/orders/confirm-csv','POST',{entries:[correction,correction]})).status,400);
+  assert.equal((await fast('/api/orders/confirm-csv','POST',{entries:Array(21).fill(correction)})).status,400);
+  // Another staff member edits/locks the order between read and CAS. The retry
+  // must inspect the newer durable order and reject the stale Confirm decision.
+  const originalPut=rawBucket.put.bind(rawBucket);let race=true;
+  rawBucket.put=async(key,value,options)=>{
+    if(key===currentOrderKey&&race){
+      race=false;const rows=JSON.parse(await (await bucket.get(key))!.text());
+      const row=rows.find((row:any)=>row.order_id===original.id);row.payload.invoice_locked=true;row.payload.stock_allocated=true;row.payload.waybill_number='STAFF-LOCK';
+      await bucket.put(key,JSON.stringify(rows),{onlyIf:{etagMatches:rawBucket.objects.get(key)!.etag}});
+    }
+    return originalPut(key,value,options);
+  };
+  const raced:any=await (await fast('/api/orders/confirm-csv','POST',{entries:[correction]})).json();
+  rawBucket.put=originalPut;
+  assert.equal(raced.results[0].status,'failed');assert.match(raced.results[0].error,/locked/);
+  const locked=(await sdk.from('order_snapshots').select('payload').eq('order_id',original.id).single()).data!.payload;
+  assert.equal(locked.customer_name,'Test Customer');assert.equal(locked.invoice_locked,true);assert.equal(locked.stock_allocated,true);assert.equal(locked.waybill_number,'STAFF-LOCK');
+  const staleCorrection={...correction,id:confirmedRows[8].payload.id,order_number:confirmedRows[8].payload.order_number,expected:canonicalJson({...confirmedRows[8].payload,phone:'stale'})};
+  const conflicted:any=await (await fast('/api/orders/confirm-csv','POST',{entries:[staleCorrection]})).json();
+  assert.equal(conflicted.results[0].status,'failed');assert.match(conflicted.results[0].error,/changed/);
+  const missing={...correction,id:'does-not-exist'};
+  assert.equal((await (await fast('/api/orders/confirm-csv','POST',{entries:[missing]})).json() as any).results[0].status,'failed');
+  const fullPaid=await parserScope.runConfirm(confirmCsv(1),undefined,'PAID-GROUP','full_paid');
+  assert.equal(fullPaid.confirmedCount,1);assert.equal(fullPaid.errors.length,0);
+  const paid=(await sdk.from('order_snapshots').select('payload').eq('order_id',confirmOrders[0].id).single()).data!.payload;
+  assert.equal(paid.payment_method,'Bank Payment');assert.equal(paid.payment_status,'Paid');assert.equal(paid.payment_received_amount,350);assert.equal(paid.invoice_payment_label_snapshot,'FULLY PAID');
+  const advanceCsv=confirmCsv(2).split('\n').filter((_,i)=>i!==1).join('\n');
+  assert.equal((await parserScope.runConfirm(advanceCsv,undefined,'ADVANCE-GROUP','advance_50')).confirmedCount,1);
+  const advance=(await sdk.from('order_snapshots').select('payload').eq('order_id',confirmOrders[1].id).single()).data!.payload;
+  assert.equal(advance.payment_received_amount,175);assert.equal(advance.advance_amount,175);assert.equal(advance.advance_confirmed,true);
+  const cancelCsv='Order ID,Item Code,Qty,Order Action\n'+confirmOrders[2].order_number+',R1,1,CANCEL ENTIRE ORDER';
+  assert.equal((await parserScope.runConfirm(cancelCsv)).confirmedCount,1);
+  const cancelEtag=rawBucket.objects.get(currentOrderKey)!.etag;
+  assert.equal((await parserScope.runConfirm(cancelCsv)).ignoredCount,1);
+  assert.equal(rawBucket.objects.get(currentOrderKey)!.etag,cancelEtag,'Repeated cancellation must not rewrite history');
+  let unauthorizedAttempts=0;
+  const notAuthorized=await saveConfirmCsvDecisions([correction],async()=>{unauthorizedAttempts++;const error:any=new Error('Login required');error.status=401;throw error;},async()=>{});
+  assert.equal(unauthorizedAttempts,1);assert.equal(notAuthorized.saved.size,0);assert.equal(notAuthorized.errors.length,1);
+  let malformedAttempts=0;
+  const unverified=await saveConfirmCsvDecisions([correction],async()=>{malformedAttempts++;return {ok:true,results:[]};},async()=>{});
+  assert.equal(malformedAttempts,4);assert.equal(unverified.saved.size,0);assert.equal(unverified.errors.length,1);
 
   // Run the actual isolated CSV page's script against the authenticated Worker
   // handlers. This covers parsing, batching, transient read failure and re-upload.
@@ -291,4 +401,4 @@ assert.notEqual((await upload('branding')).url,mediaResults[0].url);
 assert.notEqual((await upload('payment-receipt')).url,(await upload('payment-receipt')).url);
 assert.equal((await r2MediaHandler(new Request('https://test/api/media/ora-data/active-v2.json'),{ORA_MEDIA_R2:mediaBucket}))!.status,404);
 console.log('Compression fixture:',JSON.stringify({legacy_bytes:oldBytes,compressed_bytes:Buffer.byteLength(compacted.value),saved_percent:Number((100*(1-Buffer.byteLength(compacted.value)/oldBytes)).toFixed(1))}));
-console.log('PASS: R2 encryption/compatibility/exact lossless compression/CAS migration, media byte-preserving dedup, backups/auth, CSV/Delivered fields and locks, 38-form audit/retries/Sheet checks, corruption and failed writes.');
+console.log('PASS: Confirm CSV production parser (12 orders/7 already saved, 503 retries, lost response, packing/history, CAS staff locks, stale/missing orders, paid/advance/cancel and strict acknowledgments); R2 encryption/compression, media dedup, backups/auth, Delivered CSV, Facebook audit and failed writes.');

@@ -89,7 +89,7 @@ export const adminDashboardUnifiedUploadPatch = () => ({
       try {
         const result = importConfirmedOrdersCsv(await file.text());
         uploaded += result.confirmedCount;
-        failed += result.notFoundCount;
+        failed += result.notFoundCount + result.errors.filter(message=>message.includes('Decision was NOT saved to the server.')).length;
         ignored += result.ignoredCount;
         orderNumbers.push(...result.orderNumbers);
         errors.push(...result.errors.map((message) => file.name + ': ' + message));

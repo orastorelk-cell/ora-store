@@ -20,23 +20,18 @@ export const confirmUploadServerOrderLookupPatch = (): Plugin => ({
 
     const newBlock = String.raw`    // CONFIRM UPLOAD DURABLE ORDER LOOKUP
     // A Website/Meta order can arrive after this Admin tab loaded. Always query the
-    // durable order mirror before resolving CSV Order IDs; local state is fallback only.
+    // durable order mirror before resolving CSV Order IDs. Stop on a failed read
+    // rather than building financial/stock decisions from a stale browser cache.
     let persisted:Order[]=[];try{persisted=JSON.parse(localStorage.getItem('ora_orders')||'[]');}catch{}
     let serverOrders:Order[]=[];
-    try{
-      if(getStaffSessionToken()){
-        const serverData=await sharedStaffRequest('/api/orders');
-        serverOrders=Array.isArray(serverData?.orders)?serverData.orders:[];
-      }
-    }catch(error:any){
-      console.warn('Confirm upload durable order refresh failed; using current cache:',error?.message||error);
-    }
-    const mergedBase=serverOrders.length?serverOrders:orders;
-    const merged=[
-      ...mergedBase,
-      ...orders.filter(saved=>!mergedBase.some(cur=>cur.id===saved.id)),
-      ...persisted.filter(saved=>!mergedBase.some(cur=>cur.id===saved.id) && !orders.some(cur=>cur.id===saved.id)),
-    ];
+    if(!getStaffSessionToken())throw new Error('Sign in before uploading Confirm CSV.');
+    const serverData=await confirmCsvRequestWithRetry(async(url,options)=>{
+      const data=await sharedStaffRequest(url,options);
+      if(!Array.isArray(data?.orders)){const error:any=new Error('The durable order list could not be verified.');error.status=503;throw error;}
+      return data;
+    },'/api/orders');
+    serverOrders=serverData.orders;
+    const merged=serverOrders;
     const existing=new Map(merged.map(o=>[String(o.order_number||'').toUpperCase(),o] as [string,Order]));`;
 
     return { code: code.replace(oldBlock, newBlock), map: null };

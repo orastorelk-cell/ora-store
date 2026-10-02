@@ -1,5 +1,6 @@
 import { activeData, configureCloudflareData, dataBucket, readDataTable, mutateDataTable } from './cloudflareData';
 import { applyDeliveredReport, type DeliveredEntry } from '../src/lib/deliveredOrders';
+import { applyConfirmCsvDecisions, validConfirmCsvEntries } from '../src/lib/confirmCsvSave';
 
 type Env = Record<string, any>;
 type StaffSession = { sub:string; role:'admin'|'staff'; exp:number };
@@ -29,7 +30,8 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   const path=new URL(request.url).pathname;
   const read=request.method==='GET'&&['/api/orders','/api/orders/version'].includes(path);
   const delivered=request.method==='POST'&&path==='/api/orders/delivered-csv';
-  if(!read&&!delivered)return null;
+  const confirmed=request.method==='POST'&&path==='/api/orders/confirm-csv';
+  if(!read&&!delivered&&!confirmed)return null;
   const user=await verifyActiveStaff(request,env);
   if(!user)return json({error:'Login session required.'},401);
   if(read){
@@ -40,6 +42,19 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
     }
     const orders=rows.map(row=>row.payload).filter(Boolean).sort((a,b)=>Date.parse(b.created_at||'')-Date.parse(a.created_at||''));
     return json({orders});
+  }
+  if(confirmed){
+    const body:any=await request.json().catch(()=>null);
+    if(!validConfirmCsvEntries(body?.entries))return json({error:'Send at most 20 valid Confirm/Cancel decisions.'},400);
+    const results=await mutateDataTable(env,'order_snapshots',rows=>{
+      const applied=applyConfirmCsvDecisions(rows.map(row=>row.payload).filter(Boolean),body.entries);
+      const updates=new Map(applied.updatedOrders.map(order=>[String(order.id),order]));
+      const now=new Date().toISOString();let changed=0;
+      for(const row of rows){const order=updates.get(String(row.order_id));if(order){row.payload=order;row.updated_at=now;changed++;}}
+      if(changed!==applied.updatedOrders.length)throw new Error('Invalid order identity; Confirm CSV update stopped.');
+      return applied.results;
+    });
+    return json({ok:true,results});
   }
   if(user.role!=='admin'&&!['delivery','delivered_csv_upload'].some(permission=>(user.permissions||[]).includes(permission)))return json({error:'Delivered CSV permission required.'},403);
   const body:any=await request.json().catch(()=>null);
