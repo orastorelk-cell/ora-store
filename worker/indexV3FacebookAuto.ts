@@ -1,3 +1,4 @@
+import { configureCloudflareData } from './cloudflareData';
 import { withR2DataFallback } from './r2RecoveryFallback';
 import baseWorker from './indexV3';
 import { scheduleFacebookLeadRecoveryLive } from './facebookLeadRecoveryLive';
@@ -17,6 +18,7 @@ export default {
     });
   },
   async scheduled(_controller: unknown, env: unknown, ctx: any) {
+    configureCloudflareData(env);
     scheduleFacebookLeadRecoveryLive(baseWorker, env, ctx);
     scheduleFacebookLeadSheetCatchup(env, ctx);
   },

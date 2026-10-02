@@ -27,7 +27,7 @@
   "assets": {
     "directory": "./dist",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": ["/api/*", "/system/recovery"]
   },
   "observability": {
     "enabled": true

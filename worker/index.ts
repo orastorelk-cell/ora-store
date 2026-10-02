@@ -1,3 +1,4 @@
+import { cloudflareDataFetch } from './cloudflareData';
 import baseWorker from './indexBase';
 import { facebookLeadAutoHandler } from './facebookLeadAuto';
 
@@ -23,7 +24,7 @@ type WorkersAiLike = {
   run: (model: string, input: Record<string, any>) => Promise<any>;
 };
 
-const nativeFetch = globalThis.fetch.bind(globalThis);
+const nativeFetch = cloudflareDataFetch;
 
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), {
   status,
@@ -75,7 +76,7 @@ const r2MediaHandler = async (request: Request, envValue: unknown): Promise<Resp
   if (request.method === 'GET' && url.pathname.startsWith('/api/media/')) {
     const rawKey = url.pathname.slice('/api/media/'.length);
     const key = rawKey.split('/').map(part => decodeURIComponent(part)).join('/');
-    if (!key || key.includes('..')) return new Response('Not found', { status: 404 });
+    if (!key.startsWith('media/') || key.includes('..')) return new Response('Not found', { status: 404 });
     const object = await bucket.get(key);
     if (!object) return new Response('Not found', { status: 404 });
 

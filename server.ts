@@ -85,6 +85,7 @@ import dotenv from "dotenv";
 import crypto from "crypto";
 import fs from "fs";
 import { createClient } from "@supabase/supabase-js";
+import { cloudflareDataFetch } from "./worker/cloudflareData";
 import { validateProductBackup } from "./src/lib/productBackup";
 
 dotenv.config();
@@ -168,7 +169,7 @@ const getSupabaseAdmin = () => {
   const url = process.env.VITE_SUPABASE_URL;
   const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key || url.includes('your-project') || key.includes('your-secret') || key.includes('your-service-role')) return null;
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false }, global: { fetch: cloudflareDataFetch }, db: { retry: false } });
 };
 
 const reserveOrderNumberServer = async (order:any) => {
@@ -299,6 +300,7 @@ const getAllStaff = async (): Promise<ServerStaffAccount[]> => {
     if (error) throw error;
     const rows = (data || []).map(dbRowToStaff);
     if (!rows.length) {
+      if(isLiveServerlessRuntime) throw new Error('Cloudflare staff data is empty; recovery is required.');
       const defs = localDefaults().map(({id, ...u}) => ({ ...u }));
       const { data: seeded, error: seedErr } = await sb.from('admin_users').insert(defs).select('id,username,display_name,email,role,permissions,is_active,password_hash,created_at,updated_at');
       if (seedErr) throw seedErr;
@@ -306,6 +308,7 @@ const getAllStaff = async (): Promise<ServerStaffAccount[]> => {
     }
     return rows;
   } catch (e) {
+    if(isLiveServerlessRuntime) throw e;
     console.warn('Shared staff Supabase unavailable, using local server store:', (e as any)?.message || e);
     return readLocalStaff();
   }
@@ -321,7 +324,7 @@ const saveStaffAccount = async (account: ServerStaffAccount) => {
       }
       const { data, error } = await sb.from('admin_users').insert({ ...row, created_at: account.created_at }).select().single();
       if (error) throw error; return dbRowToStaff(data);
-    } catch (e) { console.warn('Supabase staff save failed, using local store:', (e as any)?.message || e); }
+    } catch (e) { if(isLiveServerlessRuntime) throw e; console.warn('Supabase staff save failed, using local store:', (e as any)?.message || e); }
   }
   const rows = readLocalStaff();
   const idx = rows.findIndex((u) => u.id === account.id || u.username === account.username);
@@ -331,7 +334,7 @@ const saveStaffAccount = async (account: ServerStaffAccount) => {
 const deleteStaffAccountServer = async (id: string) => {
   const sb = getSupabaseAdmin();
   if (sb && /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id)) {
-    try { const { error } = await sb.from('admin_users').delete().eq('id', id); if (!error) return; } catch {}
+    try { const { error } = await sb.from('admin_users').delete().eq('id', id); if(error)throw error; return; } catch(e) { if(isLiveServerlessRuntime)throw e; }
   }
   writeLocalStaff(readLocalStaff().filter((u) => u.id !== id));
 };
@@ -541,7 +544,7 @@ app.delete('/api/staff/accounts/:id', requireSuperAdmin, async (req, res) => {
     const admins = (await getAllStaff()).filter((u) => u.role === 'admin' && u.is_active !== false);
     if (admins.length <= 1) return res.status(400).json({ error: 'The last Super Admin cannot be deleted.' });
   }
-  await deleteStaffAccountServer(req.params.id); return res.json({ ok: true });
+  await deleteStaffAccountServer(String(req.params.id)); return res.json({ ok: true });
 });
 
 
@@ -637,7 +640,7 @@ const getAllReviewsServer = async (): Promise<any[]> => {
       const { data, error } = await sb.from('customer_reviews').select('*').order('created_at', { ascending: false });
       if (error) throw error;
       return data || [];
-    } catch (e) { console.warn('Supabase reviews unavailable; using local fallback:', (e as any)?.message || e); }
+    } catch (e) { if(isLiveServerlessRuntime) throw e; console.warn('Supabase reviews unavailable; using local fallback:', (e as any)?.message || e); }
   }
   return readJsonArray(reviewsFile).sort((a,b)=>new Date(b.created_at||0).getTime()-new Date(a.created_at||0).getTime());
 };
@@ -648,7 +651,7 @@ const saveReviewServer = async (review:any) => {
       const { data, error } = await sb.from('customer_reviews').upsert(review, { onConflict: 'id' }).select().single();
       if (error) throw error;
       return data;
-    } catch (e) { console.warn('Supabase review save failed; using local fallback:', (e as any)?.message || e); }
+    } catch (e) { if(isLiveServerlessRuntime) throw e; console.warn('Supabase review save failed; using local fallback:', (e as any)?.message || e); }
   }
   const rows = readJsonArray(reviewsFile);
   const idx = rows.findIndex((r:any)=>r.id===review.id);
@@ -721,7 +724,7 @@ const getAllProductRequestsServer = async (): Promise<any[]> => {
       const { data, error } = await sb.from('product_requests').select('*').order('created_at', { ascending: false });
       if (error) throw error;
       return data || [];
-    } catch (e) { console.warn('Supabase product requests unavailable; using local fallback:', (e as any)?.message || e); }
+    } catch (e) { if(isLiveServerlessRuntime) throw e; console.warn('Supabase product requests unavailable; using local fallback:', (e as any)?.message || e); }
   }
   return readJsonArray(productRequestsFile).sort((a,b)=>new Date(b.created_at||0).getTime()-new Date(a.created_at||0).getTime());
 };
@@ -732,7 +735,7 @@ const saveProductRequestServer = async (request:any) => {
       const { data, error } = await sb.from('product_requests').upsert(request, { onConflict: 'id' }).select().single();
       if (error) throw error;
       return data;
-    } catch (e) { console.warn('Supabase product request save failed; using local fallback:', (e as any)?.message || e); }
+    } catch (e) { if(isLiveServerlessRuntime) throw e; console.warn('Supabase product request save failed; using local fallback:', (e as any)?.message || e); }
   }
   const rows = readJsonArray(productRequestsFile);
   const idx = rows.findIndex((r:any)=>r.id===request.id);
@@ -797,7 +800,7 @@ const getSharedAdminPayload = async (key: string): Promise<any[]> => {
       const { data, error } = await sb.from('admin_data_store').select('payload').eq('key', key).maybeSingle();
       if (error) throw error;
       return Array.isArray(data?.payload) ? data.payload : [];
-    } catch (e) { console.warn(`Supabase ${key} read failed; using local fallback:`, (e as any)?.message || e); }
+    } catch (e) { if(isLiveServerlessRuntime) throw e; console.warn(`Supabase ${key} read failed; using local fallback:`, (e as any)?.message || e); }
   }
   const local = readAdminDataLocal()[key];
   return Array.isArray(local) ? local : [];
@@ -813,7 +816,7 @@ const saveSharedAdminPayload = async (key: string, payload: any[]) => {
       const { error } = await sb.from('admin_data_store').upsert({ key, payload: trimmed, updated_at: new Date().toISOString() }, { onConflict:'key' });
       if (error) throw error;
       return;
-    } catch (e) { console.warn(`Supabase ${key} save failed; using local fallback:`, (e as any)?.message || e); }
+    } catch (e) { if(isLiveServerlessRuntime) throw e; console.warn(`Supabase ${key} save failed; using local fallback:`, (e as any)?.message || e); }
   }
   const store = readAdminDataLocal(); store[key] = trimmed; writeAdminDataLocal(store);
 };
@@ -851,7 +854,7 @@ const readSharedStorefrontState = async (): Promise<SharedStorefrontState | null
           settings: payload.settings && typeof payload.settings === 'object' && !Array.isArray(payload.settings) ? payload.settings : {},
         };
       }
-    } catch (e) { console.warn('Supabase storefront-state read failed; using local fallback:', (e as any)?.message || e); }
+    } catch (e) { if(isLiveServerlessRuntime) throw e; console.warn('Supabase storefront-state read failed; using local fallback:', (e as any)?.message || e); }
   }
   const payload = readAdminDataLocal()[storefrontStateKey];
   if (payload && typeof payload === 'object' && !Array.isArray(payload) && Array.isArray(payload.products) && Array.isArray(payload.categories)) {
@@ -874,7 +877,7 @@ const readSharedStorefrontStamp = async (): Promise<{initialized:boolean;updated
       if (error) throw error;
       const updatedAt = String(data?.updated_at || '');
       if (updatedAt) return { initialized:true, updated_at:updatedAt };
-    } catch (e) { console.warn('Supabase storefront stamp read failed; using local fallback:', (e as any)?.message || e); }
+    } catch (e) { if(isLiveServerlessRuntime) throw e; console.warn('Supabase storefront stamp read failed; using local fallback:', (e as any)?.message || e); }
   }
   const payload = readAdminDataLocal()[storefrontStateKey];
   const updatedAt = payload && typeof payload === 'object' ? String(payload.updated_at || '') : '';
@@ -898,7 +901,7 @@ const writeSharedStorefrontState = async (input: {products:any[];categories:any[
       const { error } = await sb.from('admin_data_store').upsert({ key: storefrontStateKey, payload: next, updated_at: next.updated_at }, { onConflict:'key' });
       if (error) throw error;
       return next;
-    } catch (e) { console.warn('Supabase storefront-state save failed; using local fallback:', (e as any)?.message || e); }
+    } catch (e) { if(isLiveServerlessRuntime) throw e; console.warn('Supabase storefront-state save failed; using local fallback:', (e as any)?.message || e); }
   }
   const store = readAdminDataLocal();
   store[storefrontStateKey] = next;
@@ -1228,7 +1231,7 @@ const readVisitorAnalytics = async (): Promise<VisitorAnalyticsStore> => {
           days: payload.days && typeof payload.days === 'object' ? payload.days : {},
         };
       }
-    } catch (e) { console.warn('Supabase visitor analytics read failed; using local fallback:', (e as any)?.message || e); }
+    } catch (e) { if(isLiveServerlessRuntime) throw e; console.warn('Supabase visitor analytics read failed; using local fallback:', (e as any)?.message || e); }
   }
   const payload = readAdminDataLocal()[visitorAnalyticsKey];
   if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
@@ -1257,7 +1260,7 @@ const writeVisitorAnalytics = async (payload: VisitorAnalyticsStore) => {
       const { error } = await sb.from('admin_data_store').upsert({ key: visitorAnalyticsKey, payload, updated_at: new Date().toISOString() }, { onConflict:'key' });
       if (error) throw error;
       return;
-    } catch (e) { console.warn('Supabase visitor analytics save failed; using local fallback:', (e as any)?.message || e); }
+    } catch (e) { if(isLiveServerlessRuntime) throw e; console.warn('Supabase visitor analytics save failed; using local fallback:', (e as any)?.message || e); }
   }
   const store = readAdminDataLocal();
   store[visitorAnalyticsKey] = payload;
@@ -1584,7 +1587,7 @@ app.get('/api/admin-data/:key', requireAdminSession, async (req,res) => {
       const { data, error } = await sb.from('admin_data_store').select('payload').eq('key', key).maybeSingle();
       if (error) throw error;
       return res.json({ payload: data?.payload ?? [] });
-    } catch (e) { console.warn('Supabase admin data read failed; using local fallback:', (e as any)?.message || e); }
+    } catch (e) { if(isLiveServerlessRuntime) throw e; console.warn('Supabase admin data read failed; using local fallback:', (e as any)?.message || e); }
   }
   return res.json({ payload: readAdminDataLocal()[key] ?? [] });
 });
@@ -1600,7 +1603,7 @@ app.put('/api/admin-data/:key', requireAdminSession, async (req,res) => {
       const { error } = await sb.from('admin_data_store').upsert({ key, payload, updated_at: new Date().toISOString() }, { onConflict:'key' });
       if (error) throw error;
       return res.json({ ok:true });
-    } catch (e) { console.warn('Supabase admin data save failed; using local fallback:', (e as any)?.message || e); }
+    } catch (e) { if(isLiveServerlessRuntime) throw e; console.warn('Supabase admin data save failed; using local fallback:', (e as any)?.message || e); }
   }
   const store = readAdminDataLocal(); store[key] = payload; writeAdminDataLocal(store);
   return res.json({ ok:true });
@@ -1872,7 +1875,7 @@ const saveOrderSnapshotsBatch = async (orders:any[]) => {
       const {error}=await sb.from('order_snapshots').upsert(payload,{onConflict:'order_id'});
       if(error) throw error;
       return incoming;
-    }catch(e){ console.warn('order_snapshots batch Supabase save failed; using local store:',(e as any)?.message||e); }
+    }catch(e){ if(isLiveServerlessRuntime) throw e; console.warn('order_snapshots batch Supabase save failed; using local store:',(e as any)?.message||e); }
   }
   const rows=readOrderSnapshotsLocal();
   const byId=new Map(rows.map((o:any)=>[String(o.id),o] as const));
@@ -2511,8 +2514,6 @@ app.put('/api/orders/:id', requireAdminSession, async (req,res)=>{
       }
     }
 
-    await saveOrderSnapshot(order);
-
     // Record normal first-time waybill assignments in the durable lock registry.
     const finalWaybill=String(order.waybill_number || '').trim();
     if(finalWaybill){
@@ -2525,9 +2526,11 @@ app.put('/api/orders/:id', requireAdminSession, async (req,res)=>{
           assigned_order_number:String(order.order_number || ''),
           assigned_at:new Date().toISOString(),
         }],{onConflict:'waybill_number'});
-        if(waybillLockError) console.warn('Durable waybill lock save failed:',waybillLockError.message);
+        if(waybillLockError) throw waybillLockError;
       }
     }
+
+    await saveOrderSnapshot(order);
 
     return res.json({ok:true,order,waybill_preserved:waybillPreserved});
   }catch(e:any){return res.status(500).json({error:e?.message||'Order update failed.'});}
@@ -2550,6 +2553,7 @@ app.delete('/api/orders/:id', requireSuperAdmin, async (req,res)=>{
         const {error}=await sb.from('order_snapshots').delete().eq('order_id',id);
         if(error) throw error;
       }catch(e){
+        if(isLiveServerlessRuntime)throw e;
         console.warn('Supabase individual order delete failed; local fallback will still be cleared:',(e as any)?.message||e);
       }
     }
@@ -2574,7 +2578,7 @@ app.delete('/api/orders', requireSuperAdmin, async (_req,res)=>{
       const {error}=await sb.from('order_snapshots').delete().neq('order_id','__never__');
       if(error) throw error;
       await resetOrderNumberSequencesServer(sb);
-    }catch(e){ console.warn('Supabase order snapshot reset failed:',(e as any)?.message||e); }
+    }catch(e){ if(isLiveServerlessRuntime)throw e; console.warn('Supabase order snapshot reset failed:',(e as any)?.message||e); }
   }
   writeOrderSnapshotsLocal([]);
   try {
@@ -2602,6 +2606,7 @@ app.delete('/api/operational-test-data', requireSuperAdmin, async (_req,res)=>{
         if(error) throw error;
         await resetOrderNumberSequencesServer(sb);
       }catch(e){
+        if(isLiveServerlessRuntime)throw e;
         console.warn('Supabase operational reset failed:',(e as any)?.message||e);
       }
     }
@@ -2684,7 +2689,7 @@ app.delete('/api/live-start-reset', requireSuperAdmin, async (_req,res)=>{
 // -----------------------------------------------------------------------------
 // Shared Fardar city list + customer-city mappings
 // -----------------------------------------------------------------------------
-interface FardarCityRow { name: string; code?: string; }
+interface FardarCityRow { name: string; code?: string; district?: string; }
 interface FardarCityMappingRow { input_city: string; fardar_city: string; }
 const normalizeCityKey = (v: unknown) => String(v || '').trim().toLowerCase().replace(/[^a-z0-9\u0D80-\u0DFF]+/g, ' ').replace(/\s+/g, ' ').trim();
 const getFardarCities = async (): Promise<FardarCityRow[]> => {
@@ -2694,7 +2699,7 @@ const getFardarCities = async (): Promise<FardarCityRow[]> => {
       const { data, error } = await sb.from('fardar_cities').select('name,code,district').order('name').limit(20000);
       if (error) throw error;
       return (data || []).map((r:any) => ({ name: String(r.name), code: r.code ? String(r.code) : undefined, district: r.district ? String(r.district) : undefined }));
-    } catch (e) { console.warn('Fardar city list Supabase unavailable; using local store:', (e as any)?.message || e); }
+    } catch (e) { if(isLiveServerlessRuntime) throw e; console.warn('Fardar city list Supabase unavailable; using local store:', (e as any)?.message || e); }
   }
   return readJsonArray(fardarCitiesFile) as FardarCityRow[];
 };
@@ -2710,7 +2715,7 @@ const replaceFardarCities = async (rows: FardarCityRow[]) => {
         if (error) throw error;
       }
       return clean;
-    } catch (e) { console.warn('Fardar city replace Supabase failed; using local store:', (e as any)?.message || e); }
+    } catch (e) { if(isLiveServerlessRuntime) throw e; console.warn('Fardar city replace Supabase failed; using local store:', (e as any)?.message || e); }
   }
   writeJsonArray(fardarCitiesFile, clean); return clean;
 };
@@ -2721,7 +2726,7 @@ const getFardarMappings = async (): Promise<FardarCityMappingRow[]> => {
       const { data, error } = await sb.from('fardar_city_mappings').select('input_city,fardar_city');
       if (error) throw error;
       return (data || []).map((r:any) => ({ input_city: String(r.input_city), fardar_city: String(r.fardar_city) }));
-    } catch (e) { console.warn('Fardar city mapping Supabase unavailable; using local store:', (e as any)?.message || e); }
+    } catch (e) { if(isLiveServerlessRuntime) throw e; console.warn('Fardar city mapping Supabase unavailable; using local store:', (e as any)?.message || e); }
   }
   return readJsonArray(fardarCityMappingsFile) as FardarCityMappingRow[];
 };
@@ -2734,7 +2739,7 @@ const saveFardarMapping = async (inputCity: string, fardarCity: string) => {
       const { error } = await sb.from('fardar_city_mappings').upsert({ ...row, input_key: normalizeCityKey(row.input_city) }, { onConflict: 'input_key' });
       if (error) throw error;
       return row;
-    } catch (e) { console.warn('Fardar city mapping Supabase save failed; using local store:', (e as any)?.message || e); }
+    } catch (e) { if(isLiveServerlessRuntime) throw e; console.warn('Fardar city mapping Supabase save failed; using local store:', (e as any)?.message || e); }
   }
   const rows = readJsonArray(fardarCityMappingsFile) as FardarCityMappingRow[];
   const key = normalizeCityKey(row.input_city);
@@ -3829,6 +3834,11 @@ app.post("/api/verify-slip", async (req, res) => {
       rejectionReason: "Failed to analyze receipt image. Please ensure image is clear and try again.",
     });
   }
+});
+
+app.use((error:any,req:express.Request,res:express.Response,next:express.NextFunction)=>{
+  if(!req.path.startsWith('/api/'))return next(error);
+  return res.status(503).json({error:error?.message||'Durable data is temporarily unavailable.'});
 });
 
 async function startServer() {

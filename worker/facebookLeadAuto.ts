@@ -1,3 +1,4 @@
+import { cloudflareDataFetch } from './cloudflareData';
 import type { Order, Product, ProductVariant, StoreSettings } from '../src/types';
 import {
   buildOrderItemSnapshot,
@@ -59,7 +60,7 @@ const readStorefront = async (runtime: Runtime): Promise<{ products: Product[]; 
   const url = new URL(`${runtime.supabaseUrl}/rest/v1/admin_data_store`);
   url.searchParams.set('key', 'eq.storefront-state-v1');
   url.searchParams.set('select', 'payload');
-  const response = await fetch(url, { headers: supabaseHeaders(runtime) });
+  const response = await cloudflareDataFetch(url, { headers: supabaseHeaders(runtime) });
   const rows: any[] = await response.json().catch(() => []);
   if (!response.ok) throw new Error(`Could not read storefront state (${response.status}).`);
   const payload = rows?.[0]?.payload || {};
@@ -74,7 +75,7 @@ const readExistingLeadOrder = async (runtime: Runtime, leadId: string): Promise<
   url.searchParams.set('select', 'order_id,order_number,payload');
   url.searchParams.set('payload->>platform_lead_id', `eq.${leadId}`);
   url.searchParams.set('limit', '1');
-  const response = await fetch(url, { headers: supabaseHeaders(runtime) });
+  const response = await cloudflareDataFetch(url, { headers: supabaseHeaders(runtime) });
   const rows: any[] = await response.json().catch(() => []);
   if (!response.ok) throw new Error(`Could not check Facebook Lead ID history (${response.status}).`);
   return rows?.[0]?.payload || null;
@@ -97,7 +98,7 @@ const readRecentDuplicate = async (
   url.searchParams.set('created_at', `gte.${cutoff}`);
   url.searchParams.set('order', 'created_at.desc');
   url.searchParams.set('limit', '500');
-  const response = await fetch(url, { headers: supabaseHeaders(runtime) });
+  const response = await cloudflareDataFetch(url, { headers: supabaseHeaders(runtime) });
   const rows: any[] = await response.json().catch(() => []);
   if (!response.ok) return null;
   const target = fingerprint(phone, item);
@@ -121,14 +122,14 @@ const appendLog = async (
     const readUrl = new URL(`${runtime.supabaseUrl}/rest/v1/admin_data_store`);
     readUrl.searchParams.set('key', `eq.${key}`);
     readUrl.searchParams.set('select', 'payload');
-    const currentResponse = await fetch(readUrl, { headers: supabaseHeaders(runtime) });
+    const currentResponse = await cloudflareDataFetch(readUrl, { headers: supabaseHeaders(runtime) });
     const rows: any[] = await currentResponse.json().catch(() => []);
     const current = Array.isArray(rows?.[0]?.payload?.events) ? rows[0].payload.events : [];
     const events = [{ at: new Date().toISOString(), ...entry }, ...current].slice(0, 100);
 
     const writeUrl = new URL(`${runtime.supabaseUrl}/rest/v1/admin_data_store`);
     writeUrl.searchParams.set('on_conflict', 'key');
-    await fetch(writeUrl, {
+    await cloudflareDataFetch(writeUrl, {
       method: 'POST',
       headers: {
         ...supabaseHeaders(runtime),
@@ -163,7 +164,7 @@ const graphGet = async (env: Env, path: string, fields: string) => {
     const url = new URL(`https://graph.facebook.com/${version}/${encodeURIComponent(path)}`);
     url.searchParams.set('fields', fields);
 
-    const response = await fetch(url, {
+    const response = await cloudflareDataFetch(url, {
       headers: {
         authorization: `Bearer ${accessToken}`,
         accept: 'application/json',

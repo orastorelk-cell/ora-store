@@ -1,3 +1,4 @@
+import { cloudflareDataFetch } from './cloudflareData';
 import { httpServerHandler } from 'cloudflare:node';
 import { waitUntil } from 'cloudflare:workers';
 import app from '../server';
@@ -8,7 +9,7 @@ import app from '../server';
 
 app.listen(3000);
 const nodeHandler: any = httpServerHandler({ port: 3000 });
-const nativeFetch = globalThis.fetch.bind(globalThis);
+const nativeFetch = cloudflareDataFetch;
 
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), {
   status,

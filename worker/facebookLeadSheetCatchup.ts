@@ -1,3 +1,4 @@
+import { cloudflareDataFetch } from './cloudflareData';
 import {
   normalizedProductType,
   regularDisplayUnitPrice,
@@ -39,7 +40,7 @@ const getRuntime = async (env: Env): Promise<Runtime> => {
   const key = text(env, 'SUPABASE_SECRET_KEY') || text(env, 'SUPABASE_SERVICE_ROLE_KEY');
   if (!url || !key) throw new Error('Supabase server configuration is missing.');
 
-  const response = await fetch(`${url}/rest/v1/admin_data_store?key=eq.storefront-state-v1&select=payload`, {
+  const response = await cloudflareDataFetch(`${url}/rest/v1/admin_data_store?key=eq.storefront-state-v1&select=payload`, {
     headers: dbHeaders(key),
   });
   const rows: any[] = await response.json().catch(() => []);
@@ -62,7 +63,7 @@ const postAppsScript = async (webhook: string, payload: Record<string, any>) => 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20_000);
   try {
-    const response = await fetch(webhook, {
+    const response = await cloudflareDataFetch(webhook, {
       method: 'POST',
       headers: {
         'content-type': 'text/plain;charset=utf-8',
@@ -91,7 +92,7 @@ const readRecentFacebookOrdersNeedingWork = async (runtime: Runtime) => {
   url.searchParams.set('select', 'created_at,payload');
   url.searchParams.set('order', 'created_at.desc');
   url.searchParams.set('limit', '60');
-  const response = await fetch(url, { headers: dbHeaders(runtime.key) });
+  const response = await cloudflareDataFetch(url, { headers: dbHeaders(runtime.key) });
   const rows: any[] = await response.json().catch(() => []);
   if (!response.ok) throw new Error(`Could not read recent orders (${response.status}).`);
 
@@ -191,7 +192,7 @@ const applyFacebookOfferSnapshot = (runtime: Runtime, order: any) => {
 const persistOrder = async (runtime: Runtime, order: any) => {
   const id = String(order?.id || '').trim();
   if (!id) throw new Error('Order ID is missing.');
-  const response = await fetch(`${runtime.url}/rest/v1/order_snapshots?order_id=eq.${encodeURIComponent(id)}`, {
+  const response = await cloudflareDataFetch(`${runtime.url}/rest/v1/order_snapshots?order_id=eq.${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: {
       ...dbHeaders(runtime.key),
@@ -242,7 +243,7 @@ const syncAndVerifyOrder = async (runtime: Runtime, order: any) => {
 const writeSummary = async (runtime: Runtime, payload: Record<string, unknown>) => {
   try {
     const at = new Date().toISOString();
-    await fetch(`${runtime.url}/rest/v1/admin_data_store?on_conflict=key`, {
+    await cloudflareDataFetch(`${runtime.url}/rest/v1/admin_data_store?on_conflict=key`, {
       method: 'POST',
       headers: {
         ...dbHeaders(runtime.key),

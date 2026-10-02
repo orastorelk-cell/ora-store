@@ -1,3 +1,4 @@
+import { cloudflareDataFetch } from './cloudflareData';
 import { facebookLeadAutoHandler } from './facebookLeadAuto';
 
 type Env = Record<string, any>;
@@ -59,7 +60,7 @@ const graph = async (env: Env, path: string, params: Record<string, string> = {}
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), GRAPH_TIMEOUT_MS);
   try {
-    const response = await fetch(url, {
+    const response = await cloudflareDataFetch(url, {
       method,
       headers: { accept: 'application/json' },
       signal: controller.signal,
@@ -79,7 +80,7 @@ const writePayload = async (env: Env, keyName: string, payload: Record<string, u
   const runtime = db(env);
   if (!runtime.url || !runtime.key) return;
   const at = new Date().toISOString();
-  await fetch(`${runtime.url}/rest/v1/admin_data_store?on_conflict=key`, {
+  await cloudflareDataFetch(`${runtime.url}/rest/v1/admin_data_store?on_conflict=key`, {
     method: 'POST',
     headers: {
       ...dbHeaders(runtime.key),
@@ -107,7 +108,7 @@ const readState = async (env: Env): Promise<RecoveryState> => {
   url.searchParams.set('select', 'payload');
   url.searchParams.set('limit', '1');
 
-  const response = await fetch(url, { headers: dbHeaders(runtime.key) });
+  const response = await cloudflareDataFetch(url, { headers: dbHeaders(runtime.key) });
   const rows: any[] = await response.json().catch(() => []);
   if (!response.ok) throw new Error(`Could not read Facebook recovery state (${response.status}).`);
   const payload = rows?.[0]?.payload;
@@ -132,7 +133,7 @@ const readLeadOrder = async (env: Env, leadId: string) => {
   url.searchParams.set('select', 'payload');
   url.searchParams.set('payload->>platform_lead_id', `eq.${leadId}`);
   url.searchParams.set('limit', '1');
-  const response = await fetch(url, { headers: dbHeaders(runtime.key) });
+  const response = await cloudflareDataFetch(url, { headers: dbHeaders(runtime.key) });
   const rows: any[] = await response.json().catch(() => []);
   return response.ok ? (rows?.[0]?.payload || null) : null;
 };

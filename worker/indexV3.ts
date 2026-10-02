@@ -1,3 +1,4 @@
+import { cloudflareDataFetch } from './cloudflareData';
 import fastWorker from './indexV2';
 import { facebookLeadAutoHandler } from './facebookLeadAuto';
 
@@ -107,7 +108,7 @@ const verifyStorageAdmin = async (request:Request, envValue:unknown) => {
     const supabaseUrl = String(env.VITE_SUPABASE_URL || '').replace(/\/$/, '');
     const supabaseKey = String(env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
     if (!supabaseUrl || !supabaseKey) return null;
-    const userResponse = await fetch(
+    const userResponse = await cloudflareDataFetch(
       `${supabaseUrl}/rest/v1/admin_users?id=eq.${encodeURIComponent(session.sub)}&is_active=eq.true&select=id,role&limit=1`,
       { headers:{ apikey:supabaseKey, authorization:`Bearer ${supabaseKey}`, accept:'application/json' } },
     );
@@ -147,7 +148,7 @@ const storageUsageHandler = async (request:Request, envValue:unknown):Promise<Re
   try {
     const [r2, supabaseResponse] = await Promise.all([
       readR2Usage(r2Bucket),
-      fetch(`${runtime.supabaseUrl}/rest/v1/rpc/ora_storage_usage_by_bucket`, {
+      cloudflareDataFetch(`${runtime.supabaseUrl}/rest/v1/rpc/ora_storage_usage_by_bucket`, {
         method:'POST',
         headers:{
           apikey:runtime.supabaseKey,
@@ -159,7 +160,7 @@ const storageUsageHandler = async (request:Request, envValue:unknown):Promise<Re
       }),
     ]);
     const supabaseRows:any[] = await supabaseResponse.json().catch(()=>[]);
-    if (!supabaseResponse.ok) throw new Error('Supabase Storage usage could not be read.');
+    const supabaseAvailable=supabaseResponse.ok;
     const supabaseUsed = supabaseRows.reduce((sum,row)=>sum + Math.max(0,Number(row?.total_bytes || 0)),0);
     const supabaseCount = supabaseRows.reduce((sum,row)=>sum + Math.max(0,Number(row?.object_count || 0)),0);
 
@@ -181,11 +182,13 @@ const storageUsageHandler = async (request:Request, envValue:unknown):Promise<Re
         },
         {
           id:'supabase-storage',
+          available:supabaseAvailable,
+          status:supabaseAvailable?'Live':'Unavailable',
           name:'Supabase Storage',
           provider:'Supabase',
           bucket:supabaseRows.length === 1 ? String(supabaseRows[0]?.bucket_name || 'ora-public-media') : `${supabaseRows.length} bucket(s)`,
-          used_bytes:supabaseUsed,
-          object_count:supabaseCount,
+          used_bytes:supabaseAvailable?supabaseUsed:null,
+          object_count:supabaseAvailable?supabaseCount:null,
           free_limit_bytes:supabaseFreeLimit,
           remaining_free_bytes:Math.max(0,supabaseFreeLimit-supabaseUsed),
         },

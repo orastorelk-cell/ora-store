@@ -6,7 +6,8 @@ type StorageRow = {
   name: string;
   provider: string;
   bucket?: string;
-  used_bytes: number;
+  available?: boolean;
+  used_bytes: number | null;
   object_count: number;
   free_limit_bytes: number;
   remaining_free_bytes: number;
@@ -116,15 +117,15 @@ export const StoragePanel: React.FC = () => {
                     <p className="mt-0.5 text-[10px] text-neutral-500">{row.provider}{row.bucket ? ` • ${row.bucket}` : ''}</p>
                   </div>
                 </div>
-                <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-black text-emerald-300">LIVE</span>
+                <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-black text-emerald-300">{row.available===false?'UNAVAILABLE':'LIVE'}</span>
               </div>
 
               <div className="mt-5 flex items-end justify-between gap-4">
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">Used</p>
-                  <p className="mt-1 text-2xl font-black text-white">{formatBytes(used)}</p>
+                  <p className="mt-1 text-2xl font-black text-white">{row.available===false?'Unavailable':formatBytes(used)}</p>
                 </div>
-                <p className="text-right text-xs font-black text-neutral-300">{percent < 0.01 && used > 0 ? '<0.01' : percent.toFixed(percent >= 10 ? 1 : 2)}%</p>
+                <p className="text-right text-xs font-black text-neutral-300">{row.available===false?'—':(percent < 0.01 && used > 0 ? '<0.01' : percent.toFixed(percent >= 10 ? 1 : 2))+'%'}</p>
               </div>
 
               <div className="mt-3 h-3 overflow-hidden rounded-full bg-neutral-950 ring-1 ring-neutral-800">
