@@ -1773,9 +1773,47 @@ const getOrderSnapshots = async (): Promise<any[]> => {
       const {data,error}=await sb.from('order_snapshots').select('order_id,order_number,payload,created_at,updated_at').order('created_at',{ascending:false});
       if(error) throw error;
       return (data||[]).map((r:any)=>r.payload).filter(Boolean);
-    }catch(e){ console.warn('order_snapshots Supabase unavailable; using local store:',(e as any)?.message||e); }
+    }catch(e){
+      // In the live serverless app, an API restriction/outage must never look like
+      // a valid empty order database. Returning [] here used to wipe the browser's
+      // cached orders when Supabase returned 402/5xx.
+      if(isLiveServerlessRuntime) throw e;
+      console.warn('order_snapshots Supabase unavailable; using local store:',(e as any)?.message||e);
+    }
   }
   return readOrderSnapshotsLocal().sort((a,b)=>new Date(b.created_at||0).getTime()-new Date(a.created_at||0).getTime());
+};
+
+const getOrderSnapshotsVersion = async (): Promise<{count:number;updated_at:string}> => {
+  const sb=getSupabaseAdmin();
+  if(sb){
+    try{
+      const {data,error,count}=await sb
+        .from('order_snapshots')
+        .select('updated_at',{count:'exact'})
+        .order('updated_at',{ascending:false})
+        .limit(1);
+      if(error) throw error;
+      return {
+        count: Math.max(0, Number(count || 0)),
+        updated_at: String(data?.[0]?.updated_at || ''),
+      };
+    }catch(e){
+      if(isLiveServerlessRuntime) throw e;
+      console.warn('order_snapshots version check unavailable; using local store:',(e as any)?.message||e);
+    }
+  }
+
+  const rows=readOrderSnapshotsLocal();
+  let updatedAt='';
+  for(const row of rows){
+    const candidate=String(row?.updated_at || row?.created_at || '');
+    if(!candidate) continue;
+    const candidateTime=new Date(candidate).getTime();
+    const currentTime=updatedAt ? new Date(updatedAt).getTime() : 0;
+    if(Number.isFinite(candidateTime) && candidateTime > currentTime) updatedAt=candidate;
+  }
+  return {count:rows.length,updated_at:updatedAt};
 };
 // Normalize only customer-entered human-readable order text.
  // Lowercase English words get an initial capital, while existing uppercase/mixed
@@ -2032,8 +2070,28 @@ app.post('/api/admin/orders/bulk-import', requireStaffAnyPermission(['lead_impor
   }catch(e:any){ return res.status(500).json({error:e?.message||'Bulk order import failed.'}); }
 });
 
+app.get('/api/orders/version', requireAdminSession, async (_req,res)=>{
+  try{
+    return res.json(await getOrderSnapshotsVersion());
+  }catch(e:any){
+    return res.status(503).json({
+      error:'Order database is temporarily unavailable. Existing browser data has been kept.',
+      code:'ORDER_DB_UNAVAILABLE',
+      detail:String(e?.message || ''),
+    });
+  }
+});
+
 app.get('/api/orders', requireAdminSession, async (_req,res)=>{
-  return res.json({orders:await getOrderSnapshots()});
+  try{
+    return res.json({orders:await getOrderSnapshots()});
+  }catch(e:any){
+    return res.status(503).json({
+      error:'Order database is temporarily unavailable. Existing browser data has been kept.',
+      code:'ORDER_DB_UNAVAILABLE',
+      detail:String(e?.message || ''),
+    });
+  }
 });
 
 // FB/TikTok test leads use the bulk-import path, so their cleanup must be one

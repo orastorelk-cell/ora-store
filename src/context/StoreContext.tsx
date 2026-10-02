@@ -594,6 +594,7 @@ useEffect(() => {
   const [isAdminView, setIsAdminView] = useState(false);
   const [sharedStoreReady, setSharedStoreReady] = useState(false);
   const sharedStoreVersionRef = useRef(0);
+  const orderServerVersionRef = useRef('');
   // Serialize full storefront publishes. Rapid Admin edits used to start overlapping
   // PUT requests for the ~shared catalog payload, so an older transient failure could
   // raise "Website sync failed" even when a newer save was already succeeding.
@@ -960,6 +961,11 @@ useEffect(() => {
     return () => { cancelled = true; };
   }, [adminUser?.id, adminUser?.role]);
 
+  const readOrderServerVersion = async () => {
+    const data = await sharedStaffRequest('/api/orders/version');
+    return `${Math.max(0, Number(data?.count || 0))}|${String(data?.updated_at || '')}`;
+  };
+
   const refreshOrdersFromServer = async () => {
     if (!adminUser || !getStaffSessionToken()) return;
     const data = await sharedStaffRequest('/api/orders');
@@ -1018,6 +1024,12 @@ useEffect(() => {
       localStorage.setItem('ora_orders', JSON.stringify(sortedServerOrders));
       localStorage.setItem('ora_customers', JSON.stringify(serverCustomers));
     } catch {}
+
+    try {
+      orderServerVersionRef.current = await readOrderServerVersion();
+    } catch (err:any) {
+      console.warn('Order version seed failed:', err?.message || err);
+    }
   };
 
   // Server is the authoritative order mirror. On Admin login, replace the browser
@@ -1028,13 +1040,34 @@ useEffect(() => {
   }, [adminUser?.id]);
 
 
-  // Keep admin payment/order queues reasonably fresh while an admin page is open.
-  // 90 seconds avoids aggressive polling on free-tier storage/API usage.
+  // Keep admin payment/order queues fresh without downloading the full order
+  // snapshot list every minute. Poll only a tiny count/latest-updated stamp and
+  // download the full list when another device/process actually changed it.
   useEffect(() => {
     if (!adminUser || !getStaffSessionToken()) return;
-    const timer = window.setInterval(() => {
-      refreshOrdersFromServer().catch(err=>console.warn('Background order refresh failed:',err?.message||err));
-    }, 90_000);
+    let checking = false;
+
+    const refreshIfChanged = async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        const nextVersion = await readOrderServerVersion();
+        if (!orderServerVersionRef.current) {
+          orderServerVersionRef.current = nextVersion;
+          return;
+        }
+        if (nextVersion !== orderServerVersionRef.current) {
+          await refreshOrdersFromServer();
+        }
+      } catch (err:any) {
+        // Keep the current browser cache visible during a Supabase restriction/outage.
+        console.warn('Background order version check failed:', err?.message || err);
+      } finally {
+        checking = false;
+      }
+    };
+
+    const timer = window.setInterval(() => { void refreshIfChanged(); }, 60_000);
     return () => window.clearInterval(timer);
   }, [adminUser?.id]);
 
