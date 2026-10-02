@@ -7,12 +7,11 @@ LOCAL TEST FIRST
 3. Test http://localhost:3000
 4. Test http://localhost:3000/system
 
-CLOUDFLARE-RUNTIME LOCAL TEST (later, after Supabase is connected)
+CLOUDFLARE-RUNTIME LOCAL TEST (use local test data, never the live bucket)
 5. npm run cf:dev
 
 LIVE DEPLOY (only after local tests pass)
 - GitHub: push this clean project
-- Supabase: create fresh project and run supabase_schema.sql once
 - Cloudflare: connect GitHub to a Workers project
 - Build command: npm run build
 - Deploy command: npx wrangler@latest deploy
@@ -38,4 +37,26 @@ IMPORTANT
 - Do not place secret values in GitHub files or wrangler.jsonc.
 - /system SPA fallback is configured in wrangler.jsonc.
 - /api/* is routed to the Worker backend.
-- Live persistent data is stored in Supabase, not Cloudflare temporary filesystem.
+- Live operational data is stored in the existing ORA_MEDIA_R2 bucket:
+  orders, catalog/stock/settings, staff accounts, waybill locks, courier cities,
+  reports, reviews, requests, analytics and notifications.
+- Supabase remains for customer Google sign-in and email OTP. Its Data API is
+  not used for normal live operational reads/writes after the R2 recovery.
+- Keep the existing Supabase URL and server key: the SDK query adapter uses
+  them to identify server-side data requests without sending those requests
+  to Supabase. Customer auth requests still use Supabase.
+- Private R2 records and backups use AES-GCM; /api/media serves media/ only.
+- Preserve STAFF_SESSION_SECRET (or ABUSE_HASH_SALT if that is the configured
+  key). Changing that server secret requires decrypting and re-encrypting data
+  with the old key first. Ordinary staff password changes do not change it.
+- The active manifest is ora-data/active-v2.json. Table writes use conditional
+  ETags to retry conflicts instead of losing concurrent writes.
+- Before table changes, the previous table is saved in one of 168 hourly
+  backup slots per table under ora-data/backups-v2/ (seven days, bounded).
+  Slot metadata records the actual hour. Backups use their original object
+  paths as authenticated encryption context; decrypt before restoring them.
+- /tmp is never an acknowledged fallback for live durable data.
+- The one-time encrypted migration asset and import credential are removed
+  after successful recovery. /api/cloudflare-recovery/import returns 410.
+- Authenticated /api/cloudflare-recovery/status reports the current R2 count.
+- Regression check: node --import tsx tools/test-cloudflare-data.ts

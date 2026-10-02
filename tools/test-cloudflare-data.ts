@@ -63,6 +63,7 @@ assert(duplicate.error,'Order number uniqueness must survive parallel inserts');
 assert.equal((await importRecovery(bucket,fixture)).counts.order_snapshots,1);
 assert.equal((await sdk.from('order_snapshots').select('*')).data?.length,6,'Repeat restore cannot overwrite newer orders');
 assert([...rawBucket.objects.keys()].some(key=>key.startsWith('ora-data/backups-v2/order_snapshots/')));
+assert([...rawBucket.objects.values()].every(object=>JSON.parse(object.value).format==='ora-aes-gcm-v1'),'Private records and backups must be encrypted');
 
 // Test the existing Express routes against R2, including auth and protected data.
 process.env.CLOUDFLARE_WORKERS='1';process.env.VITE_SUPABASE_URL=env.VITE_SUPABASE_URL;
@@ -102,7 +103,7 @@ try {
   assert.equal(invalid.status,503,'Corrupt storage must not be shown as an empty database');
   rawBucket.objects.set(active.prefix+'order_snapshots.json',saved);
   const denied=await withR2DataFallback(new Request('https://test/api/cloudflare-recovery/import',{method:'POST',body:JSON.stringify(fixture)}),env,{},async()=>new Response('unreachable'));
-  assert.equal(denied.status,401);
+  assert.equal(denied.status,410,'One-time imports are disabled after recovery');
 }finally{server.close();}
 
 // An incomplete staged import never switches the live source.

@@ -205,7 +205,7 @@ app.get('/api/health', async (_req, res) => {
   try {
     const { error } = await sb.from('admin_data_store').select('key').limit(1);
     if (error) throw error;
-    return res.json({ ok:true, runtime:runtimeName, supabase:true });
+    return res.json({ ok:true, runtime:runtimeName, storage:isCloudflareRuntime?'cloudflare-r2':'supabase', supabase:!isCloudflareRuntime });
   } catch (e:any) {
     return res.status(503).json({ ok:false, runtime:runtimeName, supabase:true, error:e?.message || 'Supabase connection failed.' });
   }
