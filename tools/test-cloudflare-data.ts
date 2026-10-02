@@ -147,6 +147,65 @@ try {
   const metaFetch:any=async(input:any)=>{const url=new URL(String(input));return new Response(JSON.stringify(url.pathname.endsWith('/me')?{id:'page'}:url.pathname.endsWith('/leadgen_forms')?{data:[{id:'form-1',name:'Test form'}]}:{data:[{id:'audit-lead',created_time:auditNow},{id:'missing-lead',created_time:auditNow}]}));};
   const audited=await facebookLeadAuditHandler(auditRequest(token),{...env,META_PAGE_ACCESS_TOKEN:'synthetic-token'},metaFetch);
   const audit:any=await audited!.json();assert(audit.done);assert.equal(audit.leads.length,2);assert.equal(audit.leads[0].order_number,newOrder.order_number);assert.equal(audit.leads[1].order_number,null);
+
+  // Exercise the actual audit page through all 38 forms, Meta pagination and
+  // physical Sheet checks. An intermediate report must never look final.
+  const auditOrders=[newOrder,{...newOrder,id:'audit-order-2',order_number:'FB-AUDIT-2',platform_lead_id:'late-lead',items:[{quantity:1},{quantity:1}]}];
+  await sdk.from('order_snapshots').upsert({order_id:'audit-order-2',order_number:'FB-AUDIT-2',payload:auditOrders[1]},{onConflict:'order_id'});
+  await sdk.from('admin_data_store').upsert({...fixture.admin_data_store[0],payload:{...fixture.admin_data_store[0].payload,settings:{google_sheet_webhook_url:'https://script.google.com/macros/s/synthetic/exec'}}},{onConflict:'key'});
+  const forms=Array.from({length:38},(_,i)=>({id:'form-'+String(i).padStart(2,'0'),name:'Form '+i}));
+  const fullMetaFetch:any=async(input:any,options:any={})=>{
+    const url=new URL(String(input));
+    if(url.hostname==='script.google.com'){
+      const body=JSON.parse(options.body);assert.equal(body.action,'read_order');assert.deepEqual(Object.keys(body).sort(),['action','orderId']);
+      return new Response(JSON.stringify({ok:true,status:'order_checked',found:true,rows:1}));
+    }
+    assert.equal(options.headers.authorization,'Bearer synthetic-token');
+    if(url.pathname.endsWith('/me'))return Response.json({id:'page'});
+    if(url.pathname.endsWith('/leadgen_forms'))return Response.json(url.searchParams.has('after')?{data:forms.slice(20)}:{data:forms.slice(0,20),paging:{next:'present',cursors:{after:'forms-page-2'}}});
+    const id=url.pathname.split('/').at(-2);
+    if(id==='form-00'||id==='form-10')return Response.json({data:[{id:'audit-lead',created_time:auditNow}]});
+    if(id==='form-18')return Response.json({data:[{id:'missing-lead',created_time:auditNow}]});
+    if(id==='form-37')return Response.json(url.searchParams.has('after')?{data:[{id:'late-lead',created_time:auditNow}]}:{data:[],paging:{next:'present',cursors:{after:'leads-page-2'}}});
+    return Response.json({data:[{id:'old-lead',created_time:'2020-01-01T00:00:00Z'}]});
+  };
+  const auditPageScript=fs.readFileSync('public/fb-lead-audit.html','utf8').match(/<script>([\s\S]*?)<\/script>/)![1];
+  const runAuditPage=async(fetchPage:any)=>{
+    const els=new Map<string,any>();let intervals=0,cleared=0,copied='';
+    const el=(id:string)=>{if(!els.has(id))els.set(id,{textContent:'',value:'',disabled:id==='copy',focus(){},select(){}});return els.get(id);};
+    vm.runInNewContext(auditPageScript,{document:{getElementById:el},localStorage:{getItem:()=>token},AbortController,navigator:{clipboard:{writeText:async(value:string)=>{copied=value;}}},setInterval:()=>++intervals,clearInterval:()=>{cleared++;},setTimeout:(callback:any,ms:number)=>{if(ms<45000)queueMicrotask(callback);return 0;},clearTimeout:()=>{},fetch:async(path:string,options:any)=>{
+      assert.equal(el('copy').disabled,true,'Copy final report is unavailable while the audit runs');
+      const intermediate=JSON.parse(el('report').value);assert.equal(intermediate.status,'running');assert.equal(intermediate.complete,false);assert.equal(intermediate.checked_at,null);
+      return fetchPage(path,options);
+    }});
+    await el('run').onclick();assert.equal(intervals,cleared,'Progress heartbeat stops on success and failure');assert.equal(el('run').disabled,false);assert.equal(el('copy').disabled,false);
+    await el('copy').onclick();assert.equal(copied,el('report').value);
+    return {report:JSON.parse(el('report').value),status:el('status').textContent};
+  };
+  let retryCount=0;const offsets:number[]=[];
+  const fullPage=await runAuditPage(async(path:string,options:any)=>{
+    if(retryCount++===0)return new Response('Temporary upstream failure',{status:503});
+    const body=JSON.parse(options.body);if(body.action!=='sheet')offsets.push(body.offset);
+    return facebookLeadAuditHandler(new Request('https://test'+path,options),{...env,META_PAGE_ACCESS_TOKEN:'synthetic-token'},fullMetaFetch);
+  });
+  assert.equal(fullPage.report.complete,true);assert.equal(fullPage.report.status,'complete');assert.equal(fullPage.report.phase,'finished');
+  assert.equal(fullPage.report.forms_checked,38);assert.equal(fullPage.report.total_forms,38);assert.equal(fullPage.report.sheet_orders_checked,2);
+  assert.deepEqual(offsets,Array.from({length:19},(_,i)=>i*2));assert.equal(fullPage.report.leads.length,3,'Duplicate leads across forms are deduplicated');
+  assert.deepEqual(fullPage.report.summary,{facebook_leads:3,system_matched:2,missing_in_system:1,missing_or_partial_in_sheet:1});
+  assert(fullPage.status.includes('Audit complete.'));assert(fullPage.status.includes('38 / 38'));
+  const failedPage=await runAuditPage(async()=>new Response('Source unavailable',{status:503}));
+  assert.equal(failedPage.report.complete,false);assert.equal(failedPage.report.status,'incomplete');assert.equal(failedPage.report.forms_checked,0);assert.equal(failedPage.report.errors.length,1);
+  const truncatedPage=await runAuditPage(async()=>Response.json({ok:true,total_forms:38,forms_checked:0,next_offset:0,form_list:'forms',leads:[],errors:[],done:false}));
+  assert.equal(truncatedPage.report.complete,false);assert.equal(truncatedPage.report.errors.length,1,'No-progress responses must terminate instead of loop forever');
+  const partialSourcePage=await runAuditPage(async(path:string,options:any)=>facebookLeadAuditHandler(new Request('https://test'+path,options),{...env,META_PAGE_ACCESS_TOKEN:'synthetic-token'},async(input:any,init:any)=>String(input).includes('/form-18/leads')?Response.json({error:{code:4}},{status:429}):fullMetaFetch(input,init)));
+  assert.equal(partialSourcePage.report.forms_checked,38);assert.equal(partialSourcePage.report.complete,false);assert.equal(partialSourcePage.report.status,'incomplete');assert.equal(partialSourcePage.report.errors.length,1,'A failed source form prevents an all-clear result');
+  const partialSheetPage=await runAuditPage(async(path:string,options:any)=>{
+    if(JSON.parse(options.body).action==='sheet')return Response.json({ok:true,results:[]});
+    return facebookLeadAuditHandler(new Request('https://test'+path,options),{...env,META_PAGE_ACCESS_TOKEN:'synthetic-token'},fullMetaFetch);
+  });
+  assert.equal(partialSheetPage.report.complete,false);assert.equal(partialSheetPage.report.errors.length,1,'Missing Sheet read-back results must prevent completion');
+  const sourceFailure=await facebookLeadAuditHandler(auditRequest(token),{...env,META_PAGE_ACCESS_TOKEN:'synthetic-token'},async()=>{throw new Error('private details');});
+  assert.equal(sourceFailure!.status,503);assert(!(await sourceFailure!.text()).includes('private details'));
   rawBucket.failKey=active.prefix+'order_snapshots.json';
   const failed=await request('/api/orders/order-1','PUT',{order:fixture.orders[0]},token);
   assert.equal(failed.status,500,'A failed R2 write must never return success');rawBucket.failKey='';
@@ -164,4 +223,4 @@ try {
 const failing=new MemoryBucket();failing.failKey=ACTIVE_KEY;
 await assert.rejects(()=>importRecovery(failing,fixture));
 assert.equal(await activeData(failing),null);
-console.log('PASS: R2 persistence, concurrency, backups, auth, CSV page parsing/batches/re-upload, all Delivered fields and locks, protected Facebook audit, corruption and failed writes.');
+console.log('PASS: R2 persistence, concurrency, backups, auth, CSV parsing/batches/re-upload, Delivered fields and locks, 38-form audit page/pagination/retries/Sheet checks/incomplete sources, corruption and failed writes.');

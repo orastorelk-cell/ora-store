@@ -70,9 +70,12 @@ DELIVERED CSV AND FACEBOOK AUDIT
   It matches the current waybill/order, permits Shipped -> Delivered, preserves
   invoice/stock locks, updates delivery and tracking status, and skips repeats.
 - Sheet catch-up runs from cron, not each normal website/API request.
-- /fb-lead-audit.html compares today's Facebook leads, current R2 orders and
+- /fb-lead-audit compares today's Facebook leads, current R2 orders and
   physical Sheet rows. It requires an active Super Admin session, pages through
   form/lead results, and marks any failed/incomplete source as incomplete.
+  Requests check two forms concurrently, with bounded pagination. The page shows
+  checked forms and running/completed state, retries temporary HTTP failures,
+  and only offers a final report after every form and matched Sheet order check.
 
 LEGACY MEDIA RECOVERY
 - Website logo and black logo were recovered from exact repository copies,
