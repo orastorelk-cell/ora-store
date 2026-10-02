@@ -12,9 +12,9 @@ export default {
       // scans and could exhaust the Page leadgen API quota. The cron below is the
       // single backup/recovery runner; the webhook in indexV3 remains the real-time
       // path for new leads.
-      const response = await baseWorker.fetch(request, env, ctx);
-      scheduleFacebookLeadSheetCatchup(env, ctx);
-      return response;
+      // A normal dashboard read must not also scan, decrypt and rewrite recent
+      // orders in a background Sheet catch-up job. Cron owns that retry work.
+      return baseWorker.fetch(request, env, ctx);
     });
   },
   async scheduled(_controller: unknown, env: unknown, ctx: any) {

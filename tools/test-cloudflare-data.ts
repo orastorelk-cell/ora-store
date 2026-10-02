@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import vm from 'node:vm';
 import { createClient } from '@supabase/supabase-js';
 import { ACTIVE_KEY, activeData, configureCloudflareData, cloudflareDataFetch, dataBucket, importRecovery } from '../worker/cloudflareData';
 import { withR2DataFallback } from '../worker/r2RecoveryFallback';
+import { facebookLeadAuditHandler } from '../worker/facebookLeadAudit';
 
 class MemoryBucket {
   objects=new Map<string,{value:string;etag:string;customMetadata:any}>();
@@ -82,6 +85,24 @@ try {
   const staff=await request('/api/staff/login','POST',{username:'staff',password:'test-password'});
   assert.equal((await request('/api/admin/orders/bulk-import','POST',{orders:[]},staff.body.token)).status,403);
   assert.equal((await request('/api/orders','GET',undefined,token)).body.orders.length,6);
+  const fast=async(path:string,method='GET',body?:any,auth=token)=>withR2DataFallback(new Request('https://test'+path,{method,headers:{'content-type':'application/json',authorization:'Bearer '+auth},...(body?{body:JSON.stringify(body)}:{})}),env,{},async()=>new Response('Unexpected Node bridge call',{status:599}));
+  assert.equal((await fast('/api/orders')).status,200);
+  assert.equal((await (await fast('/api/orders/version')).json()).count,6);
+  assert.equal((await fast('/api/orders','GET',undefined,'invalid')).status,401);
+  assert.equal((await fast('/api/orders/delivered-csv','POST',{entries:[]},staff.body.token)).status,403);
+  const shipped={...fixture.orders[0],order_status:'Shipped',delivery_status:'Shipped',tracking_status:'Shipped',internal_delivery_fee:250};
+  await sdk.from('order_snapshots').upsert({order_id:shipped.id,order_number:shipped.order_number,payload:shipped},{onConflict:'order_id'});
+  const report={entries:[{waybill:'LOCK-1',order_number:'FB-000440',delivered_at:'2026-10-02T01:00:00Z',delivery_fee:0}]};
+  const delivered=await fast('/api/orders/delivered-csv','POST',report);
+  assert.equal(delivered.status,200);assert.equal((await delivered.json()).updated,1);
+  const durable=(await sdk.from('order_snapshots').select('payload').eq('order_id','order-1').single()).data?.payload;
+  assert.equal(durable.order_status,'Delivered');assert.equal(durable.delivery_status,'Delivered');assert.equal(durable.tracking_status,'Delivered');
+  assert.equal(durable.internal_delivery_fee,0);assert.equal(durable.invoice_locked,true);assert.equal(durable.stock_allocated,true);assert.equal(durable.waybill_number,'LOCK-1');
+  assert.equal(durable.invoice_pack_batch_id,'PACK-RESTOCK-1');
+  assert.equal((await (await fast('/api/orders/delivered-csv','POST',report)).json()).alreadyDelivered,1);
+  assert.equal((await sdk.from('order_snapshots').select('payload').eq('order_id','order-1').single()).data?.payload.fardar_tracking_history.length,1);
+  assert.equal((await (await fast('/api/orders/delivered-csv','POST',{entries:[{waybill:'LOCK-1',order_number:'FB-OTHER'}]})).json()).mismatch,1);
+  const badBatch=await fast('/api/orders/delivered-csv','POST',{entries:Array(21).fill({waybill:'LOCK-1'})});assert.equal(badBatch.status,400);
   const stale=await request('/api/orders/order-1','PUT',{order:{...fixture.orders[0],invoice_locked:false,waybill_number:'',stock_allocated:false,invoice_pack_batch_id:undefined}},token);
   assert.equal(stale.status,200);assert.equal(stale.body.order.waybill_number,'LOCK-1');
   assert.equal(stale.body.order.invoice_locked,true);assert.equal(stale.body.order.stock_allocated,true);
@@ -95,13 +116,45 @@ try {
   const newOrder={id:'imported',order_number:'FB-000900',customer_name:'Synthetic',phone:'0770000000',address:'Test',city:'Colombo',order_source:'Facebook Ads',payment_method:'COD',items:[{product_id:'p1',product_name:'Test',quantity:1,unit_price:5,subtotal:5}],created_at:new Date().toISOString()};
   const bulk=await request('/api/admin/orders/bulk-import','POST',{orders:[newOrder]},token);
   assert.equal(bulk.status,200,JSON.stringify(bulk.body));assert((await sdk.from('order_snapshots').select('*').eq('order_id','imported')).data?.length);
+
+  // Run the actual isolated CSV page's script against the authenticated Worker
+  // handlers. This covers parsing, batching, transient read failure and re-upload.
+  const csvOrders=Array.from({length:21},(_,i)=>({id:'csv-'+i,order_number:'FB-CSV-'+i,order_status:'Shipped',waybill_number:'CSV-'+i,invoice_locked:true,stock_allocated:true,items:[],created_at:new Date().toISOString()}));
+  await sdk.from('order_snapshots').upsert(csvOrders.map(order=>({order_id:order.id,order_number:order.order_number,payload:order})),{onConflict:'order_id'});
+  const elements=new Map<string,any>();
+  const element=(id:string)=>{if(!elements.has(id))elements.set(id,{style:{},textContent:'',handlers:new Map(),addEventListener(event:string,handler:any){this.handlers.set(event,handler);}});return elements.get(id);};
+  const pageScript=fs.readFileSync('public/delivered-upload.html','utf8').match(/<script>([\s\S]*?)<\/script>/)![1];
+  let transient=true,postedBatches=0;
+  vm.runInNewContext(pageScript,{document:{getElementById:element},localStorage:{getItem:()=>token},setTimeout:(callback:any)=>{callback();return 0;},fetch:async(path:string,options:any={})=>{
+    if(transient&&path==='/api/orders'){transient=false;return new Response(JSON.stringify({error:'temporary read failure'}),{status:503});}
+    if(path.endsWith('/delivered-csv')){postedBatches++;assert(JSON.parse(options.body).entries.length<=20);}
+    return withR2DataFallback(new Request('https://test'+path,options),env,{},async()=>new Response('Unexpected route',{status:599}));
+  }});
+  const csv='WAYBILL ID,DELIVERY STATUS,ORDER ID,DELIVERY FEE\n'+csvOrders.map(order=>order.waybill_number+',Delivered,'+order.order_number+',0').join('\n')+'\nCSV-0,Delivered,FB-CSV-0,0\nCSV-1,In Transit,FB-CSV-1,0';
+  element('csvFile').handlers.get('change')({target:{files:[{name:'synthetic.csv',text:async()=>csv}]}});
+  await element('uploadBtn').handlers.get('click')();
+  assert.equal(postedBatches,2);assert(element('message').textContent.includes('Updated Shipped → Delivered: 21'),element('message').textContent);
+  await element('uploadBtn').handlers.get('click')();
+  assert(element('message').textContent.includes('Already Delivered: 21'));
+  const csvSaved=(await sdk.from('order_snapshots').select('payload').eq('order_id','csv-0').single()).data?.payload;
+  assert.equal(csvSaved.internal_delivery_fee,0);assert.equal(csvSaved.invoice_locked,true);assert.equal(csvSaved.stock_allocated,true);assert.equal(csvSaved.fardar_tracking_history.length,1);
+
+  const auditNow=new Date().toISOString(),since=new Date(Date.now()-60000).toISOString();
+  await sdk.from('order_snapshots').upsert({order_id:'imported',order_number:newOrder.order_number,payload:{...newOrder,platform_lead_id:'audit-lead'}},{onConflict:'order_id'});
+  const auditRequest=(auth:string)=>new Request('https://test/api/admin/facebook-leads/audit',{method:'POST',headers:{authorization:'Bearer '+auth,'content-type':'application/json'},body:JSON.stringify({since,until:auditNow})});
+  assert.equal((await facebookLeadAuditHandler(auditRequest('invalid'),env))!.status,401);
+  assert.equal((await facebookLeadAuditHandler(auditRequest(staff.body.token),env))!.status,403);
+  const metaFetch:any=async(input:any)=>{const url=new URL(String(input));return new Response(JSON.stringify(url.pathname.endsWith('/me')?{id:'page'}:url.pathname.endsWith('/leadgen_forms')?{data:[{id:'form-1',name:'Test form'}]}:{data:[{id:'audit-lead',created_time:auditNow},{id:'missing-lead',created_time:auditNow}]}));};
+  const audited=await facebookLeadAuditHandler(auditRequest(token),{...env,META_PAGE_ACCESS_TOKEN:'synthetic-token'},metaFetch);
+  const audit:any=await audited!.json();assert(audit.done);assert.equal(audit.leads.length,2);assert.equal(audit.leads[0].order_number,newOrder.order_number);assert.equal(audit.leads[1].order_number,null);
   rawBucket.failKey=active.prefix+'order_snapshots.json';
   const failed=await request('/api/orders/order-1','PUT',{order:fixture.orders[0]},token);
   assert.equal(failed.status,500,'A failed R2 write must never return success');rawBucket.failKey='';
   const saved=rawBucket.objects.get(active.prefix+'order_snapshots.json')!;
-  rawBucket.objects.set(active.prefix+'order_snapshots.json',{...saved,value:'corrupt'});
+  rawBucket.objects.set(active.prefix+'order_snapshots.json',{...saved,value:'corrupt',etag:String(++rawBucket.revision)});
   const invalid=await request('/api/orders','GET',undefined,token);
   assert.equal(invalid.status,503,'Corrupt storage must not be shown as an empty database');
+  assert.equal((await fast('/api/orders')).status,503,'Fast reads must also fail on new corrupt data');
   rawBucket.objects.set(active.prefix+'order_snapshots.json',saved);
   const denied=await withR2DataFallback(new Request('https://test/api/cloudflare-recovery/import',{method:'POST',body:JSON.stringify(fixture)}),env,{},async()=>new Response('unreachable'));
   assert.equal(denied.status,410,'One-time imports are disabled after recovery');
@@ -111,4 +164,4 @@ try {
 const failing=new MemoryBucket();failing.failKey=ACTIVE_KEY;
 await assert.rejects(()=>importRecovery(failing,fixture));
 assert.equal(await activeData(failing),null);
-console.log('PASS: R2 recovery, SDK reads/writes/counts, concurrency, unique IDs, backups, auth, bulk import, invoice/waybill locks, corruption and failed-write handling.');
+console.log('PASS: R2 persistence, concurrency, backups, auth, CSV page parsing/batches/re-upload, all Delivered fields and locks, protected Facebook audit, corruption and failed writes.');

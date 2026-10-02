@@ -64,11 +64,19 @@ export const dataBucket = (env: unknown = runtime): DataBucket | null => {
   encryptedBuckets.set(bucket,{secret,bucket:wrapped});return wrapped;
 };
 const options = { httpMetadata:{contentType:'application/json',cacheControl:'no-store'}, customMetadata:{oraData:'1'} };
+const parsedCaches = new WeakMap<DataBucket,Map<string,{etag:string;value:any}>>();
 const parsedObject = async (bucket: DataBucket, key: string) => {
   const object = await bucket.get(key);
   if (!object) return null;
+  let cache=parsedCaches.get(bucket);
+  if(!cache){cache=new Map();parsedCaches.set(bucket,cache);}
+  const cached=cache.get(key);
+  if(cached?.etag===object.etag)return {object,value:cached.value};
   // Corruption and read failures must never be converted into an empty database.
-  return { object, value: JSON.parse(await object.text()) };
+  const value=JSON.parse(await object.text());
+  if(cache.size>=48)cache.delete(cache.keys().next().value!);
+  cache.set(key,{etag:object.etag,value});
+  return { object, value };
 };
 const response = (value: unknown, status = 200, extra: Record<string,string> = {}) => new Response(
   status === 204 ? null : JSON.stringify(value),
@@ -166,12 +174,31 @@ const mutateTable = async <T>(bucket:DataBucket,prefix:string,table:string,chang
   for(let attempt=0;attempt<8;attempt++) {
     const state = await tableState(bucket,prefix,table);
     const before = JSON.stringify(state.rows);
-    const result = change(state.rows);
+    // A failed CAS or write must never modify a cached successful read.
+    const rows=JSON.parse(before) as Row[];
+    const result = change(rows);
+    const after=JSON.stringify(rows);
+    if(before===after)return result;
     if (table !== '__sequences') await preserveHourlyBackup(bucket,table,JSON.parse(before));
-    const saved = await bucket.put(prefix+table+'.json',JSON.stringify(state.rows),{...options,onlyIf:{etagMatches:state.etag}});
+    const saved = await bucket.put(prefix+table+'.json',after,{...options,onlyIf:{etagMatches:state.etag}});
     if(saved) return result;
   }
   throw new DataError('Concurrent Cloudflare writes; refresh and retry.',409);
+};
+
+// Internal Worker access avoids serializing and parsing the entire operational
+// database through both the PostgREST SDK and the Node bridge on each CSV row.
+export const readDataTable=async(env:unknown,table:string):Promise<Row[]>=>{
+  if(!primaryKeys[table])throw new DataError('Unknown Cloudflare table.',400);
+  const bucket=dataBucket(env);if(!bucket)throw new DataError('Cloudflare R2 binding is unavailable.');
+  const active=await activeData(bucket);if(!active)throw new DataError('Cloudflare recovery is required.');
+  return (await tableState(bucket,active.prefix,table)).rows;
+};
+export const mutateDataTable=async<T>(env:unknown,table:string,change:(rows:Row[])=>T):Promise<T>=>{
+  if(!primaryKeys[table])throw new DataError('Unknown Cloudflare table.',400);
+  const bucket=dataBucket(env);if(!bucket)throw new DataError('Cloudflare R2 binding is unavailable.');
+  const active=await activeData(bucket);if(!active)throw new DataError('Cloudflare recovery is required.');
+  return mutateTable(bucket,active.prefix,table,change);
 };
 const recoverKnownBrandImages=async(bucket:DataBucket,prefix:string)=>{
   if(migratedBrandPrefixes.has(prefix))return;

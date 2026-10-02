@@ -61,6 +61,19 @@ IMPORTANT
 - Authenticated /api/cloudflare-recovery/status reports the current R2 count.
 - Regression check: node --import tsx tools/test-cloudflare-data.ts
 
+DELIVERED CSV AND FACEBOOK AUDIT
+- Authenticated order list/version reads use the Worker R2 path directly,
+  avoiding repeated whole-table serialization through the SDK and Node bridge.
+- Decrypted table caches are checked against a fresh R2 ETag on every read.
+  Failed writes never alter cached records; unchanged updates avoid extra writes.
+- Delivered CSV sends at most 20 delivery-only entries per atomic R2 write.
+  It matches the current waybill/order, permits Shipped -> Delivered, preserves
+  invoice/stock locks, updates delivery and tracking status, and skips repeats.
+- Sheet catch-up runs from cron, not each normal website/API request.
+- /fb-lead-audit.html compares today's Facebook leads, current R2 orders and
+  physical Sheet rows. It requires an active Super Admin session, pages through
+  form/lead results, and marks any failed/incomplete source as incomplete.
+
 LEGACY MEDIA RECOVERY
 - Website logo and black logo were recovered from exact repository copies,
   matched to Supabase object ETags, uploaded to R2, and their settings migrated.

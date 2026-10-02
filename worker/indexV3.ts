@@ -1,4 +1,5 @@
 import { cloudflareDataFetch } from './cloudflareData';
+import { facebookLeadAuditHandler } from './facebookLeadAudit';
 import fastWorker from './indexV2';
 import { facebookLeadAutoHandler } from './facebookLeadAuto';
 
@@ -202,6 +203,8 @@ const storageUsageHandler = async (request:Request, envValue:unknown):Promise<Re
 
 export default {
   async fetch(request:Request, env:unknown, ctx:unknown) {
+    const auditResponse=await facebookLeadAuditHandler(request,env);
+    if(auditResponse)return auditResponse;
     const leadResponse = await facebookLeadAutoHandler(request, env, ctx, fastWorker);
     if (leadResponse) return leadResponse;
 

@@ -1,4 +1,5 @@
-import { activeData, configureCloudflareData, dataBucket } from './cloudflareData';
+import { activeData, configureCloudflareData, dataBucket, readDataTable, mutateDataTable } from './cloudflareData';
+import { applyDeliveredReport, type DeliveredEntry } from '../src/lib/deliveredOrders';
 
 type Env = Record<string, any>;
 type StaffSession = { sub:string; role:'admin'|'staff'; exp:number };
@@ -13,15 +14,48 @@ const b64urlBytes=(value:string)=>{
   return out;
 };
 
-const bytesB64url=(bytes:Uint8Array)=>{
-  let binary='';
-  for(let i=0;i<bytes.length;i++)binary+=String.fromCharCode(bytes[i]);
-  return btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-};
-
 const hmac=async(secret:string,payload:string)=>{
   const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']);
   return new Uint8Array(await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(payload)));
+};
+
+export const verifyActiveStaff=async(request:Request,env:unknown)=>{
+  const session=await verifySession(request,env);if(!session)return null;
+  const users=await readDataTable(env,'admin_users');
+  return users.find(user=>String(user.id)===session.sub&&user.is_active!==false)||null;
+};
+
+const operationalHandler=async(request:Request,env:unknown):Promise<Response|null>=>{
+  const path=new URL(request.url).pathname;
+  const read=request.method==='GET'&&['/api/orders','/api/orders/version'].includes(path);
+  const delivered=request.method==='POST'&&path==='/api/orders/delivered-csv';
+  if(!read&&!delivered)return null;
+  const user=await verifyActiveStaff(request,env);
+  if(!user)return json({error:'Login session required.'},401);
+  if(read){
+    const rows=await readDataTable(env,'order_snapshots');
+    if(path.endsWith('/version')){
+      const updated_at=rows.reduce((latest,row)=>String(row.updated_at||'')>latest?String(row.updated_at||''):latest,'');
+      return json({count:rows.length,updated_at});
+    }
+    const orders=rows.map(row=>row.payload).filter(Boolean).sort((a,b)=>Date.parse(b.created_at||'')-Date.parse(a.created_at||''));
+    return json({orders});
+  }
+  if(user.role!=='admin'&&!['delivery','delivered_csv_upload'].some(permission=>(user.permissions||[]).includes(permission)))return json({error:'Delivered CSV permission required.'},403);
+  const body:any=await request.json().catch(()=>null);
+  if(!Array.isArray(body?.entries)||body.entries.length>20||body.entries.some((entry:any)=>!entry||typeof entry.waybill!=='string'||entry.waybill.length>100))return json({error:'Send at most 20 valid delivered report entries.'},400);
+  const saved=await mutateDataTable(env,'order_snapshots',rows=>{
+    // Apply only delivery fields to the current durable snapshot in the same
+    // ETag-guarded write. Other staff edits and invoice/stock locks are retained.
+    const result=applyDeliveredReport(rows.map(row=>row.payload).filter(Boolean),body.entries as DeliveredEntry[]);
+    const updates=new Map(result.updatedOrders.map(order=>[String(order.id),order]));
+    const now=new Date().toISOString();
+    let changed=0;
+    for(const row of rows){const order=updates.get(String(row.order_id));if(order){row.payload=order;row.updated_at=now;changed++;}}
+    if(changed!==result.updated)throw new Error('Invalid order identity; delivered update stopped.');
+    const {updatedOrders,...summary}=result;return summary;
+  });
+  return json({ok:true,...saved});
 };
 
 const verifySession=async(request:Request,envValue:unknown):Promise<StaffSession|null>=>{
@@ -78,6 +112,8 @@ export const withR2DataFallback=async(request:Request,env:unknown,_ctx:any,next:
   try {
     const recovery=await recoveryHandler(request,env);
     if(recovery)return recovery;
+    const operational=await operationalHandler(request,env);
+    if(operational)return operational;
     return await next();
   }catch(e:any){return json({error:e?.message||'Cloudflare data recovery failed.'},503);}
 };

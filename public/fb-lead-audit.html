@@ -1,0 +1,40 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>O-RA Facebook Order Audit</title><style>body{margin:0;background:#090909;color:#fff;font:15px system-ui,sans-serif}.wrap{max-width:850px;margin:30px auto;padding:22px}.card{padding:24px;border:1px solid #333;border-radius:18px;background:#151515}p{color:#bbb;line-height:1.6}button,a{display:inline-block;margin:8px 10px 16px 0;color:inherit}button{background:#34d399;border:0;border-radius:10px;padding:14px;font-weight:bold;color:#052e20;cursor:pointer}button:disabled{opacity:.5}textarea{box-sizing:border-box;width:100%;min-height:320px;background:#090909;color:#ddd;border:1px solid #444;border-radius:10px;padding:14px;font:12px monospace}#status{white-space:pre-wrap;line-height:1.7}</style></head><body><main class="wrap"><div class="card"><h1>Facebook Order Audit</h1><p>Compare today's Facebook leads with saved O-RA orders and Google Sheet rows. Sign in as Super Admin first.</p><a href="/system">Open O-RA System</a><button id="run">Check today's Facebook orders</button><div id="status">Ready to check.</div><textarea id="report" readonly aria-label="Audit result"></textarea></div></main><script>
+(()=>{
+const status=document.getElementById('status'),report=document.getElementById('report'),button=document.getElementById('run');
+const api=async(body)=>{
+  const token=localStorage.getItem('ora_staff_session_token')||'';
+  if(!token)throw new Error('Sign in as Super Admin at /system first.');
+  const r=await fetch('/api/admin/facebook-leads/audit',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+token},body:JSON.stringify(body),cache:'no-store'});
+  const d=await r.json();if(!r.ok)throw new Error(d.error||'Audit could not be completed.');return d;
+};
+button.onclick=async()=>{
+  button.disabled=true;report.value='';
+  const now=new Date(),localDate=new Date(now.getTime()+330*60000).toISOString().slice(0,10);
+  const window={since:new Date(localDate+'T00:00:00+05:30').toISOString(),until:now.toISOString()};
+  const result={...window,checked_at:now.toISOString(),complete:false,total_forms:0,leads:[],sheet:[],errors:[]};
+  try{
+    let offset=0,form_list='';const leads=new Map();
+    while(true){
+      status.textContent='Checking Facebook forms: '+offset+' / '+(result.total_forms||'…');
+      const d=await api({...window,offset,form_list});
+      result.total_forms=d.total_forms;form_list=d.form_list;result.errors.push(...d.errors);
+      d.leads.forEach(lead=>leads.set(lead.lead_id,lead));offset=d.next_offset;
+      result.leads=Array.from(leads.values());report.value=JSON.stringify(result,null,2);
+      if(d.done)break;
+    }
+    const numbers=Array.from(new Set(result.leads.map(lead=>lead.order_number).filter(Boolean)));
+    for(let offset=0;offset<numbers.length;offset+=5){
+      status.textContent='Checking Google Sheet rows: '+offset+' / '+numbers.length;
+      const d=await api({...window,action:'sheet',order_numbers:numbers.slice(offset,offset+5)});
+      result.sheet.push(...d.results);
+    }
+    const missing=result.leads.filter(lead=>!lead.order_number),sheetMissing=result.sheet.filter(row=>!row.error&&(!row.found||row.rows<row.expected_rows));
+    result.complete=result.errors.length===0&&result.sheet.every(row=>!row.error);
+    result.summary={facebook_leads:result.leads.length,system_matched:result.leads.length-missing.length,missing_in_system:missing.length,missing_or_partial_in_sheet:sheetMissing.length};
+    status.textContent=(result.complete?'Audit complete.':'Audit incomplete — some source data could not be verified.')+'\nFacebook leads: '+result.leads.length+'\nMatched in O-RA: '+result.summary.system_matched+'\nMissing in O-RA: '+missing.length+'\nMissing / partial Sheet orders: '+sheetMissing.length;
+    report.value=JSON.stringify(result,null,2);
+  }catch(error){result.errors.push(error.message||String(error));status.textContent='Audit incomplete: '+(error.message||String(error));report.value=JSON.stringify(result,null,2);}
+  finally{button.disabled=false;}
+};
+})();
+</script></body></html>

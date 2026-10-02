@@ -65,7 +65,7 @@
   <script>
     (() => {
       const $ = (id) => document.getElementById(id);
-      const token = localStorage.getItem('ora_staff_session_token') || '';
+      const sessionToken = () => localStorage.getItem('ora_staff_session_token') || '';
       let orders = [];
       let selectedFile = null;
 
@@ -123,19 +123,26 @@
       };
 
       const api = async (url, options = {}) => {
-        const headers = { ...(options.headers || {}), ...(token ? { Authorization: 'Bearer ' + token } : {}) };
-        const response = await fetch(url, { ...options, headers, cache: 'no-store' });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data?.error || ('Request failed: ' + response.status));
-        return data;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const token = sessionToken();
+          const headers = { ...(options.headers || {}), ...(token ? { Authorization: 'Bearer ' + token } : {}) };
+          const response = await fetch(url, { ...options, headers, cache: 'no-store' });
+          const data = await response.json().catch(() => ({}));
+          if (response.ok) return data;
+          if ([429, 503].includes(response.status) && attempt < 2) {
+            await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+            continue;
+          }
+          throw new Error([data?.error || ('Request failed: ' + response.status), data?.detail].filter(Boolean).join(' '));
+        }
       };
 
       const refreshOrders = async () => {
-        if (!token) {
+        if (!sessionToken()) {
           $('shippedCount').textContent = '—';
           $('deliveredCount').textContent = '—';
           setMessage('Admin login session not found. Open this page from the O-RA Admin System after logging in.', 'error');
-          return;
+          throw new Error('Admin login session not found.');
         }
         try {
           const data = await api('/api/orders');
@@ -144,6 +151,7 @@
           $('deliveredCount').textContent = String(orders.filter((o) => statusKey(o.order_status) === 'delivered').length);
         } catch (error) {
           setMessage('Could not load system orders. ' + (error?.message || error), 'error');
+          throw error;
         }
       };
 
@@ -185,65 +193,34 @@
           let failed = 0;
           const details = [];
 
-          for (const [wb, row] of unique.entries()) {
-            const order = orders.find((candidate) => key(candidate?.waybill_number) === wb);
-            if (!order) {
-              notFound += 1;
-              if (details.length < 20) details.push('NOT FOUND: ' + String(row[waybillI] || wb));
-              continue;
-            }
-
-            const csvOrderId = orderIdI >= 0 ? String(row[orderIdI] || '').trim() : '';
-            if (/^(FB|TK|WEB|MAN)-/i.test(csvOrderId) && key(csvOrderId) !== key(order.order_number)) {
-              mismatch += 1;
-              if (details.length < 20) details.push('ORDER ID MISMATCH: ' + String(row[waybillI] || wb) + ' | CSV ' + csvOrderId + ' | System ' + String(order.order_number || ''));
-              continue;
-            }
-
-            const currentStatus = statusKey(order.order_status);
-            if (currentStatus === 'delivered') {
-              alreadyDelivered += 1;
-              continue;
-            }
-            if (currentStatus !== 'shipped') {
-              notShipped += 1;
-              if (details.length < 20) details.push('SKIPPED NOT SHIPPED: ' + String(order.order_number || '') + ' | ' + String(order.order_status || ''));
-              continue;
-            }
-
-            const at = scanI >= 0 ? parseDateIso(row[scanI]) : new Date().toISOString();
-            const actualDeliveryFee = deliveryFeeI >= 0 ? parseMoney(row[deliveryFeeI]) : undefined;
-            const history = Array.isArray(order.fardar_tracking_history) ? order.fardar_tracking_history : [];
-            const updatedOrder = {
-              ...order,
-              order_status: 'Delivered',
-              delivery_status: 'Delivered',
-              tracking_status: 'Delivered',
-              fardar_tracking_updated_at: at,
-              ...(actualDeliveryFee !== undefined ? { internal_delivery_fee: actualDeliveryFee } : {}),
-              fardar_tracking_history: [...history, { status: 'Delivered', at, note: 'Fardar Delivered CSV Upload' }],
-            };
-
+          let ambiguous = 0;
+          const reportEntries = Array.from(unique.values()).map(row => ({
+            waybill: String(row[waybillI] || '').trim(),
+            order_number: orderIdI >= 0 ? String(row[orderIdI] || '').trim() : '',
+            delivered_at: scanI >= 0 ? parseDateIso(row[scanI]) : new Date().toISOString(),
+            ...(deliveryFeeI >= 0 && String(row[deliveryFeeI] || '').trim() ? { delivery_fee: parseMoney(row[deliveryFeeI]) } : {}),
+          }));
+          for (let offset = 0; offset < reportEntries.length; offset += 20) {
+            $('uploadBtn').textContent = 'Saving ' + Math.min(offset + 20, reportEntries.length) + ' / ' + reportEntries.length;
             try {
-              await api('/api/orders/' + encodeURIComponent(order.id), {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ order: updatedOrder }),
+              const saved = await api('/api/orders/delivered-csv', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ entries: reportEntries.slice(offset, offset + 20) }),
               });
-              order.order_status = 'Delivered';
-              order.delivery_status = 'Delivered';
-              order.tracking_status = 'Delivered';
-              order.fardar_tracking_updated_at = at;
-              order.fardar_tracking_history = updatedOrder.fardar_tracking_history;
-              if (actualDeliveryFee !== undefined) order.internal_delivery_fee = actualDeliveryFee;
-              updated += 1;
+              updated += Number(saved.updated || 0);
+              alreadyDelivered += Number(saved.alreadyDelivered || 0);
+              notFound += Number(saved.notFound || 0);
+              notShipped += Number(saved.notShipped || 0);
+              mismatch += Number(saved.mismatch || 0);
+              ambiguous += Number(saved.ambiguous || 0);
+              details.push(...(saved.details || []).slice(0, Math.max(0, 20 - details.length)));
             } catch (error) {
-              failed += 1;
-              if (details.length < 20) details.push('FAILED: ' + String(order.order_number || '') + ' | ' + (error?.message || error));
+              failed += reportEntries.length - offset;
+              details.push('UPLOAD STOPPED: ' + (error?.message || error) + '. Re-upload the same CSV to retry remaining rows; saved Delivered orders are skipped.');
+              break;
             }
           }
-
-          await refreshOrders();
+          await refreshOrders().catch(error => details.push('Reload check failed: ' + (error?.message || error)));
           const summary = [
             'Delivered CSV processed safely.',
             '',
@@ -253,6 +230,7 @@
             'Waybill Not Found: ' + notFound,
             'Skipped (not Shipped): ' + notShipped,
             'Order ID mismatch blocked: ' + mismatch,
+            'Duplicate waybill blocked: ' + ambiguous,
             'Failed updates: ' + failed,
             details.length ? '\nDetails:\n' + details.join('\n') : '',
           ].filter(Boolean).join('\n');
@@ -271,7 +249,7 @@
         $('uploadBtn').disabled = !selectedFile;
       });
       $('uploadBtn').addEventListener('click', processFile);
-      refreshOrders();
+      refreshOrders().catch(() => {});
     })();
   </script>
 </body>

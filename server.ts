@@ -86,6 +86,7 @@ import crypto from "crypto";
 import fs from "fs";
 import { createClient } from "@supabase/supabase-js";
 import { cloudflareDataFetch } from "./worker/cloudflareData";
+import { applyDeliveredReport } from './src/lib/deliveredOrders';
 import { validateProductBackup } from "./src/lib/productBackup";
 
 dotenv.config();
@@ -2246,6 +2247,19 @@ app.post('/api/orders/invoice-download-status', requireAdminSession, async (req,
     return res.status(500).json({error:e?.message || 'Invoice download status could not be saved.'});
   }
 });
+// The live Worker applies these delivery-only fields atomically in R2. Keep the
+// same isolated CSV flow available on the local Express development server.
+app.post('/api/orders/delivered-csv', requireStaffAnyPermission(['delivery','delivered_csv_upload']), async (req,res)=>{
+  const entries=req.body?.entries;
+  if(!Array.isArray(entries)||entries.length>20||entries.some((entry:any)=>!entry||typeof entry.waybill!=='string'||entry.waybill.length>100))return res.status(400).json({error:'Send at most 20 valid delivered report entries.'});
+  try{
+    const result=applyDeliveredReport(await getOrderSnapshots(),entries);
+    await saveOrderSnapshotsBatch(result.updatedOrders);
+    const {updatedOrders,...summary}=result;
+    return res.json({ok:true,...summary});
+  }catch(error:any){return res.status(503).json({error:error?.message||'Delivered report could not be saved.'});}
+});
+
 app.post('/api/orders/:id/dispatch-scan', requireAdminSession, async (req,res)=>{
   try{
     const id=String(req.params.id || '').trim();
