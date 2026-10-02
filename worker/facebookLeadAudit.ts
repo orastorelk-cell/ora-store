@@ -14,8 +14,8 @@ export const facebookLeadAuditHandler=async(request:Request,env:any,fetcher:type
   const body:any=await request.json().catch(()=>null);
   const since=Date.parse(body?.since||''),until=Date.parse(body?.until||'');
   if(!Number.isFinite(since)||!Number.isFinite(until)||since>until||since<Date.now()-3*86400000||until>Date.now()+60000)return json({error:'Choose a valid audit window within the last three days.'},400);
-  const orders=(await readDataTable(env,'order_snapshots')).map(row=>row.payload).filter(Boolean);
   if(body?.action==='sheet'){
+    const orders=(await readDataTable(env,'order_snapshots')).map(row=>row.payload).filter(Boolean);
     if(!Array.isArray(body.order_numbers)||body.order_numbers.length>5)return json({error:'Check at most five orders per request.'},400);
     const state=(await readDataTable(env,'admin_data_store')).find(row=>row.key==='storefront-state-v1')?.payload;
     const webhook=String(state?.settings?.google_sheet_webhook_url||'');
@@ -55,7 +55,6 @@ export const facebookLeadAuditHandler=async(request:Request,env:any,fetcher:type
   const offset=Number(body.offset||0);
   if(!Number.isInteger(offset)||offset<0||offset>forms.length)return json({error:'Invalid audit offset.'},400);
   const selected=forms.slice(offset,offset+8),leads:any[]=[],errors:string[]=[];
-  const byLead=new Map(orders.map(order=>[leadKey(order.platform_lead_id),order]));
   for(const form of selected){
     let cursor='';
     try{
@@ -64,8 +63,7 @@ export const facebookLeadAuditHandler=async(request:Request,env:any,fetcher:type
         for(const lead of data.data||[]){
           const created=Date.parse(lead.created_time);
           if(!Number.isFinite(created)||created<since||created>until)continue;
-          const order=byLead.get(leadKey(lead.id));
-          leads.push({lead_id:String(lead.id),created_at:lead.created_time,form_name:String(form.name||form.id),order_number:order?.order_number||null});
+          leads.push({lead_id:String(lead.id),created_at:lead.created_time,form_name:String(form.name||form.id)});
         }
         cursor=data.paging?.next?String(data.paging?.cursors?.after||''):'';
         if(!cursor)break;
@@ -73,5 +71,10 @@ export const facebookLeadAuditHandler=async(request:Request,env:any,fetcher:type
       if(cursor)errors.push(String(form.name||form.id)+': Lead list incomplete.');
     }catch(error:any){errors.push(String(form.name||form.id)+': '+String(error.message||'Facebook read failed.'));}
   }
-  return json({ok:true,form_list:ids,total_forms:forms.length,forms_checked:selected.length,next_offset:offset+selected.length,done:offset+selected.length>=forms.length,leads,errors});
+  // Leads can finish importing while Meta is responding. Compare against the
+  // latest ETag-validated R2 snapshot after the scan, rather than an earlier read.
+  const orders=(await readDataTable(env,'order_snapshots')).map(row=>row.payload).filter(Boolean);
+  const byLead=new Map(orders.map(order=>[leadKey(order.platform_lead_id),order]));
+  const compared=leads.map(lead=>({...lead,order_number:byLead.get(leadKey(lead.lead_id))?.order_number||null}));
+  return json({ok:true,form_list:ids,total_forms:forms.length,forms_checked:selected.length,next_offset:offset+selected.length,done:offset+selected.length>=forms.length,leads:compared,errors});
 };
