@@ -33,7 +33,7 @@ const adminId='10000000-0000-0000-0000-000000000001',staffId='10000000-0000-0000
 const fixture={format:'ora-r2-recovery-v1',exported_at:'2026-10-02T00:00:00Z',
   orders:[{id:'order-1',order_number:'FB-000440',customer_name:'Test',created_at:'2026-10-01T00:00:00Z',invoice_locked:true,waybill_number:'LOCK-1',invoice_pack_batch_id:'PACK-RESTOCK-1',stock_allocated:true,items:[]}],
   admin_users:[{id:adminId,username:'admin',display_name:'Admin',role:'admin',password_hash:passwordHash,is_active:true},{id:staffId,username:'staff',role:'staff',password_hash:passwordHash,is_active:true,permissions:['overview']}],
-  admin_data_store:[{key:'storefront-state-v1',updated_at:'2026-10-01T00:00:00Z',payload:{version:1,updated_at:'2026-10-01T00:00:00Z',products:[{id:'p1',sku:'R1'}],categories:[{id:'c1'}],settings:{google_sheet_webhook_url:'',admin_secret_path:'private'}}}],
+  admin_data_store:[{key:'storefront-state-v1',updated_at:'2026-10-01T00:00:00Z',payload:{version:1,updated_at:'2026-10-01T00:00:00Z',products:[{id:'p1',sku:'R1'}],categories:[{id:'c1'}],settings:{google_sheet_webhook_url:'',admin_secret_path:'private',website_logo:'https://xoipahpyxatdafhqkzcr.supabase.co/storage/v1/object/public/ora-public-media/branding-1786881008119-eafc5b2520.png'}}}],
   courier_waybills:[{waybill_number:'LOCK-1',status:'Assigned',assigned_order_number:'FB-000440'}],
   tables:{fardar_cities:[{id:'city-1',name:'Colombo',district:'Colombo',code:'1'}]},
 };
@@ -89,6 +89,7 @@ try {
   const storefront=await request('/api/storefront/state');
   assert.equal(storefront.body.state.products.length,1);
   assert.equal(storefront.body.state.settings.admin_secret_path,undefined);
+  assert(storefront.body.state.settings.website_logo.startsWith('/api/media/media/branding/'),'Known original logo must load from R2');
   assert.equal((await request('/api/admin-data/arbitrary-key','PUT',{payload:[]},token)).status,404);
   assert.equal((await request('/api/admin/packing-expenses','PUT',{expenses:[{id:'e1',expense_date:'2026-10-02',material_name:'Tape',quantity:2,unit_cost:5}]},token)).status,200);
   const newOrder={id:'imported',order_number:'FB-000900',customer_name:'Synthetic',phone:'0770000000',address:'Test',city:'Colombo',order_source:'Facebook Ads',payment_method:'COD',items:[{product_id:'p1',product_name:'Test',quantity:1,unit_price:5,subtotal:5}],created_at:new Date().toISOString()};

@@ -60,3 +60,11 @@ IMPORTANT
   after successful recovery. /api/cloudflare-recovery/import returns 410.
 - Authenticated /api/cloudflare-recovery/status reports the current R2 count.
 - Regression check: node --import tsx tools/test-cloudflare-data.ts
+
+LEGACY MEDIA RECOVERY
+- Website logo and black logo were recovered from exact repository copies,
+  matched to Supabase object ETags, uploaded to R2, and their settings migrated.
+- Supabase Storage returns 402 for the remaining original white_logo and
+  legacy hero_banners[0].image. Their references are preserved; neither original
+  file exists in the repository. Re-upload those two originals to R2 when they
+  become available. Product images already use R2.

@@ -20,6 +20,13 @@ const legacyKeys: Record<string,string> = {
   order_snapshots:'ora-data/orders-v1.json', admin_data_store:'ora-data/admin-data-v1.json',
   admin_users:'ora-data/admin-users-v1.json', courier_waybills:'ora-data/courier-waybills-v1.json',
 };
+// These two originals were recovered byte-for-byte from the repository and
+// checked against storage.objects ETags before being uploaded to R2.
+const recoveredBrandImages=new Map<string,string>([
+  ['https://xoipahpyxatdafhqkzcr.supabase.co/storage/v1/object/public/ora-public-media/branding-1786881008119-eafc5b2520.png','/api/media/media/branding/2026/10/02/1790916184720-b7eef2808f2e4990.png'],
+  ['https://xoipahpyxatdafhqkzcr.supabase.co/storage/v1/object/public/ora-public-media/branding-1786925282175-19bb77b878.png','/api/media/media/branding/2026/10/02/1790916182739-cae1090f295a44e7.png'],
+]);
+const migratedBrandPrefixes=new Set<string>();
 let runtime: Runtime | undefined;
 const networkFetch = globalThis.fetch.bind(globalThis);
 export const configureCloudflareData = (env: unknown) => { runtime = env as Runtime; };
@@ -166,6 +173,23 @@ const mutateTable = async <T>(bucket:DataBucket,prefix:string,table:string,chang
   }
   throw new DataError('Concurrent Cloudflare writes; refresh and retry.',409);
 };
+const recoverKnownBrandImages=async(bucket:DataBucket,prefix:string)=>{
+  if(migratedBrandPrefixes.has(prefix))return;
+  const state=await tableState(bucket,prefix,'admin_data_store');
+  const settings=state.rows.find(row=>row.key==='storefront-state-v1')?.payload?.settings;
+  if(settings && ['website_logo','black_logo'].some(field=>recoveredBrandImages.get(settings[field]))) {
+    await mutateTable(bucket,prefix,'admin_data_store',rows=>{
+      const row=rows.find(row=>row.key==='storefront-state-v1');if(!row?.payload?.settings)return;
+      let changed=false;
+      for(const field of ['website_logo','black_logo']) {
+        const url=recoveredBrandImages.get(row.payload.settings[field]);
+        if(url){row.payload.settings[field]=url;changed=true;}
+      }
+      if(changed){row.updated_at=new Date().toISOString();row.payload.updated_at=row.updated_at;row.payload.version=Number(row.payload.version||1)+1;}
+    });
+  }
+  migratedBrandPrefixes.add(prefix);
+};
 const fieldValue = (row:Row,field:string) => field.split(/->>?/).reduce((value,key)=>value?.[key],row as any);
 const compare = (a:any,b:any) => a===b ? 0 : a==null ? -1 : b==null ? 1 : a>b ? 1 : -1;
 const filterMatch = (row:Row,field:string,expression:string) => {
@@ -243,6 +267,7 @@ export const cloudflareDataFetch: typeof fetch = async (input,init) => {
     const active=await activeData(bucket);
     if(!active) throw new DataError('Restore the O-RA recovery snapshot into Cloudflare R2 first.');
     const resource=decodeURIComponent(url.pathname.slice('/rest/v1/'.length));
+    if(resource==='admin_data_store')await recoverKnownBrandImages(bucket,active.prefix);
     if(resource.startsWith('rpc/')) return await rpc(request,bucket,active.prefix,resource.slice(4));
     if(!primaryKeys[resource]) return response({message:'Unsupported Cloudflare table: '+resource},501);
     let rows:Row[];
@@ -259,6 +284,12 @@ export const cloudflareDataFetch: typeof fetch = async (input,init) => {
           const upsert=String(request.headers.get('prefer')||'').includes('resolution=merge-duplicates');
           for(const value of incoming) {
             const row={...value};
+            if(resource==='admin_data_store' && row.key==='storefront-state-v1' && row.payload?.settings){
+              row.payload={...row.payload,settings:{...row.payload.settings}};
+              for(const field of ['website_logo','black_logo']){
+                const url=recoveredBrandImages.get(row.payload.settings[field]);if(url)row.payload.settings[field]=url;
+              }
+            }
             if(row[pk]==null && pk==='id')row.id=crypto.randomUUID();
             if(row[pk]==null)throw new DataError('Missing record key for '+resource,400);
             const at=current.findIndex(item=>String(item[pk])===String(row[pk]));
