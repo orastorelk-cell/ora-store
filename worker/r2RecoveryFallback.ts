@@ -231,7 +231,12 @@ const r2Direct=async(request:Request,envValue:unknown):Promise<Response|null>=>{
     const users=await readJson<any[]>(bucket,USERS_KEY,[]);
     const username=String(body?.username||'').trim().toLowerCase();
     const user=users.find((u:any)=>String(u?.username||'').trim().toLowerCase()===username);
-    if(!user||!(await verifyPassword(String(body?.password||''),String(user?.password_hash||''),envValue))){
+    if(!user)return json({error:'Invalid username or password.'},401);
+    // Older admin/staff accounts still use the legacy Node scrypt format.
+    // Let the existing Express login path verify those with node:crypto instead
+    // of falsely rejecting them in the WebCrypto-only R2 layer.
+    if(!String(user?.password_hash||'').startsWith('cfhmac:'))return null;
+    if(!(await verifyPassword(String(body?.password||''),String(user?.password_hash||''),envValue))){
       return json({error:'Invalid username or password.'},401);
     }
     if(user.is_active===false)return json({error:'This account is disabled.'},403);
