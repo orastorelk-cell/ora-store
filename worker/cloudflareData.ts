@@ -1,10 +1,12 @@
 // Private R2 persistence for the existing server repository. Business rules and
 // authorization stay in Express; this implements only the REST queries it uses.
 import { Buffer } from 'node:buffer';
+import { constants as zlibConstants, gzip, gunzip } from 'node:zlib';
 type Row = Record<string, any>;
 export type DataBucket = {
   get(key: string): Promise<{ text(): Promise<string>; etag: string; customMetadata?: Record<string,string> } | null>;
   put(key: string, value: string, options?: any): Promise<{ etag: string } | null>;
+  compact?(key:string):Promise<'compacted'|'skipped'|'conflict'>;
 };
 type Runtime = Record<string, any>;
 export const ACTIVE_KEY = 'ora-data/active-v2.json';
@@ -30,38 +32,68 @@ const migratedBrandPrefixes=new Set<string>();
 let runtime: Runtime | undefined;
 const networkFetch = globalThis.fetch.bind(globalThis);
 export const configureCloudflareData = (env: unknown) => { runtime = env as Runtime; };
-const encryptedBuckets=new WeakMap<object,{secret:string;bucket:DataBucket}>();
+export const compressionEnabled=(env:unknown)=>String((env as Runtime)?.ORA_R2_COMPRESSION_ENABLED||'')==='1';
+const gzipFast=(bytes:Uint8Array)=>new Promise<Buffer>((resolve,reject)=>gzip(bytes,{level:zlibConstants.Z_BEST_SPEED},(error,result)=>error?reject(error):resolve(result)));
+const unzip=(bytes:Uint8Array)=>new Promise<Buffer>((resolve,reject)=>gunzip(bytes,(error,result)=>error?reject(error):resolve(result)));
+const encryptedBuckets=new WeakMap<object,{secret:string;compress:boolean;bucket:DataBucket}>();
 export const dataBucket = (env: unknown = runtime): DataBucket | null => {
   const bucket = (env as Runtime)?.ORA_MEDIA_R2;
   if(!bucket?.get || !bucket?.put)return null;
   const secret=String((env as Runtime)?.STAFF_SESSION_SECRET||(env as Runtime)?.ABUSE_HASH_SALT||'');
+  const compress=compressionEnabled(env);
   if(!secret)throw new Error('A private STAFF_SESSION_SECRET is required for Cloudflare data storage.');
   const existing=encryptedBuckets.get(bucket);
-  if(existing?.secret===secret)return existing.bucket;
+  if(existing?.secret===secret&&existing.compress===compress)return existing.bucket;
   const key=crypto.subtle.digest('SHA-256',new TextEncoder().encode('ora-r2-data-v2:'+secret))
     .then(bytes=>crypto.subtle.importKey('raw',bytes,'AES-GCM',false,['encrypt','decrypt']));
+  const decode=async(path:string,text:string)=>{
+    const envelope=JSON.parse(text);
+    if(['ora-aes-gcm-v1','ora-aes-gcm-v2'].includes(envelope?.format)) {
+      const compressed=envelope.format==='ora-aes-gcm-v2';
+      if(compressed&&envelope.encoding!=='gzip')throw new Error('Unsupported private data encoding.');
+      const context=compressed?path+'\nora-aes-gcm-v2:gzip':path;
+      const plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:Buffer.from(envelope.iv,'base64'),additionalData:new TextEncoder().encode(context)},await key,Buffer.from(envelope.data,'base64'));
+      return new TextDecoder().decode(compressed?await unzip(new Uint8Array(plain)):plain);
+    }
+    if(Object.values(legacyKeys).includes(path)||path===META_KEY)return text;
+    throw new Error('Unencrypted or corrupt Cloudflare data: '+path);
+  };
+  const encode=async(path:string,value:string)=>{
+    let plain:Uint8Array=new TextEncoder().encode(value),compressed=false;
+    // Native level-1 gzip keeps CPU work low. Tiny/incompressible objects stay
+    // v1, so compression must make the stored envelope meaningfully smaller.
+    if(compress&&plain.byteLength>=1024){
+      const packed=await gzipFast(plain);
+      if(packed.byteLength+96<plain.byteLength){plain=new Uint8Array(packed);compressed=true;}
+    }
+    const iv=crypto.getRandomValues(new Uint8Array(12));
+    const context=compressed?path+'\nora-aes-gcm-v2:gzip':path;
+    const encrypted=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:new TextEncoder().encode(context)},await key,plain);
+    return {compressed,text:JSON.stringify({format:compressed?'ora-aes-gcm-v2':'ora-aes-gcm-v1',...(compressed?{encoding:'gzip'}:{}),iv:Buffer.from(iv).toString('base64'),data:Buffer.from(encrypted).toString('base64')})};
+  };
   const wrapped:DataBucket={
     async get(path) {
       const object=await bucket.get(path);if(!object)return null;
       return {etag:object.etag,customMetadata:object.customMetadata,text:async()=>{
-        const text=await object.text();const envelope=JSON.parse(text);
-        if(envelope?.format==='ora-aes-gcm-v1') {
-          const plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:Buffer.from(envelope.iv,'base64'),additionalData:new TextEncoder().encode(path)},await key,Buffer.from(envelope.data,'base64'));
-          return new TextDecoder().decode(plain);
-        }
-        // Read old v1 backups only during migration. New operational objects
-        // must be encrypted even if the media bucket is later made public.
-        if(Object.values(legacyKeys).includes(path)||path===META_KEY)return text;
-        throw new Error('Unencrypted or corrupt Cloudflare data: '+path);
+        return decode(path,await object.text());
       }};
     },
     async put(path,value,settings) {
-      const iv=crypto.getRandomValues(new Uint8Array(12));
-      const encrypted=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:new TextEncoder().encode(path)},await key,new TextEncoder().encode(value));
-      return bucket.put(path,JSON.stringify({format:'ora-aes-gcm-v1',iv:Buffer.from(iv).toString('base64'),data:Buffer.from(encrypted).toString('base64')}),settings);
+      return bucket.put(path,(await encode(path,value)).text,settings);
+    },
+    async compact(path){
+      if(!compress)return 'skipped';
+      const object=await bucket.get(path);if(!object)return 'skipped';
+      const original=await object.text();if(JSON.parse(original)?.format!=='ora-aes-gcm-v1')return 'skipped';
+      const value=await decode(path,original),packed=await encode(path,value);
+      if(!packed.compressed)return 'skipped';
+      // Check the exact Unicode/JSON string before touching the durable object.
+      if(await decode(path,packed.text)!==value)throw new Error('Lossless data compression verification failed.');
+      const saved=await bucket.put(path,packed.text,{httpMetadata:{contentType:'application/json',cacheControl:'no-store'},customMetadata:object.customMetadata,onlyIf:{etagMatches:object.etag}});
+      return saved?'compacted':'conflict';
     },
   };
-  encryptedBuckets.set(bucket,{secret,bucket:wrapped});return wrapped;
+  encryptedBuckets.set(bucket,{secret,compress,bucket:wrapped});return wrapped;
 };
 const options = { httpMetadata:{contentType:'application/json',cacheControl:'no-store'}, customMetadata:{oraData:'1'} };
 const parsedCaches = new WeakMap<DataBucket,Map<string,{etag:string;value:any}>>();

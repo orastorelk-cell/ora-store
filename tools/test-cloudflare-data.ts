@@ -6,11 +6,17 @@ import { createClient } from '@supabase/supabase-js';
 import { ACTIVE_KEY, activeData, configureCloudflareData, cloudflareDataFetch, dataBucket, importRecovery } from '../worker/cloudflareData';
 import { withR2DataFallback } from '../worker/r2RecoveryFallback';
 import { facebookLeadAuditHandler } from '../worker/facebookLeadAudit';
+import { compactR2StorageOnce } from '../worker/r2StorageCompression';
+import { r2MediaHandler } from '../worker/r2PublicMedia';
 
 class MemoryBucket {
   objects=new Map<string,{value:string;etag:string;customMetadata:any}>();
   revision=0;
   failKey='';
+  async list({prefix='',limit=1000,cursor=''}={}){
+    const all=[...this.objects.keys()].filter(key=>key.startsWith(prefix)&&key>cursor).sort();
+    const keys=all.slice(0,limit);return {objects:keys.map(key=>({key})),truncated:all.length>keys.length,cursor:keys.at(-1)};
+  }
   async get(key:string) {
     const value=this.objects.get(key);
     await Promise.resolve();
@@ -27,7 +33,7 @@ class MemoryBucket {
 }
 const rawBucket=new MemoryBucket();
 const secret='test-service-secret',sessionSecret='test-session-secret';
-const env={ORA_MEDIA_R2:rawBucket,VITE_SUPABASE_URL:'https://test.supabase.co',SUPABASE_SECRET_KEY:secret,STAFF_SESSION_SECRET:sessionSecret};
+const env={ORA_MEDIA_R2:rawBucket,VITE_SUPABASE_URL:'https://test.supabase.co',SUPABASE_SECRET_KEY:secret,STAFF_SESSION_SECRET:sessionSecret,ORA_R2_COMPRESSION_ENABLED:'1'};
 configureCloudflareData(env);
 const bucket=dataBucket(env)!;
 const sdk=createClient(env.VITE_SUPABASE_URL,secret,{global:{fetch:cloudflareDataFetch},db:{retry:false},auth:{persistSession:false,autoRefreshToken:false}});
@@ -66,7 +72,7 @@ assert(duplicate.error,'Order number uniqueness must survive parallel inserts');
 assert.equal((await importRecovery(bucket,fixture)).counts.order_snapshots,1);
 assert.equal((await sdk.from('order_snapshots').select('*')).data?.length,6,'Repeat restore cannot overwrite newer orders');
 assert([...rawBucket.objects.keys()].some(key=>key.startsWith('ora-data/backups-v2/order_snapshots/')));
-assert([...rawBucket.objects.values()].every(object=>JSON.parse(object.value).format==='ora-aes-gcm-v1'),'Private records and backups must be encrypted');
+assert([...rawBucket.objects.values()].every(object=>['ora-aes-gcm-v1','ora-aes-gcm-v2'].includes(JSON.parse(object.value).format)),'Private records and backups must be encrypted');
 
 // Test the existing Express routes against R2, including auth and protected data.
 process.env.CLOUDFLARE_WORKERS='1';process.env.VITE_SUPABASE_URL=env.VITE_SUPABASE_URL;
@@ -223,4 +229,66 @@ try {
 const failing=new MemoryBucket();failing.failKey=ACTIVE_KEY;
 await assert.rejects(()=>importRecovery(failing,fixture));
 assert.equal(await activeData(failing),null);
-console.log('PASS: R2 persistence, concurrency, backups, auth, CSV parsing/batches/re-upload, Delivered fields and locks, 38-form audit page/pagination/retries/Sheet checks/incomplete sources, corruption and failed writes.');
+
+// Lossless encrypted codec: old readers-with-compression-disabled still decode
+// v2; Unicode, zero values, lock fields and every byte of JSON survive unchanged.
+const codecRaw=new MemoryBucket(),codecEnv={...env,ORA_MEDIA_R2:codecRaw};
+const legacyCodec=dataBucket({...codecEnv,ORA_R2_COMPRESSION_ENABLED:'0'})!;
+const codec=dataBucket(codecEnv)!;
+const sample=JSON.stringify(Array.from({length:440},(_,i)=>({...fixture.orders[0],id:'sample-'+i,order_number:'FB-'+String(i+1).padStart(6,'0'),waybill_number:'SAMPLE-'+i,customer_name:'පරීක්ෂණය 🩵 '+i,delivery_fee:0,stock_allocated:true,extra:null,note:'Synthetic '+crypto.randomBytes(32).toString('hex'),items:[{id:crypto.randomUUID(),product_id:'sample-product-'+i%55,quantity:i%4+1,unit_price:1090,subtotal:1090*(i%4+1)}]})));
+const sampleKey='ora-data/generations/test/order_snapshots.json',backupKey='ora-data/backups-v2/order_snapshots/1.json';
+await legacyCodec.put(sampleKey,sample,{customMetadata:{oraData:'1',hour:'123'}});
+const oldBytes=Buffer.byteLength(codecRaw.objects.get(sampleKey)!.value);
+assert.equal(await codec.compact!(sampleKey),'compacted');
+const compacted=codecRaw.objects.get(sampleKey)!;
+assert.equal(JSON.parse(compacted.value).format,'ora-aes-gcm-v2');assert.deepEqual(compacted.customMetadata,{oraData:'1',hour:'123'});
+assert.equal(await (await codec.get(sampleKey))!.text(),sample);assert.equal(await (await legacyCodec.get(sampleKey))!.text(),sample);
+assert(Buffer.byteLength(compacted.value)<oldBytes/3,'Representative order snapshots must shrink meaningfully');
+await codec.put(backupKey,sample);assert.equal(await (await codec.get(backupKey))!.text(),sample);
+codecRaw.objects.set('ora-data/generations/test/moved.json',compacted);
+await assert.rejects(()=>(codec.get('ora-data/generations/test/moved.json')).then(object=>object!.text()),'Ciphertext remains bound to its object path');
+const changedFormat={...JSON.parse(compacted.value),format:'ora-aes-gcm-v1'};
+codecRaw.objects.set(sampleKey,{...compacted,value:JSON.stringify(changedFormat),etag:'tampered'});
+await assert.rejects(()=>(codec.get(sampleKey)).then(object=>object!.text()),'The compression encoding is authenticated');
+codecRaw.objects.set(sampleKey,compacted);
+await codec.put('ora-data/generations/test/small.json','[]');assert.equal(JSON.parse(codecRaw.objects.get('ora-data/generations/test/small.json')!.value).format,'ora-aes-gcm-v1');
+assert.equal(await codec.compact!(sampleKey),'skipped','Already compressed data is not rewritten');
+
+const concurrentSample=sample+'\n';await legacyCodec.put(sampleKey,sample);
+const originalPut=codecRaw.put.bind(codecRaw);let interleaved=true;
+codecRaw.put=async(key,value,settings)=>{
+  if(key===sampleKey&&interleaved&&settings?.onlyIf?.etagMatches){interleaved=false;await legacyCodec.put(sampleKey,concurrentSample);}
+  return originalPut(key,value,settings);
+};
+assert.equal(await codec.compact!(sampleKey),'conflict');assert.equal(await (await codec.get(sampleKey))!.text(),concurrentSample,'Encoding migration cannot overwrite a concurrent staff edit');
+assert.equal(await codec.compact!(sampleKey),'compacted');assert.equal(await (await codec.get(sampleKey))!.text(),concurrentSample);
+
+const migrationRaw=new MemoryBucket(),migrationEnv={...env,ORA_MEDIA_R2:migrationRaw};
+const migrationLegacy=dataBucket({...migrationEnv,ORA_R2_COMPRESSION_ENABLED:'0'})!;
+await importRecovery(migrationLegacy,{...fixture,orders:JSON.parse(sample)});
+const migrationActive=(await activeData(migrationLegacy))!;
+await migrationLegacy.put(backupKey,sample,{customMetadata:{hour:'123'}});
+const beforeMigration=await (await migrationLegacy.get(migrationActive.prefix+'order_snapshots.json'))!.text();
+for(let i=0;i<25;i++)await compactR2StorageOnce(migrationEnv);
+const migrationCodec=dataBucket(migrationEnv)!;
+assert.equal(await (await migrationCodec.get(migrationActive.prefix+'order_snapshots.json'))!.text(),beforeMigration);
+assert.equal(JSON.parse(migrationRaw.objects.get(backupKey)!.value).format,'ora-aes-gcm-v2');
+assert.equal(JSON.parse(await (await migrationCodec.get('ora-data/compression-progress-v1.json'))!.text()).stage,'done');
+const migrationRevision=migrationRaw.revision;await compactR2StorageOnce(migrationEnv);assert.equal(migrationRaw.revision,migrationRevision,'Completed compaction does not rewrite checkpoints');
+
+// Exact public image bytes are reused for duplicate catalog/branding uploads;
+// customer submissions keep unique paths, and private data is never served.
+const mediaObjects=new Map<string,Buffer>();let mediaWrites=0;
+const mediaBucket={get:async(key:string)=>mediaObjects.has(key)?{body:mediaObjects.get(key)}:null,put:async(key:string,value:any,settings:any)=>{if(settings.onlyIf?.etagDoesNotMatch==='*'&&mediaObjects.has(key))return null;mediaObjects.set(key,Buffer.from(value));mediaWrites++;return {etag:'test'};}};
+const image=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2LsAAAAASUVORK5CYII=','base64');
+const upload=async(purpose:string)=>{
+  const request=new Request('https://test/api/uploads/image',{method:'POST',body:JSON.stringify({purpose,dataUrl:'data:image/png;base64,'+image.toString('base64')})});
+  return (await (await r2MediaHandler(request,{ORA_MEDIA_R2:mediaBucket}))!.json()) as any;
+};
+const mediaResults=await Promise.all(Array.from({length:5},()=>upload('product')));
+assert.equal(new Set(mediaResults.map(result=>result.url)).size,1);assert.equal(mediaWrites,1);assert.deepEqual(mediaObjects.get(mediaResults[0].key),image);
+assert.notEqual((await upload('branding')).url,mediaResults[0].url);
+assert.notEqual((await upload('payment-receipt')).url,(await upload('payment-receipt')).url);
+assert.equal((await r2MediaHandler(new Request('https://test/api/media/ora-data/active-v2.json'),{ORA_MEDIA_R2:mediaBucket}))!.status,404);
+console.log('Compression fixture:',JSON.stringify({legacy_bytes:oldBytes,compressed_bytes:Buffer.byteLength(compacted.value),saved_percent:Number((100*(1-Buffer.byteLength(compacted.value)/oldBytes)).toFixed(1))}));
+console.log('PASS: R2 encryption/compatibility/exact lossless compression/CAS migration, media byte-preserving dedup, backups/auth, CSV/Delivered fields and locks, 38-form audit/retries/Sheet checks, corruption and failed writes.');

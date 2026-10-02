@@ -61,6 +61,20 @@ IMPORTANT
 - Authenticated /api/cloudflare-recovery/status reports the current R2 count.
 - Regression check: node --import tsx tools/test-cloudflare-data.ts
 
+LOSSLESS STORAGE COMPRESSION
+- ORA_R2_COMPRESSION_ENABLED=1 writes compressible private JSON with native
+  level-1 gzip before AES-GCM encryption (ora-aes-gcm-v2). Small objects stay v1.
+  All readers accept both formats; v2 authenticates its encoding and object path.
+- Deploy compatible readers before enabling the flag. To stop compression,
+  disable the flag while retaining the compatible reader; older pre-codec
+  releases cannot decode compressed objects and must not be used for rollback.
+- Cron gradually re-encodes one current table/old backup per run. It verifies
+  the exact decompressed string and uses ETag CAS so active staff edits win.
+  Metadata and the 168 hourly slots stay intact; no business fields change.
+- New identical product/branding uploads share a SHA-256 media key without
+  changing any uploaded bytes. Existing media URLs keep working. Customer
+  submissions/receipts keep separate random keys. This does not delete images.
+
 DELIVERED CSV AND FACEBOOK AUDIT
 - Authenticated order list/version reads use the Worker R2 path directly,
   avoiding repeated whole-table serialization through the SDK and Node bridge.
