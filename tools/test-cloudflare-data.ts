@@ -35,7 +35,7 @@ const fixture={format:'ora-r2-recovery-v1',exported_at:'2026-10-02T00:00:00Z',
   admin_users:[{id:adminId,username:'admin',display_name:'Admin',role:'admin',password_hash:passwordHash,is_active:true},{id:staffId,username:'staff',role:'staff',password_hash:passwordHash,is_active:true,permissions:['overview']}],
   admin_data_store:[{key:'storefront-state-v1',updated_at:'2026-10-01T00:00:00Z',payload:{version:1,updated_at:'2026-10-01T00:00:00Z',products:[{id:'p1',sku:'R1'}],categories:[{id:'c1'}],settings:{google_sheet_webhook_url:'',admin_secret_path:'private'}}}],
   courier_waybills:[{waybill_number:'LOCK-1',status:'Assigned',assigned_order_number:'FB-000440'}],
-  tables:{fardar_cities:[{name:'Colombo',district:'Colombo',code:'1'}]},
+  tables:{fardar_cities:[{id:'city-1',name:'Colombo',district:'Colombo',code:'1'}]},
 };
 
 const before=await sdk.from('order_snapshots').select('*');

@@ -11,7 +11,7 @@ export const ACTIVE_KEY = 'ora-data/active-v2.json';
 const META_KEY = 'ora-data/meta-v1.json';
 const primaryKeys: Record<string,string> = {
   order_snapshots:'order_id', admin_data_store:'key', admin_users:'id', courier_waybills:'waybill_number',
-  fardar_cities:'name', fardar_city_mappings:'input_key', customer_profiles:'user_id',
+  fardar_cities:'id', fardar_city_mappings:'input_key', customer_profiles:'user_id',
   customer_reviews:'id', product_requests:'id', activity_logs:'id', blocked_customers:'id',
   categories:'id', customers:'id', dispatch_events:'id', order_abuse_events:'id',
   order_items:'id', orders:'id', products:'id', purchase_orders:'id', stock_history:'id', store_settings:'id',
