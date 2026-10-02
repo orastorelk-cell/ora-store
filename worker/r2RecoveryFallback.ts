@@ -1,6 +1,9 @@
 import { activeData, configureCloudflareData, dataBucket, readDataTable, mutateDataTable } from './cloudflareData';
 import { applyDeliveredReport, type DeliveredEntry } from '../src/lib/deliveredOrders';
 import { applyConfirmCsvDecisions, validConfirmCsvEntries } from '../src/lib/confirmCsvSave';
+import { r2StorefrontHandler } from './r2Storefront';
+import { Buffer } from 'node:buffer';
+import { auditConfirmCsvOrders, validConfirmAuditOrders } from '../src/lib/confirmCsvAudit';
 
 type Env = Record<string, any>;
 type StaffSession = { sub:string; role:'admin'|'staff'; exp:number };
@@ -31,9 +34,23 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   const read=request.method==='GET'&&['/api/orders','/api/orders/version'].includes(path);
   const delivered=request.method==='POST'&&path==='/api/orders/delivered-csv';
   const confirmed=request.method==='POST'&&path==='/api/orders/confirm-csv';
-  if(!read&&!delivered&&!confirmed)return null;
+  const refresh=request.method==='POST'&&path==='/api/staff/session/refresh';
+  const audit=request.method==='POST'&&path==='/api/orders/confirm-csv/check';
+  if(!read&&!delivered&&!confirmed&&!refresh&&!audit)return null;
   const user=await verifyActiveStaff(request,env);
   if(!user)return json({error:'Login session required.'},401);
+  if(audit){
+    const body:any=await request.json().catch(()=>null);
+    if(!validConfirmAuditOrders(body?.orders))return json({error:'Send 1 to 20 unique CSV order decisions.'},400);
+    const rows=await readDataTable(env,'order_snapshots');
+    return json(auditConfirmCsvOrders(rows.map(row=>row.payload).filter(Boolean),body.orders));
+  }
+  if(refresh){
+    const secret=String((env as Env)?.STAFF_SESSION_SECRET||(env as Env)?.ABUSE_HASH_SALT||'');
+    const payload=Buffer.from(JSON.stringify({sub:String(user.id),role:user.role==='admin'?'admin':'staff',exp:Date.now()+12*60*60*1000})).toString('base64url');
+    const signature=Buffer.from(await hmac(secret,payload)).toString('base64url');
+    return json({ok:true,token:payload+'.'+signature});
+  }
   if(read){
     const rows=await readDataTable(env,'order_snapshots');
     if(path.endsWith('/version')){
@@ -129,6 +146,8 @@ export const withR2DataFallback=async(request:Request,env:unknown,_ctx:any,next:
     if(recovery)return recovery;
     const operational=await operationalHandler(request,env);
     if(operational)return operational;
+    const storefront=await r2StorefrontHandler(request,env,_ctx,verifyActiveStaff);
+    if(storefront)return storefront;
     return await next();
   }catch(e:any){return json({error:e?.message||'Cloudflare data recovery failed.'},503);}
 };

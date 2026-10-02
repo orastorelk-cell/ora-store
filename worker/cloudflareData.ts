@@ -29,6 +29,13 @@ const recoveredBrandImages=new Map<string,string>([
   ['https://xoipahpyxatdafhqkzcr.supabase.co/storage/v1/object/public/ora-public-media/branding-1786925282175-19bb77b878.png','/api/media/media/branding/2026/10/02/1790916182739-cae1090f295a44e7.png'],
 ]);
 const migratedBrandPrefixes=new Set<string>();
+export const resolveKnownBrandImages=(settings:Record<string,any>)=>{
+  const next={...settings};
+  for(const field of ['website_logo','black_logo']){
+    const original=recoveredBrandImages.get(next[field]);if(original)next[field]=original;
+  }
+  return next;
+};
 let runtime: Runtime | undefined;
 const networkFetch = globalThis.fetch.bind(globalThis);
 export const configureCloudflareData = (env: unknown) => { runtime = env as Runtime; };

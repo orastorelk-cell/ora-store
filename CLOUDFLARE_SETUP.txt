@@ -61,6 +61,22 @@ IMPORTANT
 - Authenticated /api/cloudflare-recovery/status reports the current R2 count.
 - Regression check: node --import tsx tools/test-cloudflare-data.ts
 
+WEBSITE SAVING AND CONFIRM UPLOAD CHECK
+- Website state/version reads, ordinary authenticated website saves, and active
+  staff session refresh use the Worker R2 path directly. Identical save retries
+  retain the same version without rewriting the table or its backup.
+- Changed saves carry an optional expected_version. A newer durable version
+  returns 409 instead of replacing another session's edit. Browser drafts remain.
+- Private integration fields are removed from public website settings. A blank
+  webhook from an older browser cannot erase the current working integration.
+- Restoring a previously blank Sheet webhook retains the existing server route
+  and its recovery of unsynced orders. Normal catalog Sheet sync is non-blocking.
+- /confirm-upload-check compares a locally selected CSV with current R2 orders
+  through authenticated /api/orders/confirm-csv/check. It sends only order IDs,
+  decisions, item codes, quantities and variants, and never changes orders.
+- The check is complete only after a successful durable read; individual orders
+  are verified only when their persisted decision and requested items match.
+
 LOSSLESS STORAGE COMPRESSION
 - ORA_R2_COMPRESSION_ENABLED=1 writes compressible private JSON with native
   level-1 gzip before AES-GCM encryption (ora-aes-gcm-v2). Small objects stay v1.

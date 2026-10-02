@@ -842,7 +842,7 @@ useEffect(() => {
               return token
                 ? sharedStaffRequest('/api/admin/storefront/state', {
                     method:'PUT',
-                    body:JSON.stringify(snapshot),
+                    body:JSON.stringify({...snapshot,expected_version:sharedStoreVersionRef.current}),
                   })
                 : localStorefrontRequest(snapshot);
             }
@@ -857,7 +857,7 @@ useEffect(() => {
             }
             return sharedStaffRequest('/api/admin/storefront/state', {
               method:'PUT',
-              body:JSON.stringify(snapshot),
+              body:JSON.stringify({...snapshot,expected_version:sharedStoreVersionRef.current}),
             });
           };
 
@@ -873,7 +873,7 @@ useEffect(() => {
               return;
             } catch (err:any) {
               lastError = err;
-              if (Number(err?.status || 0) === 401 || Number(err?.status || 0) === 403) break;
+              if ([401,403,409].includes(Number(err?.status || 0))) break;
             }
           }
 

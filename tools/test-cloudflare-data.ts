@@ -10,6 +10,7 @@ import { compactR2StorageOnce } from '../worker/r2StorageCompression';
 import { r2MediaHandler } from '../worker/r2PublicMedia';
 import { canonicalJson, saveConfirmCsvDecisions, confirmCsvRequestWithRetry, validConfirmCsvEntries } from '../src/lib/confirmCsvSave';
 import { transformSync } from 'esbuild';
+import { auditConfirmCsvOrders } from '../src/lib/confirmCsvAudit';
 
 class MemoryBucket {
   objects=new Map<string,{value:string;etag:string;customMetadata:any}>();
@@ -125,6 +126,47 @@ try {
   const bulk=await request('/api/admin/orders/bulk-import','POST',{orders:[newOrder]},token);
   assert.equal(bulk.status,200,JSON.stringify(bulk.body));assert((await sdk.from('order_snapshots').select('*').eq('order_id','imported')).data?.length);
 
+  // Website reads/saves/session refresh take the direct Worker path. An ordinary
+  // login/retry with an identical catalog must not rewrite the entire data table.
+  assert.equal((await fast('/api/admin/storefront/state','GET',undefined,'invalid')).status,401);
+  const privateState:any=await (await fast('/api/admin/storefront/state')).json();
+  const site=privateState.state,adminKey=active.prefix+'admin_data_store.json';
+  const unrelatedBefore=JSON.parse(await (await bucket.get(adminKey))!.text()).filter((row:any)=>row.key!=='storefront-state-v1');
+  const siteInput={products:site.products,categories:site.categories,settings:{...site.settings,store_name:'R2 Test Store',
+    google_sheet_webhook_url:'',admin_secret_path:'private-test',fardar_api_url:'private-api',fardar_account_id:'private-account',
+    bank_details_saved:false,bank_account_number:'not-public'},expected_version:site.version};
+  const firstSite:any=await (await fast('/api/admin/storefront/state','PUT',siteInput)).json();
+  assert.equal(firstSite.ok,true);assert.equal(firstSite.version,site.version+1);
+  const firstSiteEtag=rawBucket.objects.get(adminKey)!.etag;
+  const repeatSite:any=await (await fast('/api/admin/storefront/state','PUT',siteInput)).json();
+  assert.equal(repeatSite.unchanged,true);assert.equal(repeatSite.version,firstSite.version);
+  assert.equal(rawBucket.objects.get(adminKey)!.etag,firstSiteEtag,'An acknowledged website-save retry must not write again');
+  assert.deepEqual(JSON.parse(await (await bucket.get(adminKey))!.text()).filter((row:any)=>row.key!=='storefront-state-v1'),unrelatedBefore);
+  const publicSite:any=await (await fast('/api/storefront/state','GET',undefined,'')).json();
+  assert.equal(publicSite.state.settings.store_name,'R2 Test Store');
+  for(const field of ['google_sheet_webhook_url','admin_secret_path','fardar_api_url','fardar_account_id','courier_api_enabled'])assert.equal(publicSite.state.settings[field],undefined);
+  assert.equal(publicSite.state.settings.bank_account_number,'');
+  assert.equal((await fast('/api/admin/storefront/state','PUT',{...siteInput,settings:{...siteInput.settings,store_name:'Stale'}})).status,409);
+  rawBucket.failKey=adminKey;
+  assert.equal((await fast('/api/admin/storefront/state','PUT',{...siteInput,expected_version:firstSite.version,settings:{...siteInput.settings,store_name:'Must not save'}})).status,503);
+  rawBucket.failKey='';
+  assert.equal((await (await fast('/api/admin/storefront/state')).json() as any).state.settings.store_name,'R2 Test Store');
+  const refreshed:any=await (await fast('/api/staff/session/refresh','POST')).json();
+  assert.equal(refreshed.ok,true);assert.equal((await fast('/api/orders','GET',undefined,refreshed.token)).status,200);
+  assert.equal((await fast('/api/staff/session/refresh','POST',undefined,'invalid')).status,401);
+  await sdk.from('admin_users').update({is_active:false}).eq('id',staffId);
+  assert.equal((await fast('/api/staff/session/refresh','POST',undefined,staff.body.token)).status,401);
+  await sdk.from('admin_users').update({is_active:true}).eq('id',staffId);
+
+  // A blank URL from an older admin browser cannot clear a working integration.
+  const currentSiteRows=JSON.parse(await (await bucket.get(adminKey))!.text());
+  currentSiteRows.find((row:any)=>row.key==='storefront-state-v1').payload.settings.google_sheet_webhook_url='https://script.google.com/macros/s/fixture/exec';
+  await bucket.put(adminKey,JSON.stringify(currentSiteRows));
+  const preserveWebhook:any=await (await fast('/api/admin/storefront/state','PUT',{...siteInput,expected_version:firstSite.version})).json();
+  assert.equal(preserveWebhook.unchanged,true);
+  assert.equal((await (await fast('/api/admin/storefront/state')).json() as any).state.settings.google_sheet_webhook_url,'https://script.google.com/macros/s/fixture/exec');
+  // No ctx.waitUntil is supplied in this fixture: no external Sheet request occurs.
+
   // Execute the production Confirm parser after every Vite business-rule patch.
   // Reproduce 12 orders with 7 already committed, a failed R2 write, and a lost
   // successful response. Retrying must retain the first seven packing groups.
@@ -184,6 +226,17 @@ try {
   assert.deepEqual(confirmedRows.slice(0,7).map(row=>canonicalJson(row.payload)),firstSeven,'Previously committed orders retain all fields exactly');
   assert(confirmedRows.slice(7).every(row=>row.payload.confirm_upload_batch_id==='RETRY-TWELVE'));
   assert(displayedOrders.every(order=>order.call_center_status==='Confirmed'),'Only verified server results update the UI');
+  const auditExpected=confirmOrders.map(order=>({order_number:order.order_number,decision:'Confirmed',items:[{sku:'R1',quantity:1,variant:''}]}));
+  const auditEtag=rawBucket.objects.get(currentOrderKey)!.etag;
+  const savedAudit:any=await (await fast('/api/orders/confirm-csv/check','POST',{orders:auditExpected})).json();
+  assert.equal(savedAudit.verified_orders,12);assert.equal(savedAudit.unverified_orders,0);
+  assert.equal(rawBucket.objects.get(currentOrderKey)!.etag,auditEtag,'Confirm audit is read-only');
+  assert(!JSON.stringify(savedAudit).includes('0770000000'));assert(!JSON.stringify(savedAudit).includes('Test Address'));
+  assert.equal((await fast('/api/orders/confirm-csv/check','POST',{orders:auditExpected},'invalid')).status,401);
+  assert.equal((await fast('/api/orders/confirm-csv/check','POST',{orders:[auditExpected[0],auditExpected[0]]})).status,400);
+  const variantAudit=auditConfirmCsvOrders([{order_number:'FB-TEST',call_center_status:'Confirmed',order_status:'Processing',items:[{sku:'COMBO',quantity:4,variant_name:'Blue'},{sku:'COMBO',quantity:1,variant_name:'Red'}]}],
+    [{order_number:'FB-TEST',decision:'Confirmed',items:[{sku:'COMBO',quantity:2,variant:'Blue'},{sku:'COMBO',quantity:3,variant:'Red'}]}]);
+  assert.equal(variantAudit.verified_orders,0,'Correct total quantity with wrong per-variant quantities must fail');
 
   const original=confirmedRows[7].payload;
   const correction={id:original.id,order_number:original.order_number,expected:canonicalJson(original),patch:{call_center_status:'Confirmed',order_status:'Processing',items:original.items,customer_name:'Corrected'},clear_fields:[]};
@@ -401,4 +454,4 @@ assert.notEqual((await upload('branding')).url,mediaResults[0].url);
 assert.notEqual((await upload('payment-receipt')).url,(await upload('payment-receipt')).url);
 assert.equal((await r2MediaHandler(new Request('https://test/api/media/ora-data/active-v2.json'),{ORA_MEDIA_R2:mediaBucket}))!.status,404);
 console.log('Compression fixture:',JSON.stringify({legacy_bytes:oldBytes,compressed_bytes:Buffer.byteLength(compacted.value),saved_percent:Number((100*(1-Buffer.byteLength(compacted.value)/oldBytes)).toFixed(1))}));
-console.log('PASS: Confirm CSV production parser (12 orders/7 already saved, 503 retries, lost response, packing/history, CAS staff locks, stale/missing orders, paid/advance/cancel and strict acknowledgments); R2 encryption/compression, media dedup, backups/auth, Delivered CSV, Facebook audit and failed writes.');
+console.log('PASS: Confirm CSV production parser (12 orders/7 already saved, 503 retries, lost response, packing/history, CAS staff locks, stale/missing orders, paid/advance/cancel and strict acknowledgments); native website save/version conflict/replay/public settings/session refresh and read-only Confirm audit; R2 encryption/compression, media dedup, backups/auth, Delivered CSV, Facebook audit and failed writes.');
