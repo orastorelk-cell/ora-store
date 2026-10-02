@@ -4,6 +4,7 @@ import { applyConfirmCsvDecisions, validConfirmCsvEntries } from '../src/lib/con
 import { r2StorefrontHandler } from './r2Storefront';
 import { Buffer } from 'node:buffer';
 import { auditConfirmCsvOrders, validConfirmAuditOrders } from '../src/lib/confirmCsvAudit';
+import { r2InvoiceQueueHandler } from './r2InvoiceQueue';
 
 type Env = Record<string, any>;
 type StaffSession = { sub:string; role:'admin'|'staff'; exp:number };
@@ -36,9 +37,11 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   const confirmed=request.method==='POST'&&path==='/api/orders/confirm-csv';
   const refresh=request.method==='POST'&&path==='/api/staff/session/refresh';
   const audit=request.method==='POST'&&path==='/api/orders/confirm-csv/check';
-  if(!read&&!delivered&&!confirmed&&!refresh&&!audit)return null;
+  const invoices=request.method==='POST'&&path==='/api/orders/invoices/ensure';
+  if(!read&&!delivered&&!confirmed&&!refresh&&!audit&&!invoices)return null;
   const user=await verifyActiveStaff(request,env);
   if(!user)return json({error:'Login session required.'},401);
+  if(invoices)return r2InvoiceQueueHandler(request,env,user);
   if(audit){
     const body:any=await request.json().catch(()=>null);
     if(!validConfirmAuditOrders(body?.orders))return json({error:'Send 1 to 20 unique CSV order decisions.'},400);

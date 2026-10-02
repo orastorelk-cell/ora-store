@@ -1,0 +1,20 @@
+import { readDataTable, mutateDataTable } from './cloudflareData';
+import { applyInvoiceQueue, validInvoiceQueueRequest } from '../src/lib/invoiceQueue';
+
+export const r2InvoiceQueueHandler = async(request:Request,env:unknown,user:Record<string,any>) => {
+  const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-ora-storage':'cloudflare-r2'}});
+  const body:any=await request.json().catch(()=>null);
+  if(!validInvoiceQueueRequest(body))return json({error:'Send 1 to 50 unique order IDs and a valid packing batch.'},400);
+  const settings=(await readDataTable(env,'admin_data_store')).find(row=>row.key==='storefront-state-v1')?.payload?.settings||{};
+  const locks=await readDataTable(env,'courier_waybills');
+  const results=await mutateDataTable(env,'order_snapshots',rows=>{
+    const applied=applyInvoiceQueue(rows.map(row=>row.payload).filter(Boolean),body.order_ids,body.batch_id,settings,
+      body.automatic?'System Auto Invoice Queue':String(user.display_name||user.username||'Staff'),locks);
+    const changed=new Map(applied.updatedOrders.map(order=>[String(order.id),order]));
+    const now=new Date().toISOString();let count=0;
+    for(const row of rows){const order=changed.get(String(row.order_id));if(order){row.payload=order;row.updated_at=now;count++;}}
+    if(count!==changed.size)throw new Error('Invalid invoice order identity; durable save stopped.');
+    return applied.results;
+  });
+  return json({ok:true,results});
+};

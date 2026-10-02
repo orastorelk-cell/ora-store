@@ -76,6 +76,19 @@ WEBSITE SAVING AND CONFIRM UPLOAD CHECK
   decisions, item codes, quantities and variants, and never changes orders.
 - The check is complete only after a successful durable read; individual orders
   are verified only when their persisted decision and requested items match.
+- Invoice creation/metadata recovery uses authenticated /api/orders/invoices/ensure
+  in groups of 50 IDs. The Worker checks current Confirm/stock/waybill state and
+  saves only missing invoice metadata in one ETag mutation. No stock, money,
+  invoice number, existing packing/download history or waybill is regenerated.
+- Auto/manual queues mark Generated only after complete server acknowledgments.
+  Temporary failures retry; missing metadata stays visible in Packing Downloads
+  with Retry Missing Invoices. Existing complete records are acknowledged without
+  a write. Fresh Confirm groups and reserved restock groups retain their IDs.
+- Fardar CSV counts/export include only complete saved invoices. UTF-8 BOM keeps
+  product punctuation readable in Excel; known legacy punctuation mojibake is
+  repaired only in exported descriptions, without changing stored order fields.
+- Confirm upload checks also report saved/missing invoices among ready orders,
+  their actual invoice batch, and whether their PDF was previously downloaded.
 
 LOSSLESS STORAGE COMPRESSION
 - ORA_R2_COMPRESSION_ENABLED=1 writes compressible private JSON with native

@@ -1,3 +1,4 @@
+import { invoiceComplete, invoiceReady } from './invoiceQueue';
 type Item={sku:string;quantity:number;variant:string};
 type Expected={order_number:string;decision:'Confirmed'|'Cancelled';items:Item[]};
 const normal=(value:unknown)=>String(value||'').trim().toLowerCase().replace(/[_-]+/g,' ').replace(/\s+/g,' ');
@@ -29,9 +30,14 @@ export const auditConfirmCsvOrders=(orders:Record<string,any>[],expected:Expecte
     return {order_number:wanted.order_number,found,expected_decision:wanted.decision,call_center_status:order?.call_center_status||null,
       order_status:order?.order_status||null,decision_saved,items_match:wanted.decision==='Cancelled'?null:items_match,
       verified:decision_saved&&(wanted.decision==='Cancelled'||items_match),confirmed_at:order?.call_center_updated_at||null,
-      packing_batch:order?.confirm_upload_batch_id||null};
+      packing_batch:order?.confirm_upload_batch_id||null,
+      invoice_ready:found&&invoiceReady(order),invoice_saved:found&&invoiceComplete(order),
+      invoice_number:order?.invoice_number||null,invoice_batch:order?.invoice_pack_batch_id||null,
+      invoice_downloaded:Boolean(order?.invoice_pack_downloaded_at),fardar_exported:Boolean(order?.fardar_csv_exported_at)};
   });
   const verified=results.filter(order=>order.verified).length;
+  const ready=results.filter(order=>order.invoice_ready),saved=ready.filter(order=>order.invoice_saved);
   return {ok:true,complete:true,checked_at:new Date().toISOString(),storage:'cloudflare-r2',expected_orders:expected.length,
-    verified_orders:verified,unverified_orders:expected.length-verified,orders:results};
+    verified_orders:verified,unverified_orders:expected.length-verified,
+    invoice_ready_orders:ready.length,saved_invoice_orders:saved.length,missing_invoice_orders:ready.length-saved.length,orders:results};
 };

@@ -88,6 +88,7 @@ import { createClient } from "@supabase/supabase-js";
 import { cloudflareDataFetch } from "./worker/cloudflareData";
 import { applyDeliveredReport } from './src/lib/deliveredOrders';
 import { applyConfirmCsvDecisions, validConfirmCsvEntries } from './src/lib/confirmCsvSave';
+import { applyInvoiceQueue, validInvoiceQueueRequest } from './src/lib/invoiceQueue';
 import { validateProductBackup } from "./src/lib/productBackup";
 
 dotenv.config();
@@ -2258,6 +2259,23 @@ app.post('/api/orders/confirm-csv', requireAdminSession, async (req,res)=>{
     await saveOrderSnapshotsBatch(applied.updatedOrders);
     return res.json({ok:true,results:applied.results});
   }catch(error:any){return res.status(503).json({error:error?.message||'Confirm CSV decisions could not be saved.'});}
+});
+
+// Production is handled atomically by the native R2 Worker. This route keeps the
+// local development server's invoice acknowledgments compatible.
+app.post('/api/orders/invoices/ensure', requireAdminSession, async (req,res)=>{
+  if(!validInvoiceQueueRequest(req.body))return res.status(400).json({error:'Send 1 to 50 unique order IDs and a valid packing batch.'});
+  try{
+    let locks:any[]=[];
+    const sb=getSupabaseAdmin();
+    if(sb){const {data,error}=await sb.from('courier_waybills').select('waybill_number,status,assigned_order_number');if(error)throw error;locks=data||[];}
+    const user=(req as any).staffSessionUser;
+    const state=await readSharedStorefrontState();
+    const applied=applyInvoiceQueue(await getOrderSnapshots(),req.body.order_ids,req.body.batch_id,state?.settings||{},
+      req.body.automatic?'System Auto Invoice Queue':String(user?.display_name||user?.username||'Staff'),locks);
+    await saveOrderSnapshotsBatch(applied.updatedOrders);
+    return res.json({ok:true,results:applied.results});
+  }catch(error:any){return res.status(503).json({error:error?.message||'Invoices could not be saved.'});}
 });
 
 app.post('/api/orders/delivered-csv', requireStaffAnyPermission(['delivery','delivered_csv_upload']), async (req,res)=>{

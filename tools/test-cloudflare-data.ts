@@ -11,6 +11,8 @@ import { r2MediaHandler } from '../worker/r2PublicMedia';
 import { canonicalJson, saveConfirmCsvDecisions, confirmCsvRequestWithRetry, validConfirmCsvEntries } from '../src/lib/confirmCsvSave';
 import { transformSync } from 'esbuild';
 import { auditConfirmCsvOrders } from '../src/lib/confirmCsvAudit';
+import { applyInvoiceQueue, invoiceComplete, invoiceReady, saveInvoiceQueue } from '../src/lib/invoiceQueue';
+import { utf8CsvBlob, fardarParcelDescription, parseCsv } from '../src/lib/csv';
 
 class MemoryBucket {
   objects=new Map<string,{value:string;etag:string;customMetadata:any}>();
@@ -238,6 +240,109 @@ try {
     [{order_number:'FB-TEST',decision:'Confirmed',items:[{sku:'COMBO',quantity:2,variant:'Blue'},{sku:'COMBO',quantity:3,variant:'Red'}]}]);
   assert.equal(variantAudit.verified_orders,0,'Correct total quantity with wrong per-variant quantities must fail');
 
+  // Reproduce nine Fardar-ready parcels with seven existing invoices and two
+  // missing/incomplete records. Complete records and their waybills are immutable.
+  const invoiceOrders=Array.from({length:9},(_,i)=>({
+    ...confirmOrders[0],id:'invoice-test-'+i,order_number:'FB-'+String(9000+i).padStart(6,'0'),
+    call_center_status:'Confirmed',order_status:'Processing',stock_allocated:true,stock_status:'Allocated',
+    stock_allocated_at:'2026-10-02T01:03:00Z',call_center_updated_at:'2026-10-02T01:00:00Z',confirm_upload_batch_id:'PACK-CONFIRM-NEW',
+    waybill_number:'INVOICE-WB-'+i,invoice_number:'INV-EXISTING-'+i,
+    ...(i<7?{invoice_locked:true,invoice_generated_at:'2026-10-02T01:04:00Z',invoice_generated_by:'Earlier staff',invoice_pack_batch_id:'PACK-FIRST-SEVEN',
+      invoice_pack_downloaded_at:'2026-10-02T01:05:00Z',invoice_pack_download_set_date:'2026-10-02',invoice_pack_download_set_number:4,
+      fardar_csv_exported_at:'2026-10-02T01:06:00Z',fardar_csv_exported_waybill:'INVOICE-WB-'+i}:i===8?{invoice_locked:true}:{}),
+  }));
+  await sdk.from('order_snapshots').upsert(invoiceOrders.map(order=>({order_id:order.id,order_number:order.order_number,payload:order})),{onConflict:'order_id'});
+  await sdk.from('courier_waybills').upsert(invoiceOrders.map(order=>({waybill_number:order.waybill_number,status:'Assigned',assigned_order_number:order.order_number})),{onConflict:'waybill_number'});
+  const ids=invoiceOrders.map(order=>order.id),lockedBefore=invoiceOrders.slice(0,7).map(canonicalJson);
+  const waybillBefore=canonicalJson((await sdk.from('courier_waybills').select('*')).data);
+  let invoiceRequests=0,loseInvoiceResponse=true,invoiceCommittedEtag='';
+  const invoiceRequest=async(path:string,options?:RequestInit)=>{
+    invoiceRequests++;
+    if(invoiceRequests===1)rawBucket.failKey=currentOrderKey;
+    const response=await fast(path,options?.method||'GET',options?.body?JSON.parse(String(options.body)):undefined);
+    rawBucket.failKey='';const data:any=await response.json();
+    if(!response.ok){const error:any=new Error(data.error);error.status=response.status;throw error;}
+    if(loseInvoiceResponse){loseInvoiceResponse=false;invoiceCommittedEtag=rawBucket.objects.get(currentOrderKey)!.etag;const error:any=new Error('lost invoice acknowledgment');error.status=503;throw error;}
+    return data;
+  };
+  const ensured=await saveInvoiceQueue(ids,'PACK-AUTO-NEW',invoiceRequest,true,async()=>{});
+  assert.equal(invoiceRequests,3);assert.equal(ensured.orders.length,9);assert.deepEqual(ensured.errors,[]);
+  assert(ensured.orders.every(invoiceComplete));
+  assert.equal(rawBucket.objects.get(currentOrderKey)!.etag,invoiceCommittedEtag,'Lost invoice acknowledgment must replay without another write');
+  assert.deepEqual(ensured.orders.slice(0,7).map(canonicalJson),lockedBefore,'Seven original invoices/downloads/exports must remain byte-for-byte identical');
+  assert(ensured.orders.slice(7).every(order=>order.invoice_pack_batch_id==='PACK-CONFIRM-NEW'));
+  for(let i=7;i<9;i++)for(const field of ['items','subtotal','total_amount','stock_allocated','stock_status','stock_allocated_at','waybill_number','invoice_number']){
+    assert.equal(canonicalJson([ensured.orders[i][field]]),canonicalJson([(invoiceOrders[i] as any)[field]]),'Invoice repair must not change '+field);
+  }
+  assert.equal(canonicalJson((await sdk.from('courier_waybills').select('*')).data),waybillBefore,'Invoice queue never writes or reassigns a waybill');
+  const repeatInvoice:any=await (await fast('/api/orders/invoices/ensure','POST',{order_ids:ids,batch_id:'PACK-DIFFERENT-RETRY'})).json();
+  assert(repeatInvoice.results.every((result:any)=>result.status==='already_saved'));
+  assert.equal(rawBucket.objects.get(currentOrderKey)!.etag,invoiceCommittedEtag);
+  assert.equal((await fast('/api/orders/invoices/ensure','POST',{order_ids:ids,batch_id:'PACK-NEW'},'invalid')).status,401);
+  assert.equal((await fast('/api/orders/invoices/ensure','POST',{order_ids:[ids[0],ids[0]],batch_id:'PACK-NEW'})).status,400);
+  assert.equal((await fast('/api/orders/invoices/ensure','POST',{order_ids:ids,batch_id:'arbitrary'})).status,400);
+  const blocked=applyInvoiceQueue([{...invoiceOrders[7],order_status:'Cancelled'}],[ids[7]],'PACK-NEW',{},'Staff');
+  assert.equal(blocked.results[0].status,'failed');assert.equal(blocked.updatedOrders.length,0);
+  const conflict=applyInvoiceQueue([invoiceOrders[7],{...invoiceOrders[8],waybill_number:invoiceOrders[7].waybill_number}],[ids[7]],'PACK-NEW',{},'Staff');
+  assert.equal(conflict.results[0].status,'failed');
+  const missingInvoiceOrder=applyInvoiceQueue(invoiceOrders,['does-not-exist'],'PACK-NEW',{},'Staff');assert.equal(missingInvoiceOrder.results[0].status,'failed');
+  const registryConflict=applyInvoiceQueue([invoiceOrders[7]],[ids[7]],'PACK-NEW',{},'Staff',[
+    {waybill_number:invoiceOrders[7].waybill_number,status:'Used',assigned_order_number:'OTHER-ORDER'}]);
+  assert.equal(registryConflict.results[0].status,'failed');
+  const concurrentInvoices=[0,1].map(index=>({...invoiceOrders[7],id:'invoice-cas-'+index,order_number:'FB-'+String(9100+index).padStart(6,'0'),
+    waybill_number:'CAS-INVOICE-WB-'+index,invoice_number:undefined}));
+  await sdk.from('order_snapshots').upsert(concurrentInvoices.map(order=>({order_id:order.id,order_number:order.order_number,payload:order})),{onConflict:'order_id'});
+  const invoiceCasResults=await Promise.all(concurrentInvoices.map(order=>fast('/api/orders/invoices/ensure','POST',{order_ids:[order.id],batch_id:'PACK-CAS-NEW'})));
+  assert(invoiceCasResults.every(response=>response.status===200));
+  const invoiceCasRows=(await sdk.from('order_snapshots').select('payload').in('order_id',concurrentInvoices.map(order=>order.id))).data!;
+  assert(invoiceCasRows.every(row=>invoiceComplete(row.payload)),'Concurrent staff invoice saves retain each other');
+  const localInvoiceFallback=await request('/api/orders/invoices/ensure','POST',{order_ids:ids,batch_id:'PACK-LOCAL-REPLAY'},token);
+  assert.equal(localInvoiceFallback.status,200);assert(localInvoiceFallback.body.results.every((result:any)=>result.status==='already_saved'));
+
+  // Execute both production queue paths after ALL Vite patches. Failed requests
+  // must not set local invoice flags, and a subsequent run must be allowed.
+  const autoStart=contextCode.indexOf('  // AUTO INVOICE QUEUE: publish only'),autoEnd=contextCode.indexOf('  const updateOrderStatus',autoStart);
+  const manualStart=contextCode.indexOf('  const markInvoicesGenerated = async'),manualEnd=contextCode.indexOf('  const markInvoiceBatchDownloaded',manualStart);
+  assert(autoStart>=0&&manualStart>=0);
+  let localInvoiceOrders:any[]=JSON.parse(JSON.stringify(invoiceOrders)),rejectQueue=true,scheduledRetry=0;
+  const effects:Array<()=>void>=[],inFlight={current:new Set()},retryTimer={current:null};
+  const queueScope:any={invoiceReady,invoiceComplete,adminUser:{id:adminId,name:'Admin'},sharedStoreReady:true,orders:localInvoiceOrders,
+    autoInvoiceReadyRef:inFlight,invoiceQueueRetryTimerRef:retryTimer,invoiceQueueRetry:0,getStaffSessionToken:()=>token,
+    useEffect:(callback:any)=>effects.push(callback),window:{setTimeout:()=>{scheduledRetry++;return 10;}},setInvoiceQueueRetry:()=>{},
+    sharedStaffRequest:async(path:string,options?:RequestInit)=>{if(rejectQueue){const error:any=new Error('503');error.status=503;throw error;}const response=await fast(path,options?.method||'GET',options?.body?JSON.parse(String(options.body)):undefined);return response.json();},
+    saveInvoiceQueue:(a:any,b:any,c:any,d?:any)=>saveInvoiceQueue(a,b,c,d,async()=>{}),
+    setOrders:(update:any)=>{localInvoiceOrders=update(localInvoiceOrders);},refreshOrdersFromServer:async()=>{},logActivity:()=>{},console:{warn:()=>{}},
+  };
+  vm.runInNewContext(transformSync(contextCode.slice(autoStart,autoEnd).replace('void saveInvoiceQueue','globalThis.autoQueuePromise=saveInvoiceQueue')+
+    contextCode.slice(manualStart,manualEnd)+'\nglobalThis.runManualInvoice=markInvoicesGenerated;',{loader:'ts',target:'es2022'}).code,queueScope);
+  await assert.rejects(queueScope.runManualInvoice(ids));assert.deepEqual(localInvoiceOrders,invoiceOrders);
+  effects[0]();await queueScope.autoQueuePromise;assert.deepEqual(localInvoiceOrders,invoiceOrders);assert.equal(inFlight.current.size,0);assert.equal(scheduledRetry,1);
+  rejectQueue=false;effects[0]();await queueScope.autoQueuePromise;assert(localInvoiceOrders.every(invoiceComplete));
+  assert.deepEqual(localInvoiceOrders.slice(0,7).map(canonicalJson),lockedBefore);
+  const malformed=(await saveInvoiceQueue([ids[0]],'PACK-NEW',async()=>({ok:true,results:[{id:ids[0],order_number:invoiceOrders[0].order_number,status:'saved',order:{id:ids[0],order_number:invoiceOrders[0].order_number}}]}),false,async()=>{}).then(()=>false,()=>true));
+  assert(malformed,'An incomplete invoice acknowledgment must never count as saved');
+
+  const checkedInvoices=auditConfirmCsvOrders(ensured.orders,ensured.orders.map(order=>({order_number:order.order_number,decision:'Confirmed',items:[{sku:'R1',quantity:1,variant:''}]})));
+  assert.equal(checkedInvoices.invoice_ready_orders,9);assert.equal(checkedInvoices.saved_invoice_orders,9);assert.equal(checkedInvoices.missing_invoice_orders,0);
+  const plainDescription=fardarParcelDescription([{sku:'R0047',product_name:'Masala Spice   Box â€“ 7 Compartment',quantity:1}]);
+  assert.equal(plainDescription,'R0047 Masala Spice Box – 7 Compartment x1');
+  const csvBytes=new Uint8Array(await utf8CsvBlob('Parcel Description\n"'+plainDescription+'"').arrayBuffer());
+  assert.deepEqual([...csvBytes.slice(0,3)],[239,187,191],'CSV must identify its encoding to Excel');
+  assert.equal(parseCsv(new TextDecoder().decode(csvBytes)).rows[0]['Parcel Description'],plainDescription);
+  assert.equal(fardarParcelDescription([{sku:'R1',product_name:'ළදරු භාණ්ඩ',variant_name:'නිල්',quantity:2}]),'R1 ළදරු භාණ්ඩ - නිල් x2');
+
+  let dashboardCode=fs.readFileSync('src/components/admin/AdminDashboard.tsx','utf8');
+  for(const plugin of viteConfig.plugins.flat(Infinity))if(plugin?.name?.startsWith('ora-')&&typeof plugin.transform==='function'){
+    const result=await plugin.transform(dashboardCode,'/repo/src/components/admin/AdminDashboard.tsx');if(result)dashboardCode=typeof result==='string'?result:result.code;
+  }
+  assert(dashboardCode.includes('selectedOrders.filter(o => invoiceReady(o) && invoiceComplete(o))'));
+  assert(dashboardCode.includes('const generated = await markInvoicesGenerated(selectedInvoiceIds'));
+  assert(dashboardCode.includes('Fardar Upload CSV ({fardarBatchReady.length})'));
+  assert(dashboardCode.includes('Retry Missing Invoices'));
+  assert(dashboardCode.includes('{pendingInvoiceSavePanel}'));
+  assert(dashboardCode.includes('const desc = fardarParcelDescription(o.items)'));
+  assert(dashboardCode.includes("const blob = utf8CsvBlob([header.join(','),...rows].join('\\n'))"));
+
   const original=confirmedRows[7].payload;
   const correction={id:original.id,order_number:original.order_number,expected:canonicalJson(original),patch:{call_center_status:'Confirmed',order_status:'Processing',items:original.items,customer_name:'Corrected'},clear_fields:[]};
   assert(validConfirmCsvEntries([correction]));
@@ -454,4 +559,4 @@ assert.notEqual((await upload('branding')).url,mediaResults[0].url);
 assert.notEqual((await upload('payment-receipt')).url,(await upload('payment-receipt')).url);
 assert.equal((await r2MediaHandler(new Request('https://test/api/media/ora-data/active-v2.json'),{ORA_MEDIA_R2:mediaBucket}))!.status,404);
 console.log('Compression fixture:',JSON.stringify({legacy_bytes:oldBytes,compressed_bytes:Buffer.byteLength(compacted.value),saved_percent:Number((100*(1-Buffer.byteLength(compacted.value)/oldBytes)).toFixed(1))}));
-console.log('PASS: Confirm CSV production parser (12 orders/7 already saved, 503 retries, lost response, packing/history, CAS staff locks, stale/missing orders, paid/advance/cancel and strict acknowledgments); native website save/version conflict/replay/public settings/session refresh and read-only Confirm audit; R2 encryption/compression, media dedup, backups/auth, Delivered CSV, Facebook audit and failed writes.');
+console.log('PASS: Confirm CSV production parser (12 orders/7 already saved, 503 retries, lost response, packing/history, CAS staff locks, stale/missing orders, paid/advance/cancel and strict acknowledgments); native website save/version conflict/replay/public settings/session refresh; invoice queue (9 ready/7 existing, failed/lost-response retries, existing locks/history, production auto/manual acknowledgment and UTF-8 CSV); read-only Confirm/invoice audit; R2 encryption/compression, media dedup, backups/auth, Delivered CSV, Facebook audit and failed writes.');

@@ -100,7 +100,7 @@ export function downloadCsv(fileName: string, rows: (string | number)[][]) {
     return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
   };
   const csv = rows.map((r) => r.map(esc).join(',')).join('\n');
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const blob = utf8CsvBlob(csv);
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -108,3 +108,15 @@ export function downloadCsv(fileName: string, rows: (string | number)[][]) {
   a.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+// Excel's automatic CSV detection needs the UTF-8 signature. MIME charset alone
+// is lost after download and can turn an en dash into Windows-1252 "â€“".
+export const utf8CsvBlob = (csv: string) => new Blob(['\uFEFF', csv.replace(/^\uFEFF/, '')], { type: 'text/csv;charset=utf-8' });
+
+export const fardarParcelDescription = (items: Array<{sku?:string;product_name?:string;variant_name?:string;quantity:number}>) => {
+  const readable = (value:unknown) => String(value||'')
+    .replace(/â€“/g,'–').replace(/â€”/g,'—').replace(/â€™/g,'’').replace(/â€˜/g,'‘')
+    .replace(/â€œ/g,'“').replace(/â€\u009d/g,'”').replace(/Â°/g,'°').replace(/Â\u00a0/g,' ')
+    .replace(/\s+/g,' ').trim();
+  return items.map(item=>`${readable(item.sku)} ${readable(item.product_name)}${item.variant_name?' - '+readable(item.variant_name):''} x${item.quantity}`).join(' | ');
+};
