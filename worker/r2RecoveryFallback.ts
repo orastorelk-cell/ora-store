@@ -5,6 +5,7 @@ import { r2StorefrontHandler } from './r2Storefront';
 import { Buffer } from 'node:buffer';
 import { auditConfirmCsvOrders, validConfirmAuditOrders } from '../src/lib/confirmCsvAudit';
 import { r2InvoiceQueueHandler } from './r2InvoiceQueue';
+import { r2OrderCancellationHandler } from './r2OrderCancellation';
 
 type Env = Record<string, any>;
 type StaffSession = { sub:string; role:'admin'|'staff'; exp:number };
@@ -38,9 +39,21 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   const refresh=request.method==='POST'&&path==='/api/staff/session/refresh';
   const audit=request.method==='POST'&&path==='/api/orders/confirm-csv/check';
   const invoices=request.method==='POST'&&path==='/api/orders/invoices/ensure';
-  if(!read&&!delivered&&!confirmed&&!refresh&&!audit&&!invoices)return null;
+  const cancellation=['GET','POST'].includes(request.method)&&path==='/api/orders/cancel-before-dispatch';
+  const orderPut=['PUT','DELETE'].includes(request.method)&&/^\/api\/orders\/[^/]+$/.test(path);
+  if(!read&&!delivered&&!confirmed&&!refresh&&!audit&&!invoices&&!cancellation&&!orderPut)return null;
   const user=await verifyActiveStaff(request,env);
   if(!user)return json({error:'Login session required.'},401);
+  if(cancellation)return r2OrderCancellationHandler(request,env,user);
+  if(orderPut){
+    const id=decodeURIComponent(path.slice('/api/orders/'.length));
+    const current=(await readDataTable(env,'order_snapshots')).find(row=>String(row.order_id)===id)?.payload;
+    if(current?.cancel_stock_restore?.operation_id){
+      if(request.method==='DELETE')return json({error:'The cancelled order and its retired waybill must remain in history.'},409);
+      return json({ok:true,order:current,waybill_preserved:true,cancellation_preserved:true});
+    }
+    return null;
+  }
   if(invoices)return r2InvoiceQueueHandler(request,env,user);
   if(audit){
     const body:any=await request.json().catch(()=>null);

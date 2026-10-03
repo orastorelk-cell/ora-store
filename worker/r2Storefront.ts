@@ -1,5 +1,6 @@
 import { readDataTable, mutateDataTable, resolveKnownBrandImages } from './cloudflareData';
 import { canonicalJson } from '../src/lib/confirmCsvSave';
+import { cancellationInProgress } from './r2OrderCancellation';
 
 type VerifyStaff=(request:Request,env:unknown)=>Promise<Record<string,any>|null>;
 const KEY='storefront-state-v1';
@@ -55,6 +56,7 @@ export const r2StorefrontHandler=async(request:Request,env:unknown,ctx:any,verif
   const products=body.products.slice(0,5000),categories=body.categories.slice(0,1000);
   if(JSON.stringify({products,categories,settings:body.settings}).length>15000000)return json({error:'Storefront catalog is too large. Use public image URLs instead of embedded image data.'},413);
   const saved=await mutateDataTable(env,'admin_data_store',rows=>{
+    if(cancellationInProgress(rows))return {cancellationPending:true};
     let row=rows.find(row=>row.key===KEY);const current=stateFrom(row);
     const settings=resolveKnownBrandImages({...body.settings,google_sheet_webhook_url:incomingWebhook||String(current?.settings.google_sheet_webhook_url||'').trim()});
     const unchanged=current&&canonicalJson({products,categories,settings})===canonicalJson({products:current.products,categories:current.categories,settings:current.settings});
@@ -65,6 +67,7 @@ export const r2StorefrontHandler=async(request:Request,env:unknown,ctx:any,verif
     row.payload=state;row.updated_at=state.updated_at;
     return {state,changed:true};
   });
+  if(saved.cancellationPending)return json({error:'An order cancellation is restoring stock. Finish or retry that cancellation before saving the catalog.',code:'CANCELLATION_PENDING'},409);
   if(saved.conflict)return json({error:'The website changed in another session. Your local edit was not overwritten; reload the latest website data before saving again.',code:'STOREFRONT_CONFLICT'},409);
   const state=saved.state!;
   if(saved.changed&&ctx?.waitUntil)ctx.waitUntil(syncCatalog(String(state.settings.google_sheet_webhook_url||''),products).catch(()=>console.warn('Catalog Sheet sync could not finish; the website is safely saved in R2.')));

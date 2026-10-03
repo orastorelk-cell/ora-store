@@ -359,6 +359,9 @@ export const cloudflareDataFetch: typeof fetch = async (input,init) => {
             if(row[pk]==null && pk==='id')row.id=crypto.randomUUID();
             if(row[pk]==null)throw new DataError('Missing record key for '+resource,400);
             const at=current.findIndex(item=>String(item[pk])===String(row[pk]));
+            if(resource==='admin_data_store'&&row.key==='storefront-state-v1'&&current.some(item=>String(item.key).startsWith('order-cancel-stock-v1:')&&['pending','stock_saved'].includes(item.payload?.phase))){
+              throw new DataError('An order cancellation is restoring stock. Retry after it completes.',409);
+            }
             if(at>=0 && !upsert)throw new DataError('Duplicate record in '+resource,409);
             if(resource==='order_snapshots' && current.some(item=>item.order_number===row.order_number && item.order_id!==row.order_id)) {
               throw new DataError('Order number is already reserved.',409);
@@ -371,11 +374,24 @@ export const cloudflareDataFetch: typeof fetch = async (input,init) => {
               throw new DataError('Waybill is already locked to another order.',409);
             }
             const saved=at>=0 ? {...current[at],...row} : row;
+            if(resource==='order_snapshots'&&at>=0&&current[at].payload?.cancel_stock_restore?.operation_id){
+              saved.payload=current[at].payload;
+            }
+            if(resource==='courier_waybills'&&at>=0&&current[at].status==='Cancelled'&&current[at].permanently_retired===true){
+              Object.assign(saved,current[at]);
+            }
             if(at>=0)current[at]=saved;else current.push(saved);
             changed.push(saved);
           }
         } else if(request.method==='PATCH' || request.method==='DELETE') {
           for(let i=current.length-1;i>=0;i--) if(matches(current[i],url.searchParams)) {
+            if((resource==='order_snapshots'&&current[i].payload?.cancel_stock_restore?.operation_id)||
+              (resource==='courier_waybills'&&current[i].status==='Cancelled'&&current[i].permanently_retired===true)){
+              throw new DataError('The cancelled order and retired waybill must remain locked in history.',409);
+            }
+            if(resource==='admin_data_store'&&current[i].key==='storefront-state-v1'&&current.some(item=>String(item.key).startsWith('order-cancel-stock-v1:')&&['pending','stock_saved'].includes(item.payload?.phase))){
+              throw new DataError('An order cancellation is restoring stock. Retry after it completes.',409);
+            }
             if(request.method==='DELETE')changed.unshift(...current.splice(i,1));
             else {current[i]={...current[i],...body};changed.unshift(current[i]);}
           }

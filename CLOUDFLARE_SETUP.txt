@@ -138,3 +138,13 @@ LEGACY MEDIA RECOVERY
   legacy hero_banners[0].image. Their references are preserved; neither original
   file exists in the repository. Re-upload those two originals to R2 when they
   become available. Product images already use R2.
+PRE-DISPATCH CANCELLATION
+Super Admin may open /cancel-order from an order's Cancel Before Dispatch link.
+GET /api/orders/cancel-before-dispatch?waybill=... returns a private summary without customer contact data.
+POST the checked order_id, current waybill_number and reason to cancel an unsent parcel.
+Allocated normal items, exact variants and snapshotted bundle components are restored once.
+The original invoice, amounts, export history and waybill remain on the cancelled order.
+The courier registry permanently retires the waybill for this same order.
+Encrypted cancellation journals share the catalog's ETag transaction. Pending journals temporarily block catalog saves; retry the same cancellation to finish after a failed write.
+Stale order saves and waybill mutations cannot resurrect or recycle a completed cancellation.
+Shipped, delivered, handed-over, returned or COD-received parcels require the existing verified return process.
