@@ -1,9 +1,15 @@
-import { readDataTable, mutateDataTable, resolveKnownBrandImages } from './cloudflareData';
-import { canonicalJson } from '../src/lib/confirmCsvSave';
+import { readDataTable, replaceDataTable, resolveKnownBrandImages } from './cloudflareData';
 import { cancellationInProgress } from './r2OrderCancellation';
 
 type VerifyStaff=(request:Request,env:unknown)=>Promise<Record<string,any>|null>;
 const KEY='storefront-state-v1';
+export const sameStorefrontValue=(a:any,b:any):boolean=>{
+  if(a===b)return true;
+  if(a===null||b===null||typeof a!=='object'||typeof b!=='object')return false;
+  if(Array.isArray(a)!==Array.isArray(b))return false;
+  const keys=Object.keys(a);
+  return keys.length===Object.keys(b).length&&keys.every(key=>Object.prototype.hasOwnProperty.call(b,key)&&sameStorefrontValue(a[key],b[key]));
+};
 const json=(data:unknown,status=200)=>new Response(JSON.stringify(data),{status,headers:{
   'content-type':'application/json; charset=utf-8','cache-control':'no-store, no-cache, must-revalidate',
   pragma:'no-cache','x-ora-storage':'cloudflare-r2',
@@ -55,17 +61,16 @@ export const r2StorefrontHandler=async(request:Request,env:unknown,ctx:any,verif
   if(!existing?.settings?.google_sheet_webhook_url&&incomingWebhook)return null;
   const products=body.products.slice(0,5000),categories=body.categories.slice(0,1000);
   if(JSON.stringify({products,categories,settings:body.settings}).length>15000000)return json({error:'Storefront catalog is too large. Use public image URLs instead of embedded image data.'},413);
-  const saved=await mutateDataTable(env,'admin_data_store',rows=>{
-    if(cancellationInProgress(rows))return {cancellationPending:true};
-    let row=rows.find(row=>row.key===KEY);const current=stateFrom(row);
+  const saved=await replaceDataTable<any>(env,'admin_data_store',rows=>{
+    if(cancellationInProgress(rows as any[]))return {rows,result:{cancellationPending:true}};
+    const row=rows.find(row=>row.key===KEY);const current=stateFrom(row);
     const settings=resolveKnownBrandImages({...body.settings,google_sheet_webhook_url:incomingWebhook||String(current?.settings.google_sheet_webhook_url||'').trim()});
-    const unchanged=current&&canonicalJson({products,categories,settings})===canonicalJson({products:current.products,categories:current.categories,settings:current.settings});
-    if(unchanged)return {state:current,changed:false};
-    if(body.expected_version!==undefined&&Number(body.expected_version)!==Number(current?.version||0))return {conflict:true};
+    const unchanged=current&&sameStorefrontValue(products,current.products)&&sameStorefrontValue(categories,current.categories)&&sameStorefrontValue(settings,current.settings);
+    if(unchanged)return {rows,result:{state:current,changed:false}};
+    if(body.expected_version!==undefined&&Number(body.expected_version)!==Number(current?.version||0))return {rows,result:{conflict:true}};
     const state={products,categories,settings,version:Math.max(1,Number(current?.version||0)+1),updated_at:new Date().toISOString()};
-    if(!row){row={key:KEY};rows.push(row);}
-    row.payload=state;row.updated_at=state.updated_at;
-    return {state,changed:true};
+    const replacement={...row,key:KEY,payload:state,updated_at:state.updated_at};
+    return {rows:row?rows.map(item=>item===row?replacement:item):[...rows,replacement],result:{state,changed:true}};
   });
   if(saved.cancellationPending)return json({error:'An order cancellation is restoring stock. Finish or retry that cancellation before saving the catalog.',code:'CANCELLATION_PENDING'},409);
   if(saved.conflict)return json({error:'The website changed in another session. Your local edit was not overwritten; reload the latest website data before saving again.',code:'STOREFRONT_CONFLICT'},409);

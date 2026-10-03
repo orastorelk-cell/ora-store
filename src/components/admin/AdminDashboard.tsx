@@ -168,6 +168,7 @@ export const AdminDashboard: React.FC = () => {
     unblockCustomer,
     addPurchaseOrder,
     settings,
+    orderLoadError,
     addProduct,
     updateProduct,
     deleteProduct,
@@ -3257,6 +3258,7 @@ Suitable For:
           <div className="flex flex-wrap items-center gap-2">
             <Store className="w-5 h-5 text-orange-600" />
             <h1 className="text-xl font-extrabold text-gray-900">O-RA Admin Control Center</h1>
+            {orderLoadError && <p role="status" className="mt-2 rounded-xl bg-amber-100 p-3 text-sm text-amber-950">{orderLoadError}</p>}
 
             {adminUser && (
               <span

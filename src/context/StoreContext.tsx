@@ -99,6 +99,8 @@ interface StoreContextType {
   settings: StoreSettings;
   /** True after the authoritative shared storefront state has finished its first load attempt. */
   sharedStoreReady: boolean;
+  sharedOrdersReady: boolean;
+  orderLoadError: string;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   selectedCategorySlug: string | null;
@@ -594,6 +596,8 @@ useEffect(() => {
   const [lastPlacedOrder, setLastPlacedOrder] = useState<Order | null>(null);
   const [isAdminView, setIsAdminView] = useState(false);
   const [sharedStoreReady, setSharedStoreReady] = useState(false);
+  const [sharedOrdersReady,setSharedOrdersReady]=useState(false);
+  const [orderLoadError,setOrderLoadError]=useState('');
   const sharedStoreVersionRef = useRef(0);
   const orderServerVersionRef = useRef('');
   // Serialize full storefront publishes. Rapid Admin edits used to start overlapping
@@ -969,8 +973,11 @@ useEffect(() => {
 
   const refreshOrdersFromServer = async () => {
     if (!adminUser || !getStaffSessionToken()) return;
-    const data = await sharedStaffRequest('/api/orders');
-    const serverOrders: Order[] = Array.isArray(data?.orders) ? data.orders : [];
+    let data:any;
+    try{data=await confirmCsvRequestWithRetry(sharedStaffRequest,'/api/orders?format=snapshots');}
+    catch(error:any){setOrderLoadError('Orders could not load from the server. Your previous list is kept. Automatic retry is active.');throw error;}
+    const serverOrders: Order[] = Array.isArray(data?.snapshots) ? data.snapshots.map((row:any)=>row?.payload) : data?.orders;
+    if(!Array.isArray(serverOrders)||serverOrders.some(order=>!order||!order.id||!order.order_number||!Array.isArray(order.items))){setOrderLoadError('The server returned an incomplete order list. Automatic retry is active.');throw new Error('Order loading did not finish. The previous order list has been kept; retrying the server.');}
     const sortedServerOrders = [...serverOrders].sort((a,b)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime());
 
     // Customer DB is derived from the same durable order snapshots for every
@@ -1020,6 +1027,7 @@ useEffect(() => {
       .sort((a,b)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime());
 
     setOrders(sortedServerOrders);
+    setSharedOrdersReady(true);setOrderLoadError('');
     setCustomers(serverCustomers);
     try {
       localStorage.setItem('ora_orders', JSON.stringify(sortedServerOrders));
@@ -1036,6 +1044,8 @@ useEffect(() => {
   // Server is the authoritative order mirror. On Admin login, replace the browser
   // order cache with the durable server list instead of merging stale local orders back.
   useEffect(() => {
+    setSharedOrdersReady(false);
+    orderServerVersionRef.current = '';
     if (!adminUser || !getStaffSessionToken()) return;
     refreshOrdersFromServer().catch(err=>console.warn('Order server refresh failed:',err?.message||err));
   }, [adminUser?.id]);
@@ -1054,7 +1064,7 @@ useEffect(() => {
       try {
         const nextVersion = await readOrderServerVersion();
         if (!orderServerVersionRef.current) {
-          orderServerVersionRef.current = nextVersion;
+          await refreshOrdersFromServer();
           return;
         }
         if (nextVersion !== orderServerVersionRef.current) {
@@ -3508,6 +3518,8 @@ useEffect(() => {
         addPurchaseOrder,
         settings,
         sharedStoreReady,
+        sharedOrdersReady,
+        orderLoadError,
         searchQuery,
         setSearchQuery,
         selectedCategorySlug,

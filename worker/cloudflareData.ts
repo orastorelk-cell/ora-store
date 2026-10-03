@@ -103,19 +103,19 @@ export const dataBucket = (env: unknown = runtime): DataBucket | null => {
   encryptedBuckets.set(bucket,{secret,compress,bucket:wrapped});return wrapped;
 };
 const options = { httpMetadata:{contentType:'application/json',cacheControl:'no-store'}, customMetadata:{oraData:'1'} };
-const parsedCaches = new WeakMap<DataBucket,Map<string,{etag:string;value:any}>>();
+const parsedCaches = new WeakMap<DataBucket,Map<string,{etag:string;value:any;text:string}>>();
 const parsedObject = async (bucket: DataBucket, key: string) => {
   const object = await bucket.get(key);
   if (!object) return null;
   let cache=parsedCaches.get(bucket);
   if(!cache){cache=new Map();parsedCaches.set(bucket,cache);}
   const cached=cache.get(key);
-  if(cached?.etag===object.etag)return {object,value:cached.value};
+  if(cached?.etag===object.etag)return {object,value:cached.value,text:cached.text};
   // Corruption and read failures must never be converted into an empty database.
-  const value=JSON.parse(await object.text());
+  const text=await object.text(),value=JSON.parse(text);
   if(cache.size>=48)cache.delete(cache.keys().next().value!);
-  cache.set(key,{etag:object.etag,value});
-  return { object, value };
+  cache.set(key,{etag:object.etag,value,text});
+  return { object, value, text };
 };
 const response = (value: unknown, status = 200, extra: Record<string,string> = {}) => new Response(
   status === 204 ? null : JSON.stringify(value),
@@ -196,15 +196,15 @@ export const importRecovery = async (bucket: DataBucket, bundle: any) => {
 const tableState = async (bucket: DataBucket, prefix: string, table: string) => {
   const state = await parsedObject(bucket,prefix+table+'.json');
   if (!state || !Array.isArray(state.value)) throw new DataError('Cloudflare table is missing or invalid: '+table);
-  return {rows:state.value as Row[],etag:state.object.etag};
+  return {rows:state.value as Row[],etag:state.object.etag,text:state.text};
 };
-const preserveHourlyBackup = async (bucket:DataBucket,table:string,rows:Row[]) => {
+const preserveHourlyBackup = async (bucket:DataBucket,table:string,rows:Row[],serialized?:string) => {
   // Seven days of hourly slots, bounded independently of traffic and order count.
   const hour = Math.floor(Date.now()/3_600_000);
   const key = 'ora-data/backups-v2/'+table+'/'+(hour%168)+'.json';
   const old = await bucket.get(key);
   if (old?.customMetadata?.hour === String(hour)) return;
-  await bucket.put(key,JSON.stringify(rows),{...options,
+  await bucket.put(key,serialized??JSON.stringify(rows),{...options,
     customMetadata:{oraData:'1',hour:String(hour),createdAt:new Date().toISOString()},
     onlyIf:old ? {etagMatches:old.etag} : {etagDoesNotMatch:'*'},
   });
@@ -212,14 +212,14 @@ const preserveHourlyBackup = async (bucket:DataBucket,table:string,rows:Row[]) =
 const mutateTable = async <T>(bucket:DataBucket,prefix:string,table:string,change:(rows:Row[])=>T):Promise<T> => {
   for(let attempt=0;attempt<8;attempt++) {
     const state = await tableState(bucket,prefix,table);
-    const before = JSON.stringify(state.rows);
+    const before = state.text;
     // A failed CAS or write must never modify a cached successful read.
     const rows=JSON.parse(before) as Row[];
     const result = change(rows);
     const after=JSON.stringify(rows);
     if(before===after)return result;
-    if (table !== '__sequences') await preserveHourlyBackup(bucket,table,JSON.parse(before));
-    const saved = await bucket.put(prefix+table+'.json',after,{...options,onlyIf:{etagMatches:state.etag}});
+    if (table !== '__sequences') await preserveHourlyBackup(bucket,table,state.rows,before);
+    const saved = await bucket.put(prefix+table+'.json',after,{...options,customMetadata:{oraData:'1',oraCount:String(rows.length),oraUpdatedAt:new Date().toISOString()},onlyIf:{etagMatches:state.etag}});
     if(saved) return result;
   }
   throw new DataError('Concurrent Cloudflare writes; refresh and retry.',409);
@@ -233,11 +233,40 @@ export const readDataTable=async(env:unknown,table:string):Promise<Row[]>=>{
   const active=await activeData(bucket);if(!active)throw new DataError('Cloudflare recovery is required.');
   return (await tableState(bucket,active.prefix,table)).rows;
 };
+// Ship already-serialized snapshots to the browser instead of parsing and
+// serializing the full order history inside the Free Worker's CPU budget.
+export const readDataTableWire=async(env:unknown,table:string)=>{
+  if(!primaryKeys[table])throw new DataError('Unknown Cloudflare table.',400);
+  const bucket=dataBucket(env);if(!bucket)throw new DataError('Cloudflare R2 binding is unavailable.');
+  const active=await activeData(bucket);if(!active)throw new DataError('Cloudflare recovery is required.');
+  const object=await bucket.get(active.prefix+table+'.json');
+  if(!object)throw new DataError('Cloudflare table is missing: '+table);
+  return object;
+};
 export const mutateDataTable=async<T>(env:unknown,table:string,change:(rows:Row[])=>T):Promise<T>=>{
   if(!primaryKeys[table])throw new DataError('Unknown Cloudflare table.',400);
   const bucket=dataBucket(env);if(!bucket)throw new DataError('Cloudflare R2 binding is unavailable.');
   const active=await activeData(bucket);if(!active)throw new DataError('Cloudflare recovery is required.');
   return mutateTable(bucket,active.prefix,table,change);
+};
+
+// Immutable callers replace only the changed records. A catalog save must not
+// clone, parse, sort and stringify all unrelated admin records several times.
+// Returning the original rows is a read-only acknowledgment with no R2 write.
+export const replaceDataTable=async<T>(env:unknown,table:string,change:(rows:readonly Row[])=>{rows:readonly Row[];result:T}):Promise<T>=>{
+  if(!primaryKeys[table])throw new DataError('Unknown Cloudflare table.',400);
+  const bucket=dataBucket(env);if(!bucket)throw new DataError('Cloudflare R2 binding is unavailable.');
+  const active=await activeData(bucket);if(!active)throw new DataError('Cloudflare recovery is required.');
+  for(let attempt=0;attempt<8;attempt++){
+    const state=await tableState(bucket,active.prefix,table),next=change(state.rows);
+    if(next.rows===state.rows)return next.result;
+    const after=JSON.stringify(next.rows);
+    if(after===state.text)return next.result;
+    await preserveHourlyBackup(bucket,table,state.rows,state.text);
+    const saved=await bucket.put(active.prefix+table+'.json',after,{...options,customMetadata:{oraData:'1',oraCount:String(next.rows.length),oraUpdatedAt:new Date().toISOString()},onlyIf:{etagMatches:state.etag}});
+    if(saved)return next.result;
+  }
+  throw new DataError('Concurrent Cloudflare writes; refresh and retry.',409);
 };
 const recoverKnownBrandImages=async(bucket:DataBucket,prefix:string)=>{
   if(migratedBrandPrefixes.has(prefix))return;

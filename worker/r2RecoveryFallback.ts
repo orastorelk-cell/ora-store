@@ -1,4 +1,4 @@
-import { activeData, configureCloudflareData, dataBucket, readDataTable, mutateDataTable } from './cloudflareData';
+import { activeData, configureCloudflareData, dataBucket, readDataTable, readDataTableWire, mutateDataTable } from './cloudflareData';
 import { applyDeliveredReport, type DeliveredEntry } from '../src/lib/deliveredOrders';
 import { applyConfirmCsvDecisions, validConfirmCsvEntries } from '../src/lib/confirmCsvSave';
 import { r2StorefrontHandler } from './r2Storefront';
@@ -6,6 +6,7 @@ import { Buffer } from 'node:buffer';
 import { auditConfirmCsvOrders, validConfirmAuditOrders } from '../src/lib/confirmCsvAudit';
 import { r2InvoiceQueueHandler } from './r2InvoiceQueue';
 import { r2OrderCancellationHandler } from './r2OrderCancellation';
+import { r2WaybillPoolHandler, r2WaybillAssignmentHandler, r2FulfilmentStatusHandler } from './r2Waybills';
 
 type Env = Record<string, any>;
 type StaffSession = { sub:string; role:'admin'|'staff'; exp:number };
@@ -40,10 +41,16 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   const audit=request.method==='POST'&&path==='/api/orders/confirm-csv/check';
   const invoices=request.method==='POST'&&path==='/api/orders/invoices/ensure';
   const cancellation=['GET','POST'].includes(request.method)&&path==='/api/orders/cancel-before-dispatch';
+  const pool=(request.method==='GET'&&path==='/api/courier/waybills')||(request.method==='POST'&&path==='/api/courier/waybills/import');
+  const assignment=request.method==='POST'&&path==='/api/orders/waybill/assign';
+  const fulfilment=request.method==='GET'&&path==='/api/orders/fulfilment-status';
   const orderPut=['PUT','DELETE'].includes(request.method)&&/^\/api\/orders\/[^/]+$/.test(path);
-  if(!read&&!delivered&&!confirmed&&!refresh&&!audit&&!invoices&&!cancellation&&!orderPut)return null;
+  if(!read&&!delivered&&!confirmed&&!refresh&&!audit&&!invoices&&!cancellation&&!orderPut&&!pool&&!assignment&&!fulfilment)return null;
   const user=await verifyActiveStaff(request,env);
   if(!user)return json({error:'Login session required.'},401);
+  if(pool)return r2WaybillPoolHandler(request,env);
+  if(assignment)return r2WaybillAssignmentHandler(request,env);
+  if(fulfilment)return r2FulfilmentStatusHandler(request,env);
   if(cancellation)return r2OrderCancellationHandler(request,env,user);
   if(orderPut){
     const id=decodeURIComponent(path.slice('/api/orders/'.length));
@@ -68,12 +75,20 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
     return json({ok:true,token:payload+'.'+signature});
   }
   if(read){
+    if(path.endsWith('/version')){
+      const wire=await readDataTableWire(env,'order_snapshots'),meta=wire.customMetadata||{};
+      if(/^\d+$/.test(meta.oraCount||'')&&Number.isFinite(Date.parse(meta.oraUpdatedAt||'')))return json({count:Number(meta.oraCount),updated_at:meta.oraUpdatedAt,revision:wire.etag});
+    }else if(new URL(request.url).searchParams.get('format')==='snapshots'){
+      const wire=await readDataTableWire(env,'order_snapshots'),text=await wire.text();
+      if(!text.startsWith('[')||!text.endsWith(']'))throw new Error('Invalid Cloudflare order data.');
+      return new Response('{"snapshots":'+text+'}',{headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-ora-storage':'cloudflare-r2'}});
+    }
     const rows=await readDataTable(env,'order_snapshots');
     if(path.endsWith('/version')){
       const updated_at=rows.reduce((latest,row)=>String(row.updated_at||'')>latest?String(row.updated_at||''):latest,'');
       return json({count:rows.length,updated_at});
     }
-    const orders=rows.map(row=>row.payload).filter(Boolean).sort((a,b)=>Date.parse(b.created_at||'')-Date.parse(a.created_at||''));
+    const orders=rows.map(row=>row.payload).filter(Boolean);
     return json({orders});
   }
   if(confirmed){
