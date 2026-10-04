@@ -4,6 +4,8 @@ export const PROFIT_PACKING_COST = 100;
 export const PROFIT_PAGE_SIZE = 10;
 export type PaymentAmountBasis = 'auto' | 'gross' | 'net';
 export type ProfitSource = 'Facebook' | 'TikTok' | 'Other';
+export type ProfitPaymentFilter = 'all' | 'cod' | 'online';
+export interface PaidProfitSelection { paymentFilter?: ProfitPaymentFilter; fromDate?: string; toDate?: string; }
 export interface PurchaseAllocation {
   purchaseId: string;
   reference: string;
@@ -22,6 +24,8 @@ export interface ProfitItem {
 }
 export interface ProfitRow {
   waybill: string;
+  orderId?: string;
+  paymentKind?: 'cod' | 'online';
   orderNumber?: string;
   systemDate?: string;
   source?: ProfitSource;
@@ -117,6 +121,29 @@ const validQuantity = (value: unknown) => Number.isInteger(Number(value)) && Num
 const excluded = (order: Order) => Boolean(order.is_test_order || order.is_duplicate_order);
 const sourceFor = (order: Order): ProfitSource => order.order_source === 'Facebook Ads' ? 'Facebook'
   : order.order_source === 'TikTok Ads' ? 'TikTok' : /^FB-/i.test(order.order_number) ? 'Facebook' : /^TK-/i.test(order.order_number) ? 'TikTok' : 'Other';
+
+/** Use the same saved payment records as COD Received and paid online orders.
+ * A receipt awaiting approval or an advance alone is not a completed sale.
+ */
+export function savedProfitPaymentKind(order: Order): 'cod' | 'online' | null {
+  if (excluded(order) || order.order_status === 'Cancelled' || order.payment_status === 'Refunded') return null;
+  if (order.cod_payment_received === true) return 'cod';
+  if (order.payment_method === 'Bank Payment' && order.payment_status === 'Paid'
+    && order.payment_paid_type !== 'Advance' && order.payment_verification_status !== 'Rejected') return 'online';
+  return null;
+}
+
+export function selectSavedPaidProfitOrders(orders: Order[], selection: PaidProfitSelection = {}): Order[] {
+  const from = selection.fromDate || '', to = selection.toDate || '';
+  return orders.filter(order => {
+    const kind = savedProfitPaymentKind(order);
+    if (!kind || (selection.paymentFilter && selection.paymentFilter !== 'all' && kind !== selection.paymentFilter)) return false;
+    if (!from && !to) return true;
+    const day = profitSystemDay(order.created_at);
+    return Boolean(day && (!from || day >= from) && (!to || day <= to));
+  }).sort((a, b) => (profitSystemDay(b.created_at) || '').localeCompare(profitSystemDay(a.created_at) || '')
+    || a.order_number.localeCompare(b.order_number, 'en', { numeric: true }) || a.id.localeCompare(b.id));
+}
 
 /** Reconstruct FIFO cost from purchased quantities across ALL allocated orders, not just this upload.
  * This ledger is private, read-only report state. It never changes inventory, orders or purchases.
@@ -234,9 +261,10 @@ function receivedPayment(order: Order, courier: number | null, basis: PaymentAmo
 }
 
 export function buildPaidWaybillProfitReport(input: {
-  waybills: string[]; orders: Order[]; purchases: PurchaseOrder[]; returns?: ReturnRecord[]; paymentBasis?: PaymentAmountBasis;
+  waybills?: string[]; orders: Order[]; purchases: PurchaseOrder[]; returns?: ReturnRecord[]; paymentBasis?: PaymentAmountBasis;
+  selection?: PaidProfitSelection;
 }): PaidWaybillProfitReport {
-  const normalized = input.waybills.map(normalizeProfitWaybill).filter(Boolean);
+  const normalized = (input.waybills || []).map(normalizeProfitWaybill).filter(Boolean);
   const waybills = [...new Set(normalized)];
   const costs = purchaseCosts(input.orders, input.purchases, input.returns || []);
   const byWaybill = new Map<string, Order[]>();
@@ -244,20 +272,26 @@ export function buildPaidWaybillProfitReport(input: {
     const key = normalizeProfitWaybill(order.waybill_number);
     if (key) byWaybill.set(key, [...(byWaybill.get(key) || []), order]);
   });
-  const rows: ProfitRow[] = waybills.map(waybill => {
-    const matches = byWaybill.get(waybill) || [];
+  const entries: Array<{ waybill: string; savedOrder?: Order }> = input.waybills !== undefined
+    ? waybills.map(waybill => ({ waybill }))
+    : selectSavedPaidProfitOrders(input.orders, input.selection).map(savedOrder => ({ waybill: normalizeProfitWaybill(savedOrder.waybill_number), savedOrder }));
+  const rows: ProfitRow[] = entries.map(({ waybill, savedOrder }) => {
+    const matches = savedOrder ? [savedOrder] : byWaybill.get(waybill) || [];
     const row: ProfitRow = { waybill, items: [], sales: null, received: null, purchasing: null, courier: null, packing: null, profit: null, issues: [], eligible: false };
     if (matches.length !== 1) { row.issues.push(matches.length ? 'Waybill belongs to multiple orders. Resolve the duplicate.' : 'Waybill was not found in the system.'); return row; }
     const order = matches[0];
+    row.orderId = order.id; row.paymentKind = savedProfitPaymentKind(order) || undefined;
     row.orderNumber = order.order_number; row.source = sourceFor(order); row.systemDate = profitSystemDay(order.created_at);
+    if (!waybill) row.issues.push('Waybill has not been assigned to this paid order.');
+    else if (savedOrder && (byWaybill.get(waybill)?.length || 0) > 1) row.issues.push('Waybill belongs to multiple orders. Resolve the duplicate.');
     if (!row.systemDate) row.issues.push('System arrival date is missing.');
     if (order.order_status === 'Cancelled' || order.payment_status === 'Refunded' || excluded(order)) row.issues.push('Cancelled, refunded, duplicate or test order: excluded.');
-    else row.eligible = true;
+    else row.eligible = Boolean(savedProfitPaymentKind(order));
     row.courier = amount(order.fardar_delivery_fee);
     if (row.courier === null) row.issues.push('Actual Fardar delivery cost is missing.');
     const payment = receivedPayment(order, row.courier, input.paymentBasis || 'auto');
     row.received = payment.received; row.paymentNote = payment.note;
-    if (payment.issue) { row.issues.push(payment.issue); row.eligible = false; }
+    if (payment.issue) row.issues.push(payment.issue);
     row.packing = PROFIT_PACKING_COST;
     row.items = (order.items || []).map((item, index) => {
       const qty = Number(item.quantity), unit = amount(item.unit_price);
@@ -280,7 +314,10 @@ export function buildPaidWaybillProfitReport(input: {
   const ranges = { Facebook: null, TikTok: null } as PaidWaybillProfitReport['ranges'];
   for (const source of ['Facebook', 'TikTok'] as const) {
     const dates = rows.filter(row => row.eligible && row.source === source && row.systemDate).map(row => row.systemDate!).sort();
-    if (dates.length) ranges[source] = { from: dates[0], to: dates[dates.length - 1], count: dates.length };
+    if (dates.length) ranges[source] = {
+      from: input.selection?.fromDate && input.selection?.toDate ? input.selection.fromDate : dates[0],
+      to: input.selection?.fromDate && input.selection?.toDate ? input.selection.toDate : dates[dates.length - 1], count: dates.length,
+    };
   }
   const ready = rows.filter(row => row.profit !== null);
   const totals = { ready: ready.length, review: rows.length - ready.length,
@@ -288,6 +325,17 @@ export function buildPaidWaybillProfitReport(input: {
     purchasing: round(ready.reduce((sum, row) => sum + row.purchasing!, 0)), courier: round(ready.reduce((sum, row) => sum + row.courier!, 0)),
     packing: ready.length * PROFIT_PACKING_COST, beforeAds: round(ready.reduce((sum, row) => sum + row.profit!, 0)) };
   return { rows, duplicates: normalized.length - waybills.length, ranges, totals };
+}
+
+/** A fixed order-date period keeps the same advertising budget when late payments arrive.
+ * Counts and individual paid orders must not turn the same period into a new expense.
+ */
+export function profitAdvertisingPeriodKey(report: PaidWaybillProfitReport, selection: PaidProfitSelection = {}) {
+  return JSON.stringify({ paymentFilter: selection.paymentFilter || 'all', from: selection.fromDate || '', to: selection.toDate || '',
+    ranges: selection.fromDate && selection.toDate ? undefined : ['Facebook', 'TikTok'].map(source => {
+      const range = report.ranges[source as 'Facebook' | 'TikTok'];
+      return range ? [source, range.from, range.to] : [source];
+    }) });
 }
 
 export function profitAdvertisingSummary(report: PaidWaybillProfitReport, facebook: string, tiktok: string) {

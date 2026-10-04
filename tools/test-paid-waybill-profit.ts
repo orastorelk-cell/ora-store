@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { build } from 'esbuild';
-import { buildPaidWaybillProfitReport as buildReport, parseProfitWaybillFile, profitAdvertisingSummary, profitSystemDay, PROFIT_PACKING_COST } from '../src/lib/paidWaybillProfit';
+import { buildPaidWaybillProfitReport as buildReport, selectSavedPaidProfitOrders, profitAdvertisingPeriodKey, parseProfitWaybillFile, profitAdvertisingSummary, profitSystemDay, PROFIT_PACKING_COST } from '../src/lib/paidWaybillProfit';
 import { createPaidWaybillProfitPdf } from '../src/lib/paidWaybillProfitPdf';
 import { profitBatchFixture, profitOrderFixture as order, profitPurchaseFixture as purchase } from './profit-report-fixtures';
 import type { Order, ReturnRecord } from '../src/types';
@@ -63,6 +63,61 @@ assert.equal(excludedRows.totals.ready, 0);
 assert.equal(profitAdvertisingSummary(excludedRows, '0', '0').netProfit, null);
 assert.equal(buildReport({ orders: [earlier, { ...earlier, id: 'duplicate' }], purchases, waybills: ['18160001'] }).rows[0].profit, null);
 
+// The normal report derives its rows from saved payment records, without a second upload.
+const paymentCases = immutable([
+  earlier,
+  order({ id: 'online-full', order_number: 'WEB-000002', waybill_number: 'ONLINE-FULL', payment_method: 'Bank Payment', payment_paid_type: 'Full', cod_payment_received: false, payment_received_amount: 1250 }),
+  order({ id: 'online-legacy', waybill_number: 'ONLINE-LEGACY', payment_method: 'Bank Payment', payment_paid_type: undefined, cod_payment_received: false, payment_received_amount: 1250 }),
+  order({ id: 'cod-not-received', waybill_number: 'UNRECEIVED', cod_payment_received: false }),
+  order({ id: 'receipt-only', payment_method: 'Bank Payment', cod_payment_received: false, payment_status: 'Pending', payment_verification_status: 'Auto Check Passed', payment_detected_amount: 1250 }),
+  order({ id: 'advance-only', payment_method: 'Bank Payment', cod_payment_received: false, payment_paid_type: 'Advance', payment_received_amount: 500 }),
+  order({ id: 'online-rejected', payment_method: 'Bank Payment', cod_payment_received: false, payment_paid_type: 'Full', payment_verification_status: 'Rejected' }),
+  order({ id: 'cancelled-paid', order_status: 'Cancelled' }),
+  order({ id: 'refunded-paid', payment_status: 'Refunded' }),
+  order({ id: 'test-paid', is_test_order: true }),
+  order({ id: 'duplicate-paid', is_duplicate_order: true }),
+]);
+const paymentCasesBefore = JSON.stringify(paymentCases);
+assert.deepEqual(new Set(selectSavedPaidProfitOrders(paymentCases).map(row => row.id)), new Set(['order-1', 'online-full', 'online-legacy']));
+assert.deepEqual(selectSavedPaidProfitOrders(paymentCases, { paymentFilter: 'cod' }).map(row => row.id), ['order-1']);
+assert.equal(selectSavedPaidProfitOrders(paymentCases, { paymentFilter: 'online' }).length, 2);
+assert.equal(JSON.stringify(paymentCases), paymentCasesBefore, 'Saved payment selection must not update or sort the system order array.');
+const automatic = buildReport({ orders: [earlier, later], purchases });
+assert.equal(automatic.rows.length, 2, 'Opening the report includes saved paid orders with no waybill input.');
+assert.equal(automatic.totals.beforeAds, 1000);
+const scoped = buildReport({ orders: [earlier, later], purchases, selection: { fromDate: '2026-09-02', toDate: '2026-09-02', paymentFilter: 'cod' } });
+assert.equal(scoped.rows.length, 1);
+assert.equal(scoped.rows[0].orderId, later.id, 'The date filter uses the system arrival day in Sri Lanka, not the payment or lead date.');
+assert.equal(scoped.rows[0].purchasing, 1050, 'Other allocated orders still consume purchase lots outside the chosen report date range.');
+assert.equal(buildReport({ orders: [earlier, later], purchases, selection: { fromDate: '2026-09-20' } }).rows.length, 0);
+const onlineWithoutWaybill = { ...bank, id: 'online-no-waybill', waybill_number: undefined };
+const pendingWaybill = buildReport({ orders: [onlineWithoutWaybill], purchases });
+assert.equal(pendingWaybill.rows.length, 1, 'A saved paid online order without a waybill remains visible for review.');
+assert.equal(pendingWaybill.rows[0].orderId, 'online-no-waybill');
+assert(pendingWaybill.rows[0].issues.some(issue => /not been assigned/.test(issue)));
+assert.equal(pendingWaybill.rows[0].profit, null);
+const automaticDuplicate = buildReport({ orders: [earlier, { ...earlier, id: 'second-paid-order' }], purchases });
+assert.equal(automaticDuplicate.rows.length, 2, 'Distinct paid orders sharing a waybill must not be silently merged.');
+assert(automaticDuplicate.rows.every(row => row.issues.some(issue => /multiple orders/.test(issue))));
+const missingPaymentAmount = { ...later, cod_payment_amount: undefined };
+const missingAmountReport = buildReport({ orders: [earlier, missingPaymentAmount], purchases });
+assert.equal(missingAmountReport.ranges.TikTok?.from, '2026-09-02', 'Saved paid orders remain in the advertising date range even while missing an amount.');
+assert.equal(missingAmountReport.rows.find(row => row.orderId === later.id)?.profit, null);
+const newlyPaid = { ...later, cod_payment_received: false };
+assert.equal(buildReport({ orders: [earlier, newlyPaid], purchases }).rows.length, 1);
+assert.equal(buildReport({ orders: [earlier, { ...newlyPaid, cod_payment_received: true }], purchases }).rows.length, 2, 'A saved COD Received update enters the report automatically.');
+
+const fixedPeriod = { fromDate: '2026-09-01', toDate: '2026-09-12', paymentFilter: 'all' as const };
+const beforeLatePayment = buildReport({ orders: [earlier, newlyPaid], purchases, selection: fixedPeriod });
+const afterLatePayment = buildReport({ orders: [earlier, { ...newlyPaid, cod_payment_received: true }], purchases, selection: fixedPeriod });
+assert.equal(profitAdvertisingPeriodKey(beforeLatePayment, fixedPeriod), profitAdvertisingPeriodKey(afterLatePayment, fixedPeriod), 'Late payments must not create a new advertising expense period.');
+assert.equal(afterLatePayment.ranges.TikTok?.from, fixedPeriod.fromDate);
+assert.equal(afterLatePayment.ranges.TikTok?.to, fixedPeriod.toDate);
+const netBefore = profitAdvertisingSummary(beforeLatePayment, '100', '50').netProfit!;
+const netAfter = profitAdvertisingSummary(afterLatePayment, '100', '50').netProfit!;
+assert.equal(netAfter - netBefore, 700, 'The updated report adds only the later order profit and uses the same Rs150 advertising total once.');
+assert.equal(netAfter, 850);
+
 const bundle = order({ id: 'bundle', waybill_number: 'BUNDLE', items: [{ ...earlier.items[0], sku: 'CB-TEST', product_type: 'bundle', quantity: 2, subtotal: 2000,
   bundle_components: [{ product_id: 'watch', sku: 'R0053-BLACK', variant_id: 'black', product_name: 'Sport Watch', quantity_per_bundle: 2 }] }],
   stock_allocated_at: '2026-09-02T12:00:00Z', total_amount: 2250, cod_payment_amount: 2250 });
@@ -90,16 +145,18 @@ assert.throws(() => parseProfitWaybillFile('Waybill,Name\n"18160001,broken'), /u
 
 const batch = profitBatchFixture();
 const batchReport = buildReport(batch);
+const savedBatchReport = buildReport({ orders: batch.orders, purchases: batch.purchases });
 assert.equal(batchReport.totals.ready, 25);
 assert.equal(batchReport.rows.at(-1)?.waybill, batch.waybills.at(-1));
 assert.equal(batchReport.totals.beforeAds, 7500);
 assert.equal(profitAdvertisingSummary(batchReport, '500', '250').netProfit, 6750);
-const doc = createPaidWaybillProfitPdf(batchReport, { facebook: '500', tiktok: '250', sourceName: 'Synthetic-paid-waybills.csv', paymentBasis: 'auto', generatedAt: new Date('2026-10-04T17:00:00Z') });
+assert.equal(savedBatchReport.totals.beforeAds, batchReport.totals.beforeAds);
+const doc = createPaidWaybillProfitPdf(savedBatchReport, { facebook: '500', tiktok: '250', sourceName: 'Saved COD Received and paid online orders | Synthetic QA', paymentBasis: 'auto', generatedAt: new Date('2026-10-04T17:00:00Z') });
 assert(doc.getNumberOfPages() >= 3);
 const output = process.argv[2];
 if (output) fs.writeFileSync(output, Buffer.from(doc.output('arraybuffer')));
 
-// Render the real workspace component, checking page size, full-upload totals,
+// Render the real workspace component, checking automatic saved-payment rows, page size, full-report totals,
 // review states and the guard against calculating from an unfinished server load.
 const compiled = await build({ entryPoints: ['src/components/admin/ProfitReportPanel.tsx'], bundle: true, write: false,
   platform: 'node', format: 'esm', packages: 'external', define: { 'import.meta.env': '{}' }, loader: { '.png': 'dataurl', '.jpg': 'dataurl', '.svg': 'dataurl' } });
@@ -107,19 +164,33 @@ const panelPath = new URL('./.profit-panel-qa.mjs', import.meta.url);
 fs.writeFileSync(panelPath, compiled.outputFiles[0].text);
 try {
   const { ProfitReportWorkspace } = await import(panelPath.href);
-  const initialDraft = { waybills: batch.waybills, sourceName: 'Synthetic.csv', facebook: '500', tiktok: '250', paymentBasis: 'auto' };
+  const initialDraft = { paymentFilter: 'all', fromDate: '', toDate: '', facebook: '500', tiktok: '250', paymentBasis: 'auto' };
   const props = { orders: batch.orders, purchases: batch.purchases, returns: [], ready: true, storageKey: 'synthetic-test', onRefresh: async () => {}, initialDraft };
   const html = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, props));
   const tbody = html.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/)![1];
   assert.equal((tbody.match(/<tr\b/g) || []).length, 10, 'The real order table displays exactly 10 orders per page.');
   assert(html.includes('Page 1 / 3'));
   assert(html.includes('Rs. 6,750.00'), 'Summary must include all 25 orders, not only the current page.');
-  assert(!tbody.includes(batch.waybills[10]));
+  assert(!tbody.includes(savedBatchReport.rows[10].waybill));
   assert(html.includes('Download Summary PDF'));
+  assert(html.includes('Saved Paid Orders'));
+  assert(html.includes('COD Received + Online Paid'));
+  assert(!html.includes('Paste waybill numbers') && !html.includes('Upload Paid Waybills'), 'No duplicate waybill entry is needed after payment has been saved.');
+  const defaultHtml = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, { ...props, initialDraft: undefined }));
+  assert(defaultHtml.includes('<tbody'), 'The default report shows saved paid orders before any input.');
   const loading = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, { ...props, ready: false }));
   assert(!loading.includes('<tbody'), 'Do not show stale report totals before saved system data is loaded.');
-  const review = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, { ...props, initialDraft: { ...initialDraft, waybills: ['NOT-FOUND'] } }));
-  assert(review.includes('Waybill was not found in the system.'));
+  const review = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, { ...props, orders: [onlineWithoutWaybill], purchases }));
+  assert(review.includes('Not assigned'));
+  assert(review.includes('Waybill has not been assigned to this paid order.'));
   assert(review.includes('Needs Review'));
+  const onlineOnly = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, { ...props, orders: [earlier, { ...bank, id: 'bank-ui', waybill_number: 'BANK-UI' }], initialDraft: { ...initialDraft, paymentFilter: 'online' } }));
+  assert(onlineOnly.includes('BANK-UI'));
+  assert(!onlineOnly.includes('18160001'));
+  const empty = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, { ...props, orders: [] }));
+  assert(empty.includes('No saved paid orders match these filters.'));
+  const invalidDates = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, { ...props, initialDraft: { ...initialDraft, fromDate: '2026-09-12', toDate: '2026-09-01' } }));
+  assert(invalidDates.includes('start date must be on or before'));
+  assert(!invalidDates.includes('<tbody'));
 } finally { fs.unlinkSync(panelPath); }
-console.log('PASS: FIFO Purchasing prices, all-order allocation, variants/bundles, good returns/cancellations, gross/net remittance, bank advances, actual courier cost, Rs100/order packing, Sri Lanka system arrival dates, duplicates/missing data, full-batch advertising totals and multipage PDF. Inputs remain unchanged.');
+console.log('PASS: Automatic saved COD Received + paid online selection, no duplicate upload/paste, source and system-date filters, new paid records, missing/duplicate waybills, FIFO Purchasing prices, all-order allocation, variants/bundles, returns/cancellations, gross/net remittance, bank advances, actual courier cost, Rs100/order packing, 10-row pages, full-report advertising totals and multipage PDF. Inputs remain unchanged.');

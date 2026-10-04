@@ -25,10 +25,10 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
   };
   title('Financial summary');
   doc.setFontSize(9);
-  const fileLines = doc.splitTextToSize(`Waybill file: ${text(options.sourceName || 'Pasted waybill list')}`, width);
+  const fileLines = doc.splitTextToSize(`Report source: ${text(options.sourceName || 'Saved COD Received and paid online orders')}`, width);
   doc.text(fileLines, left, 35);
   let y = 35 + fileLines.length * 4 + 2;
-  doc.text(`Uploaded: ${report.rows.length} unique waybills | Complete: ${report.totals.ready} | Needs review: ${report.totals.review} | Duplicate entries removed: ${report.duplicates}`, left, y);
+  doc.text(`Selected: ${report.rows.length} paid orders | Complete: ${report.totals.ready} | Needs review: ${report.totals.review}`, left, y);
   y += 9;
   const summaryStart = y;
   const rows: Array<[string, number | null]> = [
@@ -69,10 +69,10 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
   doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.text(complete ? 'FINAL NET PROFIT' : 'FINAL NET PROFIT - PENDING REVIEW', left + 4, y + 4);
   doc.setFontSize(19); doc.text(money(advertising.netProfit), left + width - 4, y + 6, { align: 'right' });
   doc.setFontSize(8); doc.setFont('helvetica', 'normal');
-  doc.text(complete ? 'Gross revenue - Purchasing - Fardar - Packing - Facebook - TikTok' : `${report.totals.review} waybill(s) need review. ${advertising.missing.length ? `Enter ${advertising.missing.join(' / ')} cost (0 if none).` : 'Review missing amounts before treating this as a final profit.'}`, left + 4, y + 14);
+  doc.text(complete ? 'Gross revenue - Purchasing - Fardar - Packing - Facebook - TikTok' : `${report.totals.review} paid order(s) need review. ${advertising.missing.length ? `Enter ${advertising.missing.join(' / ')} cost (0 if none).` : 'Review missing amounts before treating this as a final profit.'}`, left + 4, y + 14);
   doc.setTextColor(55, 65, 81); y += 31;
   const notes = [
-    'Summary totals include complete orders only. Every uploaded waybill is listed in the detail pages.',
+    'Summary totals include complete orders only. Every selected paid order is listed in the detail pages.',
     'Purchasing prices use purchased quantities in date order (FIFO), including other allocated orders and verified good returns. Product-form Buy Price is not used.',
     'Sale lines show the saved selling prices. Profit uses recorded gross receipts, so order discounts, customer delivery and bank advances are accounted for.',
     'An identified net Fardar remittance is reconciled to gross receipts before subtracting the courier charge once.',
@@ -96,7 +96,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     const purchaseLines = row.items.flatMap(item => [money(item.purchasing), ...item.allocations.map(allocation => `${text(allocation.reference)}: ${allocation.quantity} x ${money(allocation.unitCost)}`)]);
     const saleLines = row.items.map(item => `${item.quantity} x ${money(item.unitSale)} = ${money(item.sales)}`);
     const cellValues = [
-      [text(row.waybill), text(row.orderNumber || 'Not found'), text(row.source || ''), row.issues.length ? 'NEEDS REVIEW' : 'COMPLETE'],
+      [text(row.waybill || 'Not assigned'), text(row.orderNumber || 'Not found'), text(row.source || ''), row.issues.length ? 'NEEDS REVIEW' : 'COMPLETE'],
       [row.systemDate || '-'],
       row.items.length ? row.items.flatMap(item => [text(item.name), `${text(item.sku)} | Qty ${item.quantity}`]) : ['No matched order'],
       [...saleLines, `Received: ${money(row.received)}`],
