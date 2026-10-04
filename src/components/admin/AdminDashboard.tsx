@@ -88,6 +88,7 @@ import { CameraBarcodeScanner } from './CameraBarcodeScanner';
 import { CodPaymentsPanel } from './CodPaymentsPanel';
 import { BankTransferCheckPanel } from './BankTransferCheckPanel';
 import { ReportsPanel } from './ReportsPanel';
+import { ProfitReportPanel } from './ProfitReportPanel';
 import { SuccessRatePanel } from './SuccessRatePanel';
 import { ReviewModerationPanel } from './ReviewModerationPanel';
 import { ProductRequestsPanel } from './ProductRequestsPanel';
@@ -220,7 +221,7 @@ export const AdminDashboard: React.FC = () => {
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'add_product' | 'combo_packs' | 'supplier_offer' | 'price_increase' | 'products' | 'categories' | 'banners' | 'notifications' | 'stock' | 'orders' | 'out_of_stock' | 'packing_expenses' | 'returns' | 'lead_import' | 'confirm_upload' | 'invoices' | 'packing' | 'invoice_design' | 'delivery' | 'dispatch' | 'cod_payments' | 'bank_transfer_check' | 'assistant_chats' | 'complaints' | 'reports' | 'success_rate' | 'reviews' | 'product_requests' | 'customers' | 'sheets' | 'activity' | 'branding' | 'website_info' | 'settings' | 'user_access' | 'deploy'
+    'overview' | 'add_product' | 'combo_packs' | 'supplier_offer' | 'price_increase' | 'products' | 'categories' | 'banners' | 'notifications' | 'stock' | 'orders' | 'out_of_stock' | 'packing_expenses' | 'returns' | 'lead_import' | 'confirm_upload' | 'invoices' | 'packing' | 'invoice_design' | 'delivery' | 'dispatch' | 'cod_payments' | 'bank_transfer_check' | 'assistant_chats' | 'complaints' | 'reports' | 'profit_report' | 'success_rate' | 'reviews' | 'product_requests' | 'customers' | 'sheets' | 'activity' | 'branding' | 'website_info' | 'settings' | 'user_access' | 'deploy'
   >('overview');
   const [comboEditProductId, setComboEditProductId] = useState<string | undefined>(undefined);
   const [packingSearch, setPackingSearch] = useState('');
@@ -3098,8 +3099,9 @@ Suitable For:
     staff: 'Custom Access Staff',
   };
 
-  const allPermissionIds: AdminPermission[] = ['overview','add_product','combo_packs','supplier_offer','price_increase','products','orders','lead_import','confirm_upload','packing','delivery','dispatch','returns','cod_payments','bank_transfer_check','stock','out_of_stock','packing_expenses','categories','banners','reviews','product_requests','assistant_chats','complaints','notifications','customers','invoices','invoice_design','reports','success_rate','sheets','activity','branding','website_info','settings','user_access','deploy'];
+  const allPermissionIds: AdminPermission[] = ['overview','add_product','combo_packs','supplier_offer','price_increase','products','orders','lead_import','confirm_upload','packing','delivery','dispatch','returns','cod_payments','bank_transfer_check','stock','out_of_stock','packing_expenses','categories','banners','reviews','product_requests','assistant_chats','complaints','notifications','customers','invoices','invoice_design','reports','profit_report','success_rate','sheets','activity','branding','website_info','settings','user_access','deploy'];
   const permissionLabels: Record<AdminPermission, string> = {
+    profit_report: 'Profit Report',
     overview: 'Dashboard', add_product:'Add Product', combo_packs:'Combo Packs', supplier_offer:'Supplier Price / Offer', price_increase:'Price Increase', products: 'Products', stock: 'Inventory & Stock', orders: 'Orders', out_of_stock: 'Out of Stock Needs', packing_expenses: 'Packing Materials Expenses', returns: 'Returns Verification', lead_import: 'FB / TikTok Lead Import', confirm_upload: 'Confirm / Cancel Upload', invoices: 'Invoices', packing: 'Packing Invoice Downloads', invoice_design: 'Invoice Design', delivery: 'Delivery & Waybills', dispatch: 'Dispatch Scan', cod_payments: 'COD Payments', bank_transfer_check: 'Bank Transfer Check', assistant_chats: 'Assistant Chats', complaints: 'Complaints', notifications:'Customer Notifications', reports: 'Reports', success_rate: 'Success Rate', reviews: 'Product Reviews', product_requests: 'Product Requests', sheets: 'Google Sheets Sync', customers: 'Customers', categories: 'Categories', banners:'Banners', activity: 'Activity Log', branding: 'Branding & Logo Studio', website_info: 'Website Info & Policies', settings: 'Store Settings', deploy: 'Deployment Guide', user_access: 'System Access'
   };
   type StaffAccessLevel = 'none' | 'view' | 'edit';
@@ -3398,6 +3400,15 @@ Suitable For:
               >
                 <span className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${activeTab==='success_rate'?'bg-orange-500/15':'bg-gray-100'}`}><Trophy className={`w-4 h-4 ${activeTab==='success_rate'?'text-orange-400':'text-gray-500'}`}/></span>
                 <span>Success Rate</span>
+              </button>}
+
+              {canAccessTab('profit_report') && <button
+                type="button"
+                onClick={()=>openSidebarTab('profit_report')}
+                className={`w-full rounded-xl px-3 py-2.5 text-left text-xs font-bold transition-all flex items-center gap-3 ${activeTab==='profit_report'?'bg-black text-white shadow-sm':'text-gray-600 hover:bg-orange-50 hover:text-orange-800'}`}
+              >
+                <span className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${activeTab==='profit_report'?'bg-orange-500/15':'bg-gray-100'}`}><BarChart3 className={`w-4 h-4 ${activeTab==='profit_report'?'text-orange-400':'text-gray-500'}`}/></span>
+                <span>Profit Report</span>
               </button>}
 
               {sidebarGroups.map((group)=>{
@@ -5682,6 +5693,8 @@ Suitable For:
       {activeTab === 'complaints' && <ComplaintsPanel />}
 
       {activeTab === 'reports' && <ReportsPanel />}
+
+      {activeTab === 'profit_report' && canAccessTab('profit_report') && <ProfitReportPanel />}
 
       {activeTab === 'success_rate' && <SuccessRatePanel orders={orders} products={products} />}
 
