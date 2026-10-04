@@ -1,6 +1,27 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>O-RA Facebook Order Audit</title><style>body{margin:0;background:#090909;color:#fff;font:15px system-ui,sans-serif}.wrap{max-width:850px;margin:30px auto;padding:22px}.card{padding:24px;border:1px solid #333;border-radius:18px;background:#151515}p{color:#bbb;line-height:1.6}button,a{display:inline-block;margin:8px 10px 16px 0;color:inherit}button{background:#34d399;border:0;border-radius:10px;padding:14px;font-weight:bold;color:#052e20;cursor:pointer}button:disabled{opacity:.5}textarea{box-sizing:border-box;width:100%;min-height:320px;background:#090909;color:#ddd;border:1px solid #444;border-radius:10px;padding:14px;font:12px monospace}#status{white-space:pre-wrap;line-height:1.7}</style></head><body><main class="wrap"><div class="card"><h1>Facebook Order Audit</h1><p>Compare today's Facebook leads with saved O-RA orders and Google Sheet rows. Sign in as Super Admin first. Keep this page open until the check finishes, then copy the final report.</p><a href="/system">Open O-RA System</a><button id="run">Check today's Facebook orders</button><button id="copy" disabled>Copy final report</button><div id="status" role="status" aria-live="polite">Ready to check.</div><textarea id="report" readonly aria-label="Audit result"></textarea></div></main><script>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>O-RA Facebook Order Audit</title>
+<style>
+body{margin:0;background:#090909;color:#fff;font:15px system-ui,sans-serif}.wrap{max-width:950px;margin:30px auto;padding:22px}.card{padding:24px;border:1px solid #333;border-radius:18px;background:#151515}p{color:#bbb;line-height:1.6}button,a{display:inline-block;margin:8px 10px 16px 0;color:inherit}button{background:#34d399;border:0;border-radius:10px;padding:14px;font-weight:bold;color:#052e20;cursor:pointer}button.secondary{background:#272727;color:#ddd;border:1px solid #444}button:disabled{opacity:.5}textarea{box-sizing:border-box;width:100%;min-height:320px;background:#090909;color:#ddd;border:1px solid #444;border-radius:10px;padding:14px;font:12px monospace}#status{white-space:pre-wrap;line-height:1.7;margin:14px 0}label{display:block;color:#bbb;margin-bottom:12px}.note{font-size:13px;color:#aaa}.table-wrap{overflow-x:auto;margin:18px 0}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:12px;border-bottom:1px solid #333}th{color:#aaa;font-size:13px}td{overflow-wrap:anywhere}#missing-title{margin-top:22px}
+</style>
+</head>
+<body><main class="wrap"><div class="card">
+<h1>Facebook Order Audit</h1>
+<p>Check all leads currently available from your connected Facebook Page against saved O-RA orders. Sign in as Super Admin first, and keep this page open until the final report appears.</p>
+<p class="note">There is no start-date limit for the all-leads check. Leads that Meta has expired, deleted or made inaccessible cannot be verified by this report. This is a read-only check.</p>
+<a href="/system">Open O-RA System</a><br>
+<label><input id="check-sheet" type="checkbox"> Also verify Google Sheet rows for the all-leads check (takes longer)</label>
+<button id="run">Check all available Facebook leads</button>
+<button id="today" class="secondary">Check today's Facebook orders</button>
+<button id="copy" class="secondary" disabled>Copy final report</button>
+<div id="status" role="status" aria-live="polite">Ready to check all available Facebook leads.</div>
+<section id="missing" hidden><h2 id="missing-title">Leads missing from O-RA</h2><p id="missing-note" class="note"></p><div class="table-wrap"><table><thead><tr><th>Lead ID</th><th>Lead date (Sri Lanka)</th><th>Facebook form</th></tr></thead><tbody id="missing-rows"></tbody></table></div></section>
+<textarea id="report" readonly aria-label="Audit result"></textarea>
+</div></main><script>
 (()=>{
-const status=document.getElementById('status'),report=document.getElementById('report'),button=document.getElementById('run'),copy=document.getElementById('copy');
+const status=document.getElementById('status'),report=document.getElementById('report'),button=document.getElementById('today'),allButton=document.getElementById('run'),copy=document.getElementById('copy');
 let progress='',retryNote='',started=0;
 const showProgress=()=>{status.textContent=progress+'\nRunning — please wait for the final report. '+Math.floor((Date.now()-started)/1000)+' seconds elapsed.'+(retryNote?'\n'+retryNote:'');};
 const api=async(body)=>{
@@ -25,8 +46,89 @@ copy.onclick=async()=>{
   try{await navigator.clipboard.writeText(report.value);copy.textContent='Report copied';}
   catch{report.focus();report.select();copy.textContent='Report selected — copy the text';}
 };
+allButton.onclick=async()=>{
+  button.disabled=true;allButton.disabled=true;copy.disabled=true;copy.textContent='Copy final report';report.value='';document.getElementById('missing').hidden=true;started=Date.now();retryNote='';
+  const window={scope:'all_available',until:new Date().toISOString()},checkSheet=document.getElementById('check-sheet').checked===true;
+  const result={...window,since:null,checked_at:null,status:'running',phase:'forms',complete:false,page_id:'',total_forms:0,forms_checked:0,forms_processed:0,lead_pages_checked:0,system_leads_checked:0,sheet_checked:checkSheet,sheet_orders_checked:0,forms:[],incomplete_forms:[],leads:[],missing_leads:[],sheet:[],errors:[],coverage_note:'All leads returned by the connected Facebook Page API up to the audit cutoff. Meta-expired, deleted or inaccessible leads are outside this report. A complete result verifies available leads, not the Page\'s entire historical lead count.'};
+  const save=()=>{report.value=JSON.stringify(result,null,2);};
+  const heartbeat=setInterval(showProgress,1000),leads=new Map();
+  const validPage=(d,key,cursor,seen)=>{
+    if(d.ok!==true||d.scope!=='all_available'||typeof d.page_id!=='string'||!d.page_id||!Array.isArray(d[key])||typeof d.next_cursor!=='string'||d.next_cursor.length>4096||typeof d.done!=='boolean'||d.done!==(d.next_cursor==='')||(result.page_id&&d.page_id!==result.page_id)||(!d.done&&(d.next_cursor===cursor||seen.has(d.next_cursor))))throw new Error('Facebook pagination could not be verified. Restart the audit.');
+    result.page_id=d.page_id;if(!d.done)seen.add(d.next_cursor);
+  };
+  progress='Finding all available Facebook forms…';showProgress();save();
+  try{
+    let cursor='';const forms=new Map(),seen=new Set();
+    while(true){
+      const d=await api({...window,action:'forms',cursor,page_id:result.page_id});validPage(d,'forms',cursor,seen);
+      for(const form of d.forms){
+        if(typeof form.id!=='string'||!form.id||typeof form.name!=='string'||(form.expired_leads_count!==null&&(!Number.isInteger(form.expired_leads_count)||form.expired_leads_count<0)))throw new Error('Facebook form coverage could not be verified.');
+        forms.set(form.id,form);
+      }
+      result.forms=Array.from(forms.values());result.total_forms=forms.size;progress='Facebook forms found: '+forms.size;showProgress();save();
+      if(d.done)break;cursor=d.next_cursor;
+    }
+    result.phase='facebook';save();
+    for(const form of result.forms){
+      let cursor='';const seen=new Set();let complete=false;
+      try{
+        while(true){
+          progress='Checking Facebook forms: '+result.forms_processed+' / '+result.total_forms+'\nCurrent form: '+form.name+'\nAvailable leads found: '+leads.size;showProgress();
+          const d=await api({...window,action:'lead_page',page_id:result.page_id,form_id:form.id,cursor});validPage(d,'leads',cursor,seen);
+          if(d.form_id!==form.id)throw new Error('Facebook returned another form; source coverage is incomplete.');
+          for(const lead of d.leads){
+            if(typeof lead.lead_id!=='string'||!lead.lead_id||!Number.isFinite(Date.parse(lead.created_at))||Date.parse(lead.created_at)>Date.parse(window.until)||lead.form_id!==form.id||typeof lead.form_name!=='string')throw new Error('Facebook lead coverage could not be verified.');
+            leads.set(lead.lead_id,{...lead,order_number:null,comparison_verified:false});
+          }
+          result.lead_pages_checked++;result.leads=Array.from(leads.values());save();
+          if(d.done){complete=true;break;}cursor=d.next_cursor;
+        }
+      }catch(error){result.errors.push(form.name+': '+(error.message||String(error)));result.incomplete_forms.push(form.id);}
+      result.forms_processed++;if(complete)result.forms_checked++;save();
+    }
+    // Re-read current saved orders after scanning every form. Leads may finish
+    // importing during a long scan, so earlier absence is not a final result.
+    result.phase='system';save();
+    const ids=Array.from(leads.keys());
+    for(let offset=0;offset<ids.length;offset+=200){
+      progress='Facebook forms checked: '+result.forms_checked+' / '+result.total_forms+'\nComparing with current O-RA orders: '+offset+' / '+ids.length;showProgress();
+      const selected=ids.slice(offset,offset+200),d=await api({...window,action:'compare',lead_ids:selected});
+      if(d.ok!==true||!Array.isArray(d.results)||d.results.length!==selected.length||new Set(d.results.map(row=>row.lead_id)).size!==selected.length||d.results.some(row=>!selected.includes(row.lead_id)||(row.order_number!==null&&(typeof row.order_number!=='string'||!row.order_number))))throw new Error('The saved O-RA order comparison was incomplete. Retry the audit.');
+      for(const row of d.results)leads.set(row.lead_id,{...leads.get(row.lead_id),order_number:row.order_number,comparison_verified:true});
+      result.system_leads_checked+=selected.length;result.leads=Array.from(leads.values());save();
+    }
+    if(checkSheet){
+      result.phase='sheet';save();
+      const numbers=Array.from(new Set(result.leads.map(lead=>lead.order_number).filter(Boolean)));
+      for(let offset=0;offset<numbers.length;offset+=5){
+        progress='Checking Google Sheet orders: '+offset+' / '+numbers.length;showProgress();
+        const selected=numbers.slice(offset,offset+5),d=await api({...window,action:'sheet',order_numbers:selected});
+        if(d.ok!==true||!Array.isArray(d.results)||d.results.length!==selected.length||new Set(d.results.map(row=>row.order_number)).size!==selected.length||d.results.some(row=>!selected.includes(row.order_number)||(!row.error&&(typeof row.found!=='boolean'||!Number.isInteger(row.rows)||row.rows<0||!Number.isInteger(row.expected_rows)||row.expected_rows<1))))throw new Error('Google Sheet audit response was incomplete. Retry the audit.');
+        result.sheet.push(...d.results);result.sheet_orders_checked=result.sheet.length;save();
+      }
+    }
+    result.complete=result.forms_checked===result.total_forms&&result.system_leads_checked===result.leads.length&&result.errors.length===0&&result.sheet.every(row=>!row.error);
+  }catch(error){result.errors.push(error.message||String(error));}
+  finally{
+    clearInterval(heartbeat);button.disabled=false;allButton.disabled=false;copy.disabled=false;
+    result.status=result.complete?'complete':'incomplete';result.phase='finished';result.checked_at=new Date().toISOString();
+    result.missing_leads=result.leads.filter(lead=>lead.comparison_verified&&!lead.order_number);
+    result.summary={facebook_leads:result.leads.length,system_matched:result.leads.filter(lead=>lead.comparison_verified&&lead.order_number).length,missing_in_system:result.missing_leads.length,unverified_leads:result.leads.filter(lead=>!lead.comparison_verified).length,missing_or_partial_in_sheet:checkSheet?result.sheet.filter(row=>!row.error&&(!row.found||row.rows<row.expected_rows)).length:null};
+    const expiredKnown=result.forms.filter(form=>form.expired_leads_count!==null);
+    result.expired_leads_reported=expiredKnown.length===result.forms.length?expiredKnown.reduce((sum,form)=>sum+form.expired_leads_count,0):null;
+    status.textContent=(result.complete?'Audit complete for all available leads.':'Audit incomplete — the missing count covers verified leads only.')+'\nFacebook forms checked: '+result.forms_checked+' / '+result.total_forms+'\nAvailable Facebook leads: '+result.summary.facebook_leads+'\nSaved in O-RA: '+result.summary.system_matched+'\nMissing from O-RA'+(result.complete?'':' (verified leads only)')+': '+result.summary.missing_in_system+'\nUnverified leads: '+result.summary.unverified_leads+(checkSheet?'\nMissing / partial Sheet orders: '+result.summary.missing_or_partial_in_sheet:'')+(result.expired_leads_reported?'\nMeta reports '+result.expired_leads_reported+' expired leads; they could not be checked.':'')+'\nCopy the final report below.';
+    document.getElementById('missing').hidden=false;
+    document.getElementById('missing-title').textContent=result.complete?'Leads missing from O-RA':'Missing among verified leads';
+    document.getElementById('missing-note').textContent=result.missing_leads.length?'No matching saved order was found for these Lead IDs at check time.':result.complete?'Every available lead returned by Facebook has a matching saved O-RA order.':'The audit is incomplete. Unchecked sources may contain other missing leads.';
+    document.getElementById('missing-rows').replaceChildren(...result.missing_leads.map(lead=>{
+      const row=document.createElement('tr');
+      for(const value of [lead.lead_id,new Date(lead.created_at).toLocaleString('en-GB',{timeZone:'Asia/Colombo'}),lead.form_name]){const cell=document.createElement('td');cell.textContent=value;row.appendChild(cell);}
+      return row;
+    }));save();
+  }
+};
 button.onclick=async()=>{
-  button.disabled=true;copy.disabled=true;copy.textContent='Copy final report';report.value='';started=Date.now();retryNote='';
+  button.disabled=true;allButton.disabled=true;copy.disabled=true;copy.textContent='Copy final report';report.value='';document.getElementById('missing').hidden=true;started=Date.now();retryNote='';
   const now=new Date(),localDate=new Date(now.getTime()+330*60000).toISOString().slice(0,10);
   const window={since:new Date(localDate+'T00:00:00+05:30').toISOString(),until:now.toISOString()};
   const result={...window,checked_at:null,status:'running',phase:'facebook',complete:false,total_forms:0,forms_checked:0,sheet_orders_checked:0,leads:[],sheet:[],errors:[]};
@@ -59,7 +161,7 @@ button.onclick=async()=>{
     status.textContent=(result.complete?'Audit complete.':'Audit incomplete — some source data could not be verified.')+'\nFacebook forms checked: '+result.forms_checked+' / '+result.total_forms+'\nFacebook leads: '+result.leads.length+'\nMatched in O-RA: '+result.summary.system_matched+'\nMissing in O-RA: '+missing.length+'\nMissing / partial Sheet orders: '+sheetMissing.length+'\nCopy the final report below.';
     save();
   }catch(error){result.status='incomplete';result.checked_at=new Date().toISOString();result.errors.push(error.message||String(error));status.textContent='Audit incomplete: '+(error.message||String(error))+'\nFacebook forms checked: '+result.forms_checked+' / '+result.total_forms+'\nCopy this report so the failed check can be investigated.';save();}
-  finally{clearInterval(heartbeat);button.disabled=false;copy.disabled=false;}
+  finally{clearInterval(heartbeat);button.disabled=false;allButton.disabled=false;copy.disabled=false;}
 };
 })();
 </script></body></html>

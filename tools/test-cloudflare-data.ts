@@ -444,17 +444,18 @@ try {
     return Response.json({data:[{id:'old-lead',created_time:'2020-01-01T00:00:00Z'}]});
   };
   const auditPageScript=fs.readFileSync('public/fb-lead-audit.html','utf8').match(/<script>([\s\S]*?)<\/script>/)![1];
-  const runAuditPage=async(fetchPage:any)=>{
+  const runAuditPage=async(fetchPage:any,scope='today',checkSheet=false)=>{
     const els=new Map<string,any>();let intervals=0,cleared=0,copied='';
-    const el=(id:string)=>{if(!els.has(id))els.set(id,{textContent:'',value:'',disabled:id==='copy',focus(){},select(){}});return els.get(id);};
-    vm.runInNewContext(auditPageScript,{document:{getElementById:el},localStorage:{getItem:()=>token},AbortController,navigator:{clipboard:{writeText:async(value:string)=>{copied=value;}}},setInterval:()=>++intervals,clearInterval:()=>{cleared++;},setTimeout:(callback:any,ms:number)=>{if(ms<45000)queueMicrotask(callback);return 0;},clearTimeout:()=>{},fetch:async(path:string,options:any)=>{
+    const node=()=>({textContent:'',value:'',disabled:false,checked:false,children:[] as any[],focus(){},select(){},appendChild(child:any){this.children.push(child);},replaceChildren(...children:any[]){this.children=children;}});
+    const el=(id:string)=>{if(!els.has(id))els.set(id,{...node(),disabled:id==='copy',checked:id==='check-sheet'&&checkSheet});return els.get(id);};
+    vm.runInNewContext(auditPageScript,{document:{getElementById:el,createElement:node},localStorage:{getItem:()=>token},AbortController,navigator:{clipboard:{writeText:async(value:string)=>{copied=value;}}},setInterval:()=>++intervals,clearInterval:()=>{cleared++;},setTimeout:(callback:any,ms:number)=>{if(ms<45000)queueMicrotask(callback);return 0;},clearTimeout:()=>{},fetch:async(path:string,options:any)=>{
       assert.equal(el('copy').disabled,true,'Copy final report is unavailable while the audit runs');
       const intermediate=JSON.parse(el('report').value);assert.equal(intermediate.status,'running');assert.equal(intermediate.complete,false);assert.equal(intermediate.checked_at,null);
       return fetchPage(path,options);
     }});
-    await el('run').onclick();assert.equal(intervals,cleared,'Progress heartbeat stops on success and failure');assert.equal(el('run').disabled,false);assert.equal(el('copy').disabled,false);
+    await el(scope==='all'?'run':'today').onclick();assert.equal(intervals,cleared,'Progress heartbeat stops on success and failure');assert.equal(el('today').disabled,false);assert.equal(el('run').disabled,false);assert.equal(el('copy').disabled,false);
     await el('copy').onclick();assert.equal(copied,el('report').value);
-    return {report:JSON.parse(el('report').value),status:el('status').textContent};
+    return {report:JSON.parse(el('report').value),status:el('status').textContent,missingRows:el('missing-rows').children};
   };
   let retryCount=0;const offsets:number[]=[];
   const fullPage=await runAuditPage(async(path:string,options:any)=>{
@@ -478,6 +479,82 @@ try {
     return facebookLeadAuditHandler(new Request('https://test'+path,options),{...env,META_PAGE_ACCESS_TOKEN:'synthetic-token'},fullMetaFetch);
   });
   assert.equal(partialSheetPage.report.complete,false);assert.equal(partialSheetPage.report.errors.length,1,'Missing Sheet read-back results must prevent completion');
+
+  // All-available audits have no start-date filter, no three-page cap and no
+  // order writes. Exercise the real browser script and Worker against four
+  // form-list pages, 450 leads across five pages, and a lead imported mid-scan.
+  const allForms=Array.from({length:4},(_,i)=>({id:'all-form-'+i,name:i===3?'<b>Archived form</b>':'All form '+i,status:i===3?'ARCHIVED':'ACTIVE',expired_leads_count:i===3?5:0}));
+  const allLeads=Array.from({length:450},(_,i)=>({id:'all-lead-'+i,created_time:i<100?'2020-01-01T00:00:00Z':new Date(Date.now()-7*86400000).toISOString()}));
+  const allSaved={...newOrder,id:'all-saved',order_number:'FB-ALL-SAVED',order_source:'Facebook Ads',platform_lead_id:'l:all-lead-0'};
+  assert.equal((await sdk.from('order_snapshots').upsert({order_id:allSaved.id,order_number:allSaved.order_number,payload:allSaved},{onConflict:'order_id'})).error,null);
+  const allMetaFetch:any=async(input:any,options:any={})=>{
+    const url=new URL(String(input));
+    if(url.hostname==='script.google.com'){
+      const body=JSON.parse(options.body);assert.equal(body.action,'read_order');return Response.json({ok:true,status:'order_checked',found:true,rows:1});
+    }
+    assert.equal(options.method||'GET','GET');assert.equal(options.headers.authorization,'Bearer synthetic-token');
+    assert.equal(url.searchParams.has('since'),false,'All-available scans must not filter out old leads');
+    if(url.pathname.endsWith('/me'))return Response.json({id:'page'});
+    if(url.pathname.endsWith('/leadgen_forms')){
+      const offset=Number(url.searchParams.get('after')||0);
+      return Response.json({data:allForms.slice(offset,offset+1),...(offset<3?{paging:{next:'private-meta-url',cursors:{after:String(offset+1)}}}:{})});
+    }
+    const parts=url.pathname.split('/'),last=parts.at(-1);
+    if(last!=='leads'){
+      const form=allForms.find(form=>form.id===last);assert(form,'Only known forms are read');return Response.json({...form,page_id:'page'});
+    }
+    const formId=parts.at(-2);
+    if(formId==='all-form-0'){
+      const offset=Number(url.searchParams.get('after')||0);
+      return Response.json({data:allLeads.slice(offset,offset+100),...(offset+100<allLeads.length?{paging:{next:'private-meta-url',cursors:{after:String(offset+100)}}}:{})});
+    }
+    if(formId==='all-form-1')return Response.json({data:[allLeads[0]]});
+    if(formId==='all-form-2')return Response.json({data:[{id:'after-cutoff',created_time:new Date(Date.now()+300000).toISOString()}]});
+    return Response.json({data:[]});
+  };
+  const allWorker=(path:string,options:any,fetcher:any=allMetaFetch)=>facebookLeadAuditHandler(new Request('https://test'+path,options),{...env,META_PAGE_ACCESS_TOKEN:'synthetic-token'},fetcher);
+  let importedDuringAudit=false,compareRequests=0;
+  const allPage=await runAuditPage(async(path:string,options:any)=>{
+    if(JSON.parse(options.body).action==='compare'){
+      compareRequests++;
+      if(!importedDuringAudit){
+        importedDuringAudit=true;
+        const late={...allSaved,id:'all-late',order_number:'FB-ALL-LATE',platform_lead_id:'all-lead-449'};
+        assert.equal((await sdk.from('order_snapshots').upsert({order_id:late.id,order_number:late.order_number,payload:late},{onConflict:'order_id'})).error,null);
+      }
+    }
+    return allWorker(path,options);
+  },'all');
+  assert.equal(allPage.report.complete,true);assert.equal(allPage.report.scope,'all_available');assert.equal(allPage.report.since,null);
+  assert.equal(allPage.report.forms_checked,4);assert.equal(allPage.report.lead_pages_checked,8);assert.equal(compareRequests,3);
+  assert.deepEqual(allPage.report.summary,{facebook_leads:450,system_matched:2,missing_in_system:448,unverified_leads:0,missing_or_partial_in_sheet:null});
+  assert.equal(allPage.report.expired_leads_reported,5);assert.equal(allPage.report.sheet_checked,false);assert.equal(allPage.report.sheet.length,0);
+  assert.equal(allPage.report.leads.find((lead:any)=>lead.lead_id==='all-lead-0').order_number,'FB-ALL-SAVED','Normalize legacy l: lead IDs');
+  assert.equal(allPage.report.leads.find((lead:any)=>lead.lead_id==='all-lead-449').order_number,'FB-ALL-LATE','Compare with the latest saved orders after the scan');
+  assert.equal(allPage.missingRows.length,448);assert(allPage.status.includes('all available leads'));assert(allPage.status.includes('5 expired leads'));
+  const readOnlyRevision=rawBucket.revision;
+  const allReadOnly=await runAuditPage((path:string,options:any)=>allWorker(path,options),'all',true);
+  assert.equal(allReadOnly.report.complete,true);assert.equal(allReadOnly.report.sheet_orders_checked,2);assert.equal(rawBucket.revision,readOnlyRevision,'The full audit and optional Sheet check never modify saved data');
+  const allPartial=await runAuditPage((path:string,options:any)=>allWorker(path,options,async(input:any,init:any)=>String(input).includes('/all-form-3/leads')?Response.json({error:{code:190,message:'sensitive-meta-details'}},{status:400}):allMetaFetch(input,init)),'all');
+  assert.equal(allPartial.report.complete,false);assert.equal(allPartial.report.forms_checked,3);assert.equal(allPartial.report.incomplete_forms[0],'all-form-3');assert.match(allPartial.report.errors[0],/#190/);assert(!JSON.stringify(allPartial.report).includes('sensitive-meta-details'));
+  const allCycle=await runAuditPage((path:string,options:any)=>allWorker(path,options,async(input:any,init:any)=>{
+    const url=new URL(String(input));
+    if(url.pathname.endsWith('/all-form-0/leads'))return Response.json({data:[allLeads[0]],paging:{next:'private-meta-url',cursors:{after:url.searchParams.get('after')==='a'?'b':'a'}}});
+    return allMetaFetch(input,init);
+  }),'all');
+  assert.equal(allCycle.report.complete,false);assert.equal(allCycle.report.forms_checked,3);assert.match(allCycle.report.errors[0],/pagination/);
+  const allBadCompare=await runAuditPage((path:string,options:any)=>JSON.parse(options.body).action==='compare'?Response.json({ok:true,results:[]}):allWorker(path,options),'all');
+  assert.equal(allBadCompare.report.complete,false);assert.equal(allBadCompare.report.summary.unverified_leads,450);assert.equal(allBadCompare.report.missing_leads.length,0,'Uncompared leads are not claimed as missing');
+  const allRequest=(auth:string,body:any)=>new Request('https://test/api/admin/facebook-leads/audit',{method:'POST',headers:{authorization:'Bearer '+auth,'content-type':'application/json'},body:JSON.stringify({scope:'all_available',until:new Date().toISOString(),...body})});
+  assert.equal((await facebookLeadAuditHandler(allRequest('invalid',{action:'forms'}),env,allMetaFetch))!.status,401);
+  assert.equal((await facebookLeadAuditHandler(allRequest(staff.body.token,{action:'forms'}),env,allMetaFetch))!.status,403);
+  assert.equal((await facebookLeadAuditHandler(allRequest(token,{action:'compare',lead_ids:['same','same']}),env,allMetaFetch))!.status,400);
+  assert.equal((await facebookLeadAuditHandler(allRequest(token,{action:'forms',page_id:'wrong-page'}),{...env,META_PAGE_ACCESS_TOKEN:'synthetic-token'},allMetaFetch))!.status,409);
+  const foreignForm=await facebookLeadAuditHandler(allRequest(token,{action:'lead_page',form_id:'all-form-0'}),{...env,META_PAGE_ACCESS_TOKEN:'synthetic-token'},async(input:any,init:any)=>new URL(String(input)).pathname.endsWith('/all-form-0')?Response.json({id:'all-form-0',page_id:'other-page'}):allMetaFetch(input,init));
+  assert.equal(foreignForm!.status,403);
+  const badCursor=await facebookLeadAuditHandler(allRequest(token,{action:'forms'}),{...env,META_PAGE_ACCESS_TOKEN:'synthetic-token'},async(input:any,init:any)=>String(input).includes('/leadgen_forms')?Response.json({data:[],paging:{next:'present'}}):allMetaFetch(input,init));
+  assert.equal(badCursor!.status,503,'Missing paging cursors must prevent an all-clear result');
+
   const sourceFailure=await facebookLeadAuditHandler(auditRequest(token),{...env,META_PAGE_ACCESS_TOKEN:'synthetic-token'},async()=>{throw new Error('private details');});
   assert.equal(sourceFailure!.status,503);assert(!(await sourceFailure!.text()).includes('private details'));
   rawBucket.failKey=active.prefix+'order_snapshots.json';
