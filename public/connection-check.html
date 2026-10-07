@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>O-RA Connection Check</title>
+<style>body{font:15px system-ui,sans-serif;background:#0b1020;color:#e5edf9;max-width:1100px;margin:32px auto;padding:20px}section{border:1px solid #334155;background:#151c30;border-radius:14px;padding:20px;margin:18px 0}button,a{color:inherit}button{padding:12px 18px;border:1px solid #64748b;background:#1e3a5f;color:white;border-radius:8px;cursor:pointer}button:disabled{opacity:.5}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:10px 8px;border-bottom:1px solid #334155}pre{white-space:pre-wrap;overflow-wrap:anywhere}.good{color:#86efac}.fail{color:#fca5a5}</style></head>
+<body><h1>O-RA Connection Check</h1><a href="/system">Open O-RA System</a><section><p>Sign in to O-RA System in this browser first. This check reads the saved system data and reports failed connections.</p><button id="check">Check connections</button><p id="summary" role="status">Ready. Orders, stock and invoices are not changed.</p><table><thead><tr><th>Check</th><th>Result</th><th>Time</th><th>Data size</th><th>Details</th></tr></thead><tbody id="rows"></tbody></table></section>
+<script>
+const checks=[['Server','/api/health'],['Website version','/api/storefront/version'],['Admin website','/api/admin/storefront/state'],['Orders version','/api/orders/version'],['Saved orders','/api/orders?format=snapshots'],['Waybill pool','/api/courier/waybills'],['Staff accounts','/api/staff/accounts'],['Visitors','/api/admin/analytics'],['Reviews','/api/admin/reviews'],['Product requests','/api/admin/product-requests'],['Packing expenses','/api/admin/packing-expenses']];
+const $=id=>document.getElementById(id);
+async function probe(name,path){
+ const token=localStorage.getItem('ora_staff_session_token')||'';
+ const started=performance.now();let status='Network error',bytes=0,details='',ok=false;
+ try{
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),25000);
+  try{
+   const response=await fetch(path,{cache:'no-store',headers:{authorization:'Bearer '+token},signal:controller.signal});
+   const raw=await response.text();bytes=new TextEncoder().encode(raw).length;status=String(response.status);ok=response.ok;
+   let data=null;try{data=JSON.parse(raw)}catch{}
+   if(!ok)details=data?.error||data?.message||raw.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0,500);
+   else if(Array.isArray(data?.snapshots))details=data.snapshots.length+' saved orders';
+   else if(Array.isArray(data?.records))details=data.records.length+' waybills';
+   else if(data?.state)details=data.state.products.length+' products; version '+data.state.version;
+   else if(data?.updated_at)details='Saved version available';
+   else details='Available';
+  }finally{clearTimeout(timer)}
+ }catch(error){details=error.name==='AbortError'?'Connection timed out':error.message}
+ const tr=document.createElement('tr');tr.className=ok?'good':'fail';
+ for(const text of [name,status,Math.round(performance.now()-started)+' ms',bytes+' bytes',details]){const td=document.createElement('td');td.textContent=text;tr.append(td)}
+ $('rows').append(tr);return ok;
+}
+$('check').onclick=async()=>{
+ if(!localStorage.getItem('ora_staff_session_token')){$('summary').textContent='Sign in to O-RA System in this browser first.';return}
+ $('check').disabled=true;$('rows').replaceChildren();let failed=0,total=0;
+ try{for(let round=1;round<=2;round++)for(const [name,path] of checks){$('summary').textContent='Checking '+name+' (round '+round+')…';if(!await probe(name+' ('+round+')',path))failed++;total++}
+ $('summary').textContent='Completed '+total+' reads: '+(total-failed)+' passed; '+failed+' failed. Orders, stock and invoices were not changed.';
+ }finally{$('check').disabled=false}
+};
+</script></body></html>
