@@ -64,6 +64,7 @@ export const r2StorefrontHandler=async(request:Request,env:unknown,ctx:any,verif
   if(body.expected_version!==undefined&&(!Number.isSafeInteger(body.expected_version)||body.expected_version<0))return json({error:'Invalid website version.'},400);
   const incomingWebhook=String(body.settings?.google_sheet_webhook_url||'').trim();
   const updates=productSave?new Map<string,any>(body.product_updates.map((product:any)=>[product.id,product])):null;
+  const expected=productSave&&body.product_expected?new Map<string,any>(body.product_expected.map((product:any)=>[product.id,product])):null;
   const saved=await replaceDataTable<any>(env,'admin_data_store',rows=>{
     if(cancellationInProgress(rows as any[]))return {rows,result:{cancellationPending:true}};
     const row=rows.find(row=>row.key===KEY);const current=stateFrom(row);
@@ -73,7 +74,11 @@ export const r2StorefrontHandler=async(request:Request,env:unknown,ctx:any,verif
     const categories=productSave?current!.categories:body.categories.slice(0,1000);
     const settings=productSave?current!.settings:resolveKnownBrandImages({...body.settings,google_sheet_webhook_url:incomingWebhook||String(current?.settings.google_sheet_webhook_url||'').trim()});
     const unchanged=current&&sameStorefrontValue(products,current.products)&&sameStorefrontValue(categories,current.categories)&&sameStorefrontValue(settings,current.settings);
+    // A partial replay may acknowledge a newer catalog version. Guard each
+    // changed product against the browser baseline before the next edit too.
+    if(productSave&&!expected&&Number(body.expected_version)!==Number(current?.version||0))return {rows,result:{conflict:true}};
     if(unchanged)return {rows,result:{state:current,changed:false}};
+    if(expected&&current!.products.some(product=>updates!.has(product.id)&&!sameStorefrontValue(expected.get(product.id),product)))return {rows,result:{conflict:true}};
     if(body.expected_version!==undefined&&Number(body.expected_version)!==Number(current?.version||0))return {rows,result:{conflict:true}};
     const state={products,categories,settings,version:Math.max(1,Number(current?.version||0)+1),updated_at:new Date().toISOString()};
     const replacement={...row,key:KEY,payload:state,updated_at:state.updated_at};

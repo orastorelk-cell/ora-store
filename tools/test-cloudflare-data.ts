@@ -201,8 +201,9 @@ try {
   const stockEtag=rawBucket.objects.get(adminKey)!.etag;
   assert.equal((await (await fast('/api/admin/storefront/state','PUT',stockBody)).json() as any).unchanged,true);
   assert.equal(rawBucket.objects.get(adminKey)!.etag,stockEtag,'A stock-save replay must not deduct twice');
+  assert.equal((await fast('/api/admin/storefront/state','PUT',{...stockBody,expected_version:stockAck.version,product_updates:[{...stockNext.products[0],stock_quantity:3}]})).status,409,'A newly acknowledged version cannot overwrite a stale product baseline');
   assert.equal((await fast('/api/admin/storefront/state','PUT',{...stockBody,product_updates:[{...stockNext.products[0],stock_quantity:3}]})).status,409);
-  assert.equal((await fast('/api/admin/storefront/state','PUT',{...stockBody,expected_version:stockAck.version,product_updates:[{id:'missing'}]})).status,409);
+  assert.equal((await fast('/api/admin/storefront/state','PUT',{...stockBody,expected_version:stockAck.version,product_expected:[{id:'missing'}],product_updates:[{id:'missing'}]})).status,409);
   assert.equal((await fast('/api/admin/storefront/state','PUT',{...stockBody,product_updates:[stockNext.products[0],stockNext.products[0]]})).status,400);
   assert.equal((await fast('/api/admin/storefront/state','PUT',{format:'ora-storefront-products-v1',product_updates:[]})).status,400);
   assert.equal(storefrontSaveBody(stockBase,{...stockNext,categories:[{id:'new'}]},stockBase.version).format,undefined);
@@ -216,7 +217,7 @@ try {
     if(key===adminKey&&writesThrottled-->0)throw new Error('R2 put failed: (429) Too Many Requests');
     return stablePut(key,value,options);
   };
-  const throttledAck:any=await (await fast('/api/admin/storefront/state','PUT',{...stockBody,expected_version:stockAck.version,product_updates:[{...stockNext.products[0],stock_quantity:6}]})).json();
+  const throttledAck:any=await (await fast('/api/admin/storefront/state','PUT',{...stockBody,expected_version:stockAck.version,product_expected:stockSaved.products,product_updates:[{...stockNext.products[0],stock_quantity:6}]})).json();
   assert.equal(throttledAck.ok,true);assert.equal((await (await fast('/api/admin/storefront/state')).json() as any).state.products[0].stock_quantity,6);
   let loseAck=true;
   rawBucket.put=async(key,value,options)=>{
@@ -224,7 +225,7 @@ try {
     if(key===adminKey&&result&&loseAck){loseAck=false;throw new Error('R2 put failed: (503) Service unavailable');}
     return result;
   };
-  assert.equal((await (await fast('/api/admin/storefront/state','PUT',{...stockBody,expected_version:throttledAck.version,product_updates:[{...stockNext.products[0],stock_quantity:5}]})).json() as any).ok,true);
+  assert.equal((await (await fast('/api/admin/storefront/state','PUT',{...stockBody,expected_version:throttledAck.version,product_expected:[{...stockNext.products[0],stock_quantity:6}],product_updates:[{...stockNext.products[0],stock_quantity:5}]})).json() as any).ok,true);
   assert.equal((await (await fast('/api/admin/storefront/state')).json() as any).state.products[0].stock_quantity,5,'An ambiguous successful write is not applied twice');
   rawBucket.put=stablePut;
   let readsThrottled=1;
