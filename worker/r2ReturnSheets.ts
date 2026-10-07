@@ -5,7 +5,7 @@ import { returnPackingHandler } from './r2ReturnPacking';
 import { buildReturnSheet, parseReturnCsv, RETURN_SHEET_PREFIX, RETURN_UNLISTED_PREFIX, RETURN_CONTROL_KEY,
   ReturnSheetError, returnFail, receiveReturnParcel, correctReturnParcel, returnContainersFromRows,
   sheetsFromRows, summarizeReturnSheet, sharedReturnInventory, pendingReturnQty, parcelFullyReceived,
-  returnPackingInProgress, type ReturnSheet } from '../src/lib/returnSheets';
+  returnPackingInProgress, wrongReturnQty, type ReturnSheet } from '../src/lib/returnSheets';
 
 type Row = Record<string, any>;
 export type ReturnStorage = {
@@ -72,11 +72,11 @@ export const annotateSheetOrders = async (storage: ReturnStorage, sheet: ReturnS
     if (!parcel.order_id || parcel.review_reason) continue;
     updates.set(parcel.order_id,order => {
       if (String(order?.waybill_number || '').trim() !== parcel.waybill) return order;
-      const complete = parcelFullyReceived(parcel), issue = parcel.items.some(item => item.damaged_qty || pendingReturnQty(item));
+      const complete = parcelFullyReceived(parcel), issue = parcel.items.some(item => item.damaged_qty || pendingReturnQty(item) || wrongReturnQty(item));
       const received = parcel.items.some(item => item.good_qty + item.damaged_qty > 0);
       const fields = { ...(sheet.id ? { return_sheet_id: sheet.id,return_sheet_waybill: parcel.waybill } : {}),
         return_tracking_waybill: parcel.waybill,return_sheet_revision: parcel.revision,return_state: complete ? 'Received' : 'Pending',
-        return_pending_qty: parcel.items.reduce((n,item) => n + pendingReturnQty(item),0),return_damaged_qty: parcel.items.reduce((n,item) => n + item.damaged_qty,0),
+        return_pending_qty: parcel.items.reduce((n,item) => n + pendingReturnQty(item),0),return_damaged_qty: parcel.items.reduce((n,item) => n + item.damaged_qty,0),return_wrong_item_qty: parcel.items.reduce((n,item) => n + wrongReturnQty(item),0),
         return_status: !parcel.checked_at ? 'Pending Verification' : complete && !issue ? 'Verified' : 'Issue Found',
         ...(parcel.checked_at ? { return_checked_at: parcel.checked_at,return_checked_by: parcel.checked_by } : {}),
         ...(received ? { return_received_at: parcel.checked_at,delivery_status: complete && !issue ? 'Return Received - Verified' : 'Return Received - Partial / Issue' } : {}) };

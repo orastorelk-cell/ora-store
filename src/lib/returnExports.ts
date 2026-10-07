@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import { fardarParcelDescription } from './csv';
-import { parcelFullyReceived, pendingReturnQty, summarizeReturnSheet, type ReturnSheet } from './returnSheets';
+import { actualReturnItems, wrongReturnQty, parcelFullyReceived, pendingReturnQty, summarizeReturnSheet, type ReturnSheet } from './returnSheets';
 
 export const downloadReturnBlob = (blob: Blob, name: string) => {
   const url = URL.createObjectURL(blob), link = document.createElement('a'); link.href = url; link.download = name;
@@ -29,20 +29,22 @@ export const buildReturnSheetPdf = (sheet: ReturnSheet) => {
   heading();
   text(summary.all_received ? 'ALL RECEIVED' : 'PENDING RETURNS',x,y,12,true); y += 9;
   text('Parcels: ' + summary.completed_parcels + ' completed / ' + summary.parcels + ' total | Item lines confirmed: ' + summary.confirmed_items + ' / ' + summary.item_lines,x,y,9); y += 7;
-  text('Units: ' + summary.expected_qty + ' expected | ' + summary.good_qty + ' good | ' + summary.damaged_qty + ' damaged | ' + summary.pending_qty + ' pending',x,y,9); y += 12;
+  text('Units: ' + summary.expected_qty + ' expected | ' + summary.good_qty + ' good | ' + summary.damaged_qty + ' damaged | ' + summary.pending_qty + ' pending',x,y,9); y += 7;
+  if (summary.wrong_item_qty) { text('Packing mistakes: ' + summary.wrong_item_qty + ' units received as different items. Stock credited to actual items.',x,y,8); y += 7; } y += 5;
   for (const [label,parcels] of [
     ['Pending / needs review',sheet.parcels.filter(parcel => !parcelFullyReceived(parcel))],
     ['Completed parcels',sheet.parcels.filter(parcelFullyReceived)],
     ['Damaged items',sheet.parcels.filter(parcel => parcel.items.some(item => item.damaged_qty > 0))],
+    ['Different items received',sheet.parcels.filter(parcel => parcel.items.some(wrongReturnQty))],
   ] as const) {
     startSection(label + ' (' + parcels.length + ' parcels)');
     if (!parcels.length) { text('None',x + 2,y,9); y += 12; continue; }
     for (const parcel of parcels) {
-      const items = label === 'Damaged items' ? parcel.items.filter(item => item.damaged_qty > 0) : parcel.items;
+      const items = label === 'Damaged items' ? parcel.items.filter(item => item.damaged_qty > 0) : label === 'Different items received' ? parcel.items.filter(wrongReturnQty) : parcel.items;
       const lines = items.length ? items : [null];
       for (const item of lines) {
         doc.setFontSize(8); doc.setFont('helvetica','normal');
-        const itemText = item ? clean(item.name + ' | ' + item.sku) + (item.damage_photo_ids?.length ? ' | Photos: ' + item.damage_photo_ids.length : '') : clean(parcel.review_reason);
+        const itemText = item ? clean(item.name + ' | ' + item.sku) + (wrongReturnQty(item) ? ' | Actually received: ' + actualReturnItems(item).map(value => clean(value.name + ' / ' + value.sku) + ' (good ' + value.good_qty + ', damaged ' + value.damaged_qty + ')').join('; ') : '') + (item.damage_photo_ids?.length ? ' | Photos: ' + item.damage_photo_ids.length : '') : clean(parcel.review_reason);
         const wrapped = doc.splitTextToSize(itemText,69) as string[];
         const orderLines = doc.splitTextToSize(clean(parcel.order_number || parcel.csv_order_id || 'Unmatched') + '\n' + parcel.waybill,37) as string[];
         const height = Math.max(12,Math.max(wrapped.length,orderLines.length) * 4 + 5);

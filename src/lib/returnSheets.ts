@@ -7,10 +7,14 @@ export const RETURN_PACKING_PREFIX = 'return-packing-v1:';
 export const returnPackingInProgress = (rows: readonly any[]) => rows.some(row => String(row.key).startsWith(RETURN_PACKING_PREFIX) && !['complete','failed'].includes(row.payload?.phase));
 export const returnPackingPending = (rows: readonly any[]) => !!rows.find(row => row.key === RETURN_CONTROL_KEY)?.payload?.packing_pending || returnPackingInProgress(rows);
 export const parcelFullyReceived = (parcel: ReturnParcel) => !parcel.review_reason && parcel.items.length > 0 && parcel.items.every(item => !pendingReturnQty(item));
+export type ReturnReceivedItem = {
+  id: string; product_id: string; variant_id?: string; sku: string; name: string;
+  good_qty: number; damaged_qty: number; damage_photo_ids?: string[];
+};
 export type ReturnItem = {
   id: string; product_id: string; variant_id?: string; sku: string; name: string;
   bundle_name?: string; expected_qty: number; good_qty: number; damaged_qty: number;
-  not_received: boolean; damage_photo_ids?: string[];
+  not_received: boolean; damage_photo_ids?: string[]; received_items?: ReturnReceivedItem[];
 };
 export type ReturnParcel = {
   waybill: string; csv_order_id: string; order_id?: string; order_number?: string;
@@ -21,7 +25,7 @@ export type ReturnParcel = {
 export type ReturnReceipt = {
   operation_id: string; fingerprint: string; waybill: string; actor: string; at: string;
   stock_history: StockHistory[]; good_qty: number; damaged_qty: number;
-  kind?: 'receipt' | 'damage_correction'; stock_added_qty?: number; balance_qty?: number;
+  kind?: 'receipt' | 'damage_correction'; stock_added_qty?: number; balance_qty?: number; wrong_item_qty?: number;
 };
 export type ReturnSheet = {
   id: string; filename: string; source: { waybill: string; order_id: string; returned_date: string; reason: string }[];
@@ -99,7 +103,7 @@ export const physicalReturnItems = (order: any): ReturnItem[] => {
   }
   return [...grouped.values()];
 };
-export const inventoryReturnTarget = (products: any[], item: ReturnItem) => {
+export const inventoryReturnTarget = (products: any[], item: Pick<ReturnItem,'product_id' | 'variant_id' | 'name'>) => {
   const matches = products.filter(product => String(product.id) === item.product_id);
   if (matches.length !== 1) returnFail('Exact product unavailable: ' + item.name);
   const product = matches[0]; let target = product;
@@ -110,6 +114,41 @@ export const inventoryReturnTarget = (products: any[], item: ReturnItem) => {
   } else if (product.product_type === 'variant' || product.variants?.length) returnFail('Exact variant required: ' + item.name);
   if (product.product_type === 'bundle') returnFail('Receive each bundle component separately.');
   return { product, target };
+};
+// Original order identities stay intact. Actual received identities determine
+// stock credits and later damage corrections, including mixed partial receipts.
+export const actualReturnItems = (item: ReturnItem): ReturnReceivedItem[] => item.received_items || (item.good_qty + item.damaged_qty ? [{
+  id: item.id, product_id: item.product_id, variant_id: item.variant_id, sku: item.sku, name: item.name,
+  good_qty: item.good_qty, damaged_qty: item.damaged_qty, damage_photo_ids: item.damage_photo_ids || [],
+}] : []);
+export const wrongReturnQty = (item: ReturnItem) => actualReturnItems(item).filter(value => value.product_id !== item.product_id || (value.variant_id || '') !== (item.variant_id || '')).reduce((sum,value) => sum + value.good_qty + value.damaged_qty,0);
+export const returnCatalogItems = (products: any[]): ReturnReceivedItem[] => products.flatMap(product => {
+  if (product.product_type === 'bundle') return [];
+  const base = String(product.name_en || product.name_si || product.sku || product.id);
+  const choice = (variant?: any): ReturnReceivedItem => ({
+    id: String(product.id) + '::' + String(variant?.id || ''), product_id: String(product.id),
+    ...(variant ? {variant_id: String(variant.id)} : {}), sku: String(variant?.sku || product.sku || ''),
+    name: base + (variant ? ' - ' + String(variant.option_value || variant.name || variant.sku || variant.id) : ''), good_qty: 0, damaged_qty: 0,
+  });
+  return product.product_type === 'variant' || product.variants?.length ? (product.variants || []).map(choice) : [choice()];
+});
+const receivedIdentity = (entry: any) => {
+  if (entry.received_product_id === undefined) {
+    if (entry.received_variant_id !== undefined) returnFail('Select the received product before its variant.',400);
+    return {};
+  }
+  if (typeof entry.received_product_id !== 'string' || !entry.received_product_id || entry.received_product_id.length > 200 ||
+    (entry.received_variant_id !== undefined && (typeof entry.received_variant_id !== 'string' || !entry.received_variant_id || entry.received_variant_id.length > 200))) returnFail('Select a valid received item.',400);
+  return {received_product_id: entry.received_product_id, ...(entry.received_variant_id === undefined ? {} : {received_variant_id: entry.received_variant_id})};
+};
+const receivedTarget = (products: any[], item: ReturnItem, entry: any): ReturnReceivedItem => {
+  const identity = { ...item, product_id: entry.received_product_id || item.product_id,
+    variant_id: entry.received_product_id ? entry.received_variant_id : item.variant_id };
+  const {product} = inventoryReturnTarget(products,identity);
+  const different = identity.product_id !== item.product_id || (identity.variant_id || '') !== (item.variant_id || '');
+  const choice = different ? returnCatalogItems([product]).find(value => value.product_id === identity.product_id && (value.variant_id || '') === (identity.variant_id || ''))! : item;
+  return {id: identity.product_id + '::' + (identity.variant_id || ''),product_id: identity.product_id,variant_id: identity.variant_id,
+    name: choice.name,sku: choice.sku,good_qty: 0,damaged_qty: 0,damage_photo_ids: []};
 };
 const eligible = (order: any, waybill: string, sheetId?: string) => {
   if (String(order.waybill_number || '').trim() !== waybill) returnFail('This is an old waybill; the order has another waybill.');
@@ -138,6 +177,7 @@ export const buildReturnSheet = (parsed: ReturnType<typeof parseReturnCsv>, orde
 export const pendingReturnQty = (item: ReturnItem) => Math.max(0, item.expected_qty - item.good_qty - item.damaged_qty);
 export const parcelReturnStatus = (parcel: ReturnParcel) => {
   if (parcel.review_reason) return 'Needs review';
+  if (parcel.items.some(wrongReturnQty)) return parcel.items.every(item => !pendingReturnQty(item)) ? 'Received / wrong item recorded' : 'Part received / wrong item recorded';
   if (parcel.items.length && parcel.items.every(item => !pendingReturnQty(item))) return parcel.items.some(item => item.damaged_qty) ? 'Received with damage' : 'Received';
   if (parcel.items.some(item => item.good_qty + item.damaged_qty > 0)) return 'Part received';
   if (parcel.items.some(item => item.not_received)) return 'Not received';
@@ -152,7 +192,7 @@ export const summarizeReturnSheet = (sheet: ReturnSheet) => {
     review_parcels: sheet.parcels.filter(parcel => parcel.review_reason).length,
     expected_qty: items.reduce((sum, item) => sum + item.expected_qty, 0),
     good_qty: items.reduce((sum, item) => sum + item.good_qty, 0), damaged_qty: items.reduce((sum, item) => sum + item.damaged_qty, 0),
-    pending_qty: items.reduce((sum, item) => sum + pendingReturnQty(item), 0),
+    pending_qty: items.reduce((sum, item) => sum + pendingReturnQty(item), 0), wrong_item_qty: items.reduce((sum,item) => sum + wrongReturnQty(item),0),
     confirmed_items: items.filter(item => item.good_qty + item.damaged_qty > 0).length,
     fully_received_items: items.filter(item => !pendingReturnQty(item)).length, item_lines: items.length };
 };
@@ -163,9 +203,10 @@ export const sharedReturnInventory = (rows: readonly any[]) => {
   const stockHistory = [...sheets.flatMap(sheet => sheet.receipts.flatMap(receipt => receipt.stock_history)),...rows.filter(row => String(row.key).startsWith(RETURN_PACKING_PREFIX) && ['stock_saved','complete'].includes(row.payload?.phase)).flatMap(row => row.payload.stock_history || [])];
   const returnRecords: ReturnRecord[] = sheets.flatMap(sheet => sheet.parcels.filter(parcel => parcel.checked_at && parcel.order_id).map(parcel => ({
     id: 'return-record:' + parcel.waybill, order_id: parcel.order_id!, order_number: parcel.order_number!, waybill_number: parcel.waybill,
-    checked_at: parcel.checked_at!, checked_by: parcel.checked_by || '', status: parcel.items.every(item => !pendingReturnQty(item) && !item.damaged_qty) ? 'Verified' : 'Issue Found',
+    checked_at: parcel.checked_at!, checked_by: parcel.checked_by || '', status: parcel.items.every(item => !pendingReturnQty(item) && !item.damaged_qty && !wrongReturnQty(item)) ? 'Verified' : 'Issue Found',
     items: parcel.items.map(item => ({ product_id: item.product_id, variant_id: item.variant_id, sku: item.sku, product_name: item.name,
-      expected_qty: item.expected_qty, good_qty: item.good_qty, damaged_qty: item.damaged_qty, missing_qty: pendingReturnQty(item) })), notes: parcel.notes,
+      expected_qty: item.expected_qty, good_qty: item.good_qty, damaged_qty: item.damaged_qty, missing_qty: pendingReturnQty(item), received_items: actualReturnItems(item) })),
+    wrong_item_note: parcel.items.filter(wrongReturnQty).map(item => 'Expected ' + item.name + '; received ' + actualReturnItems(item).map(value => value.name + ' × ' + (value.good_qty + value.damaged_qty)).join(', ')).join(' | ') || undefined, notes: parcel.notes,
   })));
   return { stockHistory, returnRecords, packing_pending: returnPackingPending(rows), batches: rows.filter(row => String(row.key).startsWith(RETURN_PACKING_PREFIX) && row.payload?.phase === 'complete').map(row => ({ operation_id: row.payload.operation_id, batch_id: row.payload.batch_id, created_at: row.payload.created_at, count: row.payload.order_ids?.length || 0 })).sort((a,b) => b.created_at.localeCompare(a.created_at)).slice(0,30) };
 };
@@ -203,7 +244,7 @@ export const receiveReturnParcel = (sheet: ReturnSheet, parcel: ReturnParcel, in
     if (seen.has(id) || !parcel.items.some(item => item.id === id)) returnFail('Invalid or duplicate parcel item.', 400);
     seen.add(id);
     if (typeof entry.not_received !== 'boolean') returnFail('Choose received or not received for every item.', 400);
-    return { id, good_qty: integer(entry.good_qty, 'good quantity'), damaged_qty: integer(entry.damaged_qty, 'damaged quantity'), not_received: entry.not_received, ...(entry.photo_ids === undefined ? {} : { photo_ids: photoIds(entry.photo_ids) }) };
+    return { id, good_qty: integer(entry.good_qty, 'good quantity'), damaged_qty: integer(entry.damaged_qty, 'damaged quantity'), not_received: entry.not_received, ...(entry.photo_ids === undefined ? {} : { photo_ids: photoIds(entry.photo_ids) }), ...receivedIdentity(entry) };
   }).sort((a: any, b: any) => a.id.localeCompare(b.id));
   const notes = String(input.notes || '').trim().slice(0,2000);
   const fingerprint = JSON.stringify({ waybill: parcel.waybill, expected_revision: input.expected_revision, items: entries, notes });
@@ -219,34 +260,51 @@ export const receiveReturnParcel = (sheet: ReturnSheet, parcel: ReturnParcel, in
   eligible(order, parcel.waybill, sheet.id);
   const expected = physicalReturnItems(order);
   if (JSON.stringify(expected.map(item => [item.id,item.expected_qty]).sort()) !== JSON.stringify(parcel.items.map(item => [item.id,item.expected_qty]).sort())) returnFail('Order items changed after upload. Review the order before receiving.');
-  const now = new Date().toISOString(); const history: StockHistory[] = []; let added = 0, balanced = 0;
+  const now = new Date().toISOString(); const history: StockHistory[] = []; let added = 0, balanced = 0, wrong = 0;
   const replacements = new Map<string, any>();
   const items = parcel.items.map(item => {
     const entry = entries.find((value: any) => value.id === item.id)!;
     const good = item.good_qty + entry.good_qty, damaged = item.damaged_qty + entry.damaged_qty;
     if (good + damaged > item.expected_qty) returnFail('Received quantity exceeds the remaining quantity for ' + item.name + '.');
     if (entry.not_received && (entry.good_qty || entry.damaged_qty)) returnFail('An item cannot be both received now and not received now.', 400);
+    if (entry.not_received && entry.received_product_id) returnFail('A missing item cannot be replaced with a received item.',400);
     if (pendingReturnQty(item) && !entry.not_received && !entry.good_qty && !entry.damaged_qty) returnFail('Enter the received quantity or mark not received for ' + item.name + '.',400);
+    const incoming = entry.good_qty + entry.damaged_qty;
+    const actual = incoming ? receivedTarget(products,item,entry) : null;
+    if (!incoming && entry.received_product_id) returnFail('Enter the quantity of the different received item.',400);
+    const received: ReturnReceivedItem[] = actualReturnItems(item).map(value => ({ ...value,damage_photo_ids: [...(value.damage_photo_ids || [])] }));
+    if (actual) {
+      const existing = received.find(value => value.id === actual.id);
+      const saved = existing || {...actual};
+      saved.good_qty += entry.good_qty; saved.damaged_qty += entry.damaged_qty;
+      saved.damage_photo_ids = [...new Set([...(saved.damage_photo_ids || []),...(entry.photo_ids || [])])];
+      if (!existing) received.push(saved);
+      if (actual.product_id !== item.product_id || (actual.variant_id || '') !== (item.variant_id || '')) wrong += incoming;
+    } else if (entry.photo_ids?.length) {
+      const saved = received.find(value => value.id === item.id && value.damaged_qty) || received.find(value => value.damaged_qty);
+      if (!saved) returnFail('Enter damaged quantity before attaching damage photos.',400);
+      saved.damage_photo_ids = [...new Set([...(saved.damage_photo_ids || []),...entry.photo_ids])];
+    }
     if (entry.good_qty) {
-      const original = replacements.get(item.product_id) || products.find(product => String(product.id) === item.product_id);
-      const { product, target } = inventoryReturnTarget(original ? [original] : [], item);
+      const original = replacements.get(actual!.product_id) || products.find(product => String(product.id) === actual!.product_id);
+      const { product, target } = inventoryReturnTarget(original ? [original] : [], actual!);
       const before = Number(target.stock_quantity || 0), credit = creditReturnStock(target,entry.good_qty), after = credit.stock_quantity;
       added += entry.good_qty - credit.balance_qty; balanced += credit.balance_qty;
       if (!Number.isSafeInteger(before) || before < 0 || !Number.isSafeInteger(after)) returnFail('Current item stock is invalid.');
       const updated = { ...target, stock_quantity: after, return_stock_debt: credit.return_stock_debt, status: after > 0 ? 'Active' : 'Out of Stock' };
-      if (item.variant_id) {
-        const variants = product.variants.map((variant: any) => String(variant.id) === item.variant_id ? updated : variant);
+      if (actual!.variant_id) {
+        const variants = product.variants.map((variant: any) => String(variant.id) === actual!.variant_id ? updated : variant);
         const total=variants.reduce((sum: number, variant: any) => sum + Number(variant.stock_quantity || 0), 0);
-        replacements.set(item.product_id, { ...product, variants, stock_quantity: total, status: total>0?'Active':'Out of Stock' });
-      } else replacements.set(item.product_id, updated);
-      history.push({ id: 'return-stock:' + (sheet.id || 'unlisted-' + parcel.waybill) + ':' + operationId + ':' + item.id, product_id: item.product_id, variant_id: item.variant_id,
-        product_name: item.name, change_type: 'Increase', quantity: entry.good_qty, previous_stock: before, new_stock: after,
-        reason: (sheet.id ? 'Return Sheet ' + sheet.id : 'Return awaiting CSV') + ' / ' + parcel.waybill + ' / ' + parcel.order_number + (credit.balance_qty ? ' / shortage balanced: ' + credit.balance_qty : ''), performed_by: actor, created_at: now });
+        replacements.set(actual!.product_id, { ...product, variants, stock_quantity: total, status: total>0?'Active':'Out of Stock' });
+      } else replacements.set(actual!.product_id, updated);
+      history.push({ id: 'return-stock:' + (sheet.id || 'unlisted-' + parcel.waybill) + ':' + operationId + ':' + item.id, product_id: actual!.product_id, variant_id: actual!.variant_id,
+        product_name: actual!.name, change_type: 'Increase', quantity: entry.good_qty, previous_stock: before, new_stock: after,
+        reason: (sheet.id ? 'Return Sheet ' + sheet.id : 'Return awaiting CSV') + ' / ' + parcel.waybill + ' / ' + parcel.order_number + (actual!.id !== item.id ? ' / wrong item: expected ' + item.name + ', received ' + actual!.name : '') + (credit.balance_qty ? ' / shortage balanced: ' + credit.balance_qty : ''), performed_by: actor, created_at: now });
     }
-    return { ...item, good_qty: good, damaged_qty: damaged, not_received: entry.not_received && good + damaged < item.expected_qty, damage_photo_ids: [...new Set([...(item.damage_photo_ids || []),...(entry.photo_ids || [])])] };
+    return { ...item, good_qty: good, damaged_qty: damaged, not_received: entry.not_received && good + damaged < item.expected_qty, received_items: received, damage_photo_ids: [...new Set([...(item.damage_photo_ids || []),...(entry.photo_ids || [])])] };
   });
   const receipt: ReturnReceipt = { operation_id: operationId, fingerprint, waybill: parcel.waybill, actor, at: now, stock_history: history,
-    kind: 'receipt', stock_added_qty: added, balance_qty: balanced, good_qty: entries.reduce((sum: number, entry: any) => sum + entry.good_qty, 0), damaged_qty: entries.reduce((sum: number, entry: any) => sum + entry.damaged_qty, 0) };
+    kind: 'receipt', stock_added_qty: added, balance_qty: balanced, wrong_item_qty: wrong, good_qty: entries.reduce((sum: number, entry: any) => sum + entry.good_qty, 0), damaged_qty: entries.reduce((sum: number, entry: any) => sum + entry.damaged_qty, 0) };
   return { sheet: { ...sheet, updated_at: now, parcels: sheet.parcels.map(value => value === parcel ? { ...parcel, items, revision: parcel.revision + 1, checked_at: now, checked_by: actor, notes } : value), receipts: [...sheet.receipts, receipt] },
     products: replacements.size ? products.map(product => replacements.get(String(product.id)) || product) : products, unchanged: false, receipt };
 };
@@ -258,7 +316,7 @@ export const correctReturnParcel = (sheet: ReturnSheet, parcel: ReturnParcel, in
   const entries = input.items.map((entry: any) => {
     const id = String(entry.id || '');
     if (seen.has(id) || !parcel.items.some(item => item.id === id)) returnFail('Invalid correction item.',400);
-    seen.add(id); return { id, quantity: integer(entry.quantity,'damage correction quantity',1), photo_ids: photoIds(entry.photo_ids) };
+    seen.add(id); return { id, quantity: integer(entry.quantity,'damage correction quantity',1), photo_ids: photoIds(entry.photo_ids), ...receivedIdentity(entry) };
   }).sort((a: any,b: any) => a.id.localeCompare(b.id));
   const notes = String(input.notes || '').trim().slice(0,2000);
   const fingerprint = JSON.stringify({ kind: 'damage_correction', waybill: parcel.waybill, expected_revision: input.expected_revision, items: entries, notes });
@@ -268,21 +326,25 @@ export const correctReturnParcel = (sheet: ReturnSheet, parcel: ReturnParcel, in
   const now = new Date().toISOString(), replacements = new Map<string,any>(), history: StockHistory[] = []; let deferred = 0;
   const items = parcel.items.map(item => {
     const entry = entries.find((value: any) => value.id === item.id); if (!entry) return item;
-    if (entry.quantity > item.good_qty) returnFail('Correction exceeds the saved good quantity for ' + item.name + '.',400);
-    const original = replacements.get(item.product_id) || products.find(product => String(product.id) === item.product_id);
-    const { product,target } = inventoryReturnTarget(original ? [original] : [],item);
+    const received = actualReturnItems(item).map(value => ({...value}));
+    const actual = received.find(value => value.product_id === (entry.received_product_id || item.product_id) && (value.variant_id || '') === (entry.received_product_id ? entry.received_variant_id || '' : item.variant_id || ''));
+    if (!actual || entry.quantity > actual.good_qty) returnFail('Correction exceeds the saved good quantity for the selected received item.',400);
+    const original = replacements.get(actual.product_id) || products.find(product => String(product.id) === actual.product_id);
+    const { product,target } = inventoryReturnTarget(original ? [original] : [],actual);
     const before = integer(Number(target.stock_quantity || 0),'current stock'), debt = integer(Number(target.return_stock_debt || 0),'return balance');
     const taken = Math.min(before,entry.quantity), shortage = entry.quantity - taken; deferred += shortage;
     const updated = { ...target, stock_quantity: before - taken, return_stock_debt: debt + shortage, status: before > taken ? 'Active' : 'Out of Stock' };
-    if (item.variant_id) {
-      const variants = product.variants.map((variant: any) => String(variant.id) === item.variant_id ? updated : variant);
+    if (actual.variant_id) {
+      const variants = product.variants.map((variant: any) => String(variant.id) === actual.variant_id ? updated : variant);
       const total = variants.reduce((sum: number,variant: any) => sum + Number(variant.stock_quantity || 0),0);
-      replacements.set(item.product_id,{ ...product,variants,stock_quantity: total,status: total > 0 ? 'Active' : 'Out of Stock' });
-    } else replacements.set(item.product_id,updated);
-    history.push({ id: 'return-stock:correction:' + parcel.waybill + ':' + operationId + ':' + item.id, product_id: item.product_id, variant_id: item.variant_id, product_name: item.name,
+      replacements.set(actual.product_id,{ ...product,variants,stock_quantity: total,status: total > 0 ? 'Active' : 'Out of Stock' });
+    } else replacements.set(actual.product_id,updated);
+    history.push({ id: 'return-stock:correction:' + parcel.waybill + ':' + operationId + ':' + item.id, product_id: actual.product_id, variant_id: actual.variant_id, product_name: actual.name,
       change_type: 'Decrease', quantity: entry.quantity, previous_stock: before, new_stock: before - taken,
       reason: 'Good corrected to damaged / ' + parcel.waybill + (shortage ? ' / future stock balance: ' + shortage : ''), performed_by: actor, created_at: now });
-    return { ...item,good_qty: item.good_qty - entry.quantity,damaged_qty: item.damaged_qty + entry.quantity,damage_photo_ids: [...new Set([...(item.damage_photo_ids || []),...entry.photo_ids])] };
+    actual.good_qty -= entry.quantity; actual.damaged_qty += entry.quantity;
+    actual.damage_photo_ids = [...new Set([...(actual.damage_photo_ids || []),...entry.photo_ids])];
+    return { ...item,good_qty: item.good_qty - entry.quantity,damaged_qty: item.damaged_qty + entry.quantity,received_items: received,damage_photo_ids: [...new Set([...(item.damage_photo_ids || []),...entry.photo_ids])] };
   });
   const quantity = entries.reduce((sum: number,entry: any) => sum + entry.quantity,0);
   const receipt: ReturnReceipt = { operation_id: operationId,fingerprint,kind: 'damage_correction',waybill: parcel.waybill,actor,at: now,stock_history: history,good_qty: -quantity,damaged_qty: quantity,balance_qty: deferred,stock_added_qty: 0 };

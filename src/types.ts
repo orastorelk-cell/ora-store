@@ -305,6 +305,7 @@ export interface Order {
   return_sheet_id?: string;
   return_sheet_waybill?: string;
   return_sheet_revision?: number;
+  return_wrong_item_qty?: number;
   return_received_at?: string;
   return_checked_by?: string;
   dispatch_status?: 'Not Scanned' | 'Handed Over';
@@ -673,6 +674,7 @@ export interface ReturnRecord {
     good_qty: number;
     missing_qty: number;
     damaged_qty: number;
+    received_items?: { id: string; product_id: string; variant_id?: string; sku: string; name: string; good_qty: number; damaged_qty: number; damage_photo_ids?: string[] }[];
   }[];
   wrong_item_note?: string;
   notes?: string;

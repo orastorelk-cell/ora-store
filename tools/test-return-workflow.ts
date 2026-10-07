@@ -109,4 +109,46 @@ const resumed=await Promise.all([call('/api/returns/packing','POST',{operation_i
 const unknownBefore=(await get('WB-UNKNOWN')).parcels[0];
 await replaceDataTable(env,'order_snapshots',rows=>({rows:[...rows,{order_id:'unknown-later',order_number:'FIXTURE-unknown-later',payload:returned('unknown-later','WB-UNKNOWN',1)}],result:null}));
 const resolved=await call('/api/returns/sheets','POST',{filename:'779.csv',csv:csv(['WB-UNKNOWN'])});assert.equal(resolved.status,200,JSON.stringify(resolved));assert.equal(resolved.body.sheet.parcels[0].review_reason,undefined);assert.equal(resolved.body.sheet.parcels[0].items[0].expected_qty,1);assert.equal(resolved.body.sheet.parcels[0].scanned_at,unknownBefore.scanned_at);assert.equal((await product()).stock_quantity,0,'Matching an earlier unknown scan never adds stock');
+
+// Packing mistakes must credit and correct the physical item, while preserving
+// the expected order and legacy receipts from before actual identities existed.
+const extraOrders=[returned('mixed','WB-MIXED',5),returned('settle','WB-SETTLE',2),{
+  ...returned('wrong-colour','WB-WRONG-COLOUR',2,'variant'),items:[{product_id:'variant',variant_id:'blue',sku:'BLUE',product_name:'Colour item',variant_name:'Blue',quantity:2}],
+}];
+await replaceDataTable(env,'order_snapshots',rows=>({rows:[...rows,...extraOrders.map(value=>({order_id:value.id,order_number:value.order_number,payload:value}))],result:null}));
+const sendActual=async(wb:string,good:number,damaged:number,productId:string,variantId?:string,photos:string[]=[])=>{
+  const sheet=await get(wb),parcel=sheet.parcels.find((value:any)=>value.waybill===wb);
+  const body={operation_id:crypto.randomUUID(),expected_revision:parcel.revision,waybill:wb,items:[{id:parcel.items[0].id,good_qty:good,damaged_qty:damaged,not_received:false,received_product_id:productId,...(variantId?{received_variant_id:variantId}:{}),photo_ids:photos}],notes:'Packing mistake fixture'};
+  return {body,response:await call('/api/returns/parcels/'+wb+'/receive','POST',body,'receiver')};
+};
+await scan('WB-MIXED');await receive('WB-MIXED',2);
+await replaceDataTable(env,'admin_data_store',rows=>({rows:rows.map(row=>row.key==='return-unlisted-v1:WB-MIXED'?{...row,payload:{...row.payload,parcels:row.payload.parcels.map((parcel:any)=>({...parcel,items:parcel.items.map(({received_items,...item}:any)=>item)}))}}:row),result:null}));
+const originalMixed=await order('mixed'),matBefore=(await product()).stock_quantity,aBefore=(await product('a')).stock_quantity;
+const mixedPhoto=crypto.randomUUID();assert.equal((await call('/api/returns/photos','POST',{upload_id:mixedPhoto,waybill:'WB-MIXED',item_id:'mat::',data_url:image},'receiver')).status,200);
+for(const [pid,vid,status] of [['missing-product',undefined,409],['bundle',undefined,409],['variant',undefined,409],['variant','missing-colour',409]] as const){const invalid=await sendActual('WB-MIXED',2,1,pid,vid);assert.equal(invalid.response.status,status,JSON.stringify(invalid.response));}
+assert.equal((await product()).stock_quantity,matBefore);assert.equal((await product('a')).stock_quantity,aBefore);
+const mismatch=await sendActual('WB-MIXED',2,1,'a',undefined,[mixedPhoto]);assert.equal(mismatch.response.status,200,JSON.stringify(mismatch.response));
+assert.equal((await product()).stock_quantity,matBefore,'Wrong item never credits the expected product');assert.equal((await product('a')).stock_quantity,aBefore+2,'Only actual good units are credited');
+const mixedItem=mismatch.response.body.sheet.parcels[0].items[0];assert.deepEqual(mixedItem.received_items.map((value:any)=>[value.product_id,value.good_qty,value.damaged_qty]),[['mat',2,0],['a',2,1]]);
+assert.equal(mixedItem.received_items[1].damage_photo_ids[0],mixedPhoto);assert.equal(mismatch.response.body.summary.wrong_item_qty,3);assert.equal(mismatch.response.body.receipt.stock_history[0].product_id,'a');
+assert.equal(mismatch.response.body.summary.all_received,true);assert.equal((await order('mixed')).return_status,'Issue Found');assert.equal((await order('mixed')).return_wrong_item_qty,3);assert.equal((await order('mixed')).return_state,'Received');
+assert.deepEqual((await order('mixed')).items,originalMixed.items);assert.equal((await order('mixed')).invoice_number,originalMixed.invoice_number);
+assert.equal((await call('/api/returns/parcels/WB-MIXED/receive','POST',mismatch.body,'receiver')).body.unchanged,true);assert.equal((await product('a')).stock_quantity,aBefore+2);
+const changedRetry={...mismatch.body,items:mismatch.body.items.map(value=>({...value,received_product_id:'b'}))};assert.equal((await call('/api/returns/parcels/WB-MIXED/receive','POST',changedRetry,'receiver')).status,409);
+const mixedRecord=(await call('/api/admin/storefront/state')).body.state.return_inventory.returnRecords.find((value:any)=>value.waybill_number==='WB-MIXED');assert.equal(mixedRecord.items[0].product_id,'mat');assert.equal(mixedRecord.items[0].received_items[1].product_id,'a');assert.ok(mixedRecord.wrong_item_note.includes(mixedItem.received_items[1].name));
+const photoOnly=crypto.randomUUID();assert.equal((await call('/api/returns/photos','POST',{upload_id:photoOnly,waybill:'WB-MIXED',item_id:'mat::',data_url:image},'receiver')).status,200);
+await receive('WB-MIXED',0,0,[photoOnly]);assert.ok((await get('WB-MIXED')).parcels[0].items[0].received_items[1].damage_photo_ids.includes(photoOnly));
+await replaceDataTable(env,'admin_data_store',rows=>({rows:rows.map(row=>row.key==='storefront-state-v1'?{...row,payload:{...row.payload,products:row.payload.products.map((value:any)=>value.id==='a'?{...value,stock_quantity:0}:value)}}:row),result:null}));
+const correctionInput={operation_id:crypto.randomUUID(),expected_revision:(await get('WB-MIXED')).parcels[0].revision,items:[{id:'mat::',quantity:2,received_product_id:'a',photo_ids:[mixedPhoto]}],notes:'Actual wrong item later found damaged'};
+const corrected=await call('/api/returns/parcels/WB-MIXED/correct','POST',correctionInput,'receiver');assert.equal(corrected.status,200,JSON.stringify(corrected));assert.equal((await product('a')).return_stock_debt,2);assert.equal((await product()).stock_quantity,matBefore);
+assert.equal(corrected.body.sheet.parcels[0].items[0].received_items[1].good_qty,0);assert.equal(corrected.body.sheet.parcels[0].items[0].received_items[1].damaged_qty,3);
+assert.equal((await call('/api/returns/parcels/WB-MIXED/correct','POST',correctionInput,'receiver')).body.unchanged,true);assert.equal((await product('a')).return_stock_debt,2);
+await scan('WB-SETTLE');assert.equal((await sendActual('WB-SETTLE',2,0,'a')).response.status,200);assert.equal((await product('a')).return_stock_debt,0);assert.equal((await product('a')).stock_quantity,0);
+const beforeLink=JSON.stringify((await state()).products),wrongLinked=await call('/api/returns/sheets','POST',{filename:'780.csv',csv:csv(['WB-MIXED','WB-SETTLE'])});assert.equal(wrongLinked.status,200,JSON.stringify(wrongLinked));assert.equal(JSON.stringify((await state()).products),beforeLink);assert.equal(wrongLinked.body.summary.wrong_item_qty,5);assert.equal(wrongLinked.body.sheet.parcels[0].items[0].received_items[1].damage_photo_ids[0],mixedPhoto);
+assert.equal((await call('/api/returns/parcels/WB-MIXED/receive','POST',mismatch.body,'receiver')).body.unchanged,true,'Wrong-item retries survive late CSV linking');
+await scan('WB-WRONG-COLOUR');const colourBefore=await product('variant');const wrongColour=await sendActual('WB-WRONG-COLOUR',1,1,'variant','red');assert.equal(wrongColour.response.status,200,JSON.stringify(wrongColour.response));
+const colourAfter=await product('variant');assert.equal(colourAfter.variants[0].stock_quantity,colourBefore.variants[0].stock_quantity);assert.equal(colourAfter.variants[1].stock_quantity,colourBefore.variants[1].stock_quantity+1);assert.equal(colourAfter.stock_quantity,colourBefore.stock_quantity+1);
+const colourCorrection={operation_id:crypto.randomUUID(),expected_revision:wrongColour.response.body.sheet.parcels[0].revision,items:[{id:'variant::blue',quantity:1,received_product_id:'variant',received_variant_id:'red',photo_ids:[]}],notes:''};assert.equal((await call('/api/returns/parcels/WB-WRONG-COLOUR/correct','POST',colourCorrection,'receiver')).status,200);assert.equal((await product('variant')).stock_quantity,colourBefore.stock_quantity);
+assert.equal((await order('wrong-colour')).items[0].variant_id,'blue');assert.equal((await order('wrong-colour')).invoice_number,'INV-wrong-colour');
+console.log('PASS: actual wrong-item/colour stock credits, legacy mixed receipts, private photos and photo-only saves, exact-item damage corrections and deferred balances, mismatch reporting, retry and late-CSV durability, and unchanged order/invoice identities.');
 console.log('PASS: unlisted receipts, late CSV linking without duplicate stock, private damage photos, received/pending filters, corrections and deferred balance, actual single/bulk purchasing, manual FIFO/variant/bundle packing, journal retries/concurrency, common invoice/CSV batch and preserved prior invoices.');
