@@ -144,7 +144,7 @@ export const returnSheetsHandler = async (request: Request, storage: ReturnStora
           if (unlisted) {
             const prior = unlisted.parcels[0];
             if (prior.checked_at && parcel.review_reason) returnFail('Cannot link received parcel ' + parcel.waybill + ': ' + parcel.review_reason);
-            prepared.parcels[i] = { ...parcel,...prior,csv_order_id: parcel.csv_order_id,returned_date: parcel.returned_date,reason: parcel.reason || prior.reason };
+            prepared.parcels[i] = prior.review_reason&&!prior.checked_at ? { ...parcel,scanned_at:prior.scanned_at,scanned_by:prior.scanned_by,revision:prior.revision+1,notes:prior.notes } : { ...parcel,...prior,csv_order_id: parcel.csv_order_id,returned_date: parcel.returned_date,reason: parcel.reason || prior.reason };
             prepared.receipts.push(...unlisted.receipts);
             next = next.filter(row => row.key !== RETURN_UNLISTED_PREFIX + parcel.waybill);
           }

@@ -239,7 +239,7 @@ export const receiveReturnParcel = (sheet: ReturnSheet, parcel: ReturnParcel, in
         const total=variants.reduce((sum: number, variant: any) => sum + Number(variant.stock_quantity || 0), 0);
         replacements.set(item.product_id, { ...product, variants, stock_quantity: total, status: total>0?'Active':'Out of Stock' });
       } else replacements.set(item.product_id, updated);
-      history.push({ id: 'return-stock:' + sheet.id + ':' + operationId + ':' + item.id, product_id: item.product_id, variant_id: item.variant_id,
+      history.push({ id: 'return-stock:' + (sheet.id || 'unlisted-' + parcel.waybill) + ':' + operationId + ':' + item.id, product_id: item.product_id, variant_id: item.variant_id,
         product_name: item.name, change_type: 'Increase', quantity: entry.good_qty, previous_stock: before, new_stock: after,
         reason: (sheet.id ? 'Return Sheet ' + sheet.id : 'Return awaiting CSV') + ' / ' + parcel.waybill + ' / ' + parcel.order_number + (credit.balance_qty ? ' / shortage balanced: ' + credit.balance_qty : ''), performed_by: actor, created_at: now });
     }
@@ -279,7 +279,7 @@ export const correctReturnParcel = (sheet: ReturnSheet, parcel: ReturnParcel, in
       const total = variants.reduce((sum: number,variant: any) => sum + Number(variant.stock_quantity || 0),0);
       replacements.set(item.product_id,{ ...product,variants,stock_quantity: total,status: total > 0 ? 'Active' : 'Out of Stock' });
     } else replacements.set(item.product_id,updated);
-    history.push({ id: 'return-stock:correction:' + operationId + ':' + item.id, product_id: item.product_id, variant_id: item.variant_id, product_name: item.name,
+    history.push({ id: 'return-stock:correction:' + parcel.waybill + ':' + operationId + ':' + item.id, product_id: item.product_id, variant_id: item.variant_id, product_name: item.name,
       change_type: 'Decrease', quantity: entry.quantity, previous_stock: before, new_stock: before - taken,
       reason: 'Good corrected to damaged / ' + parcel.waybill + (shortage ? ' / future stock balance: ' + shortage : ''), performed_by: actor, created_at: now });
     return { ...item,good_qty: item.good_qty - entry.quantity,damaged_qty: item.damaged_qty + entry.quantity,damage_photo_ids: [...new Set([...(item.damage_photo_ids || []),...entry.photo_ids])] };
