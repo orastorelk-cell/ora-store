@@ -1,3 +1,4 @@
+import { returnPackingInProgress } from '../src/lib/returnSheets';
 import { activeData, configureCloudflareData, dataBucket, readDataTable, readDataTableWire, mutateDataTable, replaceDataTable } from './cloudflareData';
 import { applyDeliveredReport, type DeliveredEntry } from '../src/lib/deliveredOrders';
 import { applyConfirmCsvDecisions, validConfirmCsvEntries } from '../src/lib/confirmCsvSave';
@@ -55,11 +56,12 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   if(!read&&!delivered&&!confirmed&&!refresh&&!audit&&!invoices&&!downloads&&!cancellation&&!orderPut&&!pool&&!assignment&&!fulfilment&&!returns&&!redispatch)return null;
   const user=await verifyActiveStaff(request,env);
   if(!user)return json({error:'Login session required.'},401);
+  if((confirmed||delivered||downloads||redispatch||(orderPut&&request.method==='DELETE'))&&returnPackingInProgress(await readDataTable(env,'admin_data_store')))return json({error:'A packing batch is finishing. Retry its saved operation first.'},409);
   if(returns)return returnSheetsHandler(request,r2ReturnStorage(env),user);
   if(redispatch){
     const body:any=await request.clone().json().catch(()=>null);
     const sheet=returnSheetForWaybill(await readDataTable(env,'admin_data_store'),String(body?.old_waybill||'').trim());
-    if(sheet)return json({error:'This parcel belongs to Return Sheet '+sheet.id+'. Receive its items there. Create a new order with a fresh stock allocation for another dispatch.'},409);
+    if(sheet)return json({error:'This parcel is recorded in Returns'+(sheet.id?' / Sheet '+sheet.id:' / awaiting CSV')+'. Receive its items there. Create a new order with a fresh stock allocation for another dispatch.'},409);
     return null;
   }
   if(pool)return r2WaybillPoolHandler(request,env);
@@ -70,7 +72,7 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
     const id=decodeURIComponent(path.slice('/api/orders/'.length));
     if(request.method==='PUT')return r2OrderUpdateHandler(request,env,id);
     const current=(await readDataTable(env,'order_snapshots')).find(row=>String(row.order_id)===id)?.payload;
-    if(current?.return_sheet_id)return json({error:'Orders linked to a return sheet must remain in history.'},409);
+    if(current?.return_sheet_id||current?.return_tracking_waybill)return json({error:'Orders linked to a return sheet must remain in history.'},409);
     if(current?.cancel_stock_restore?.operation_id){
       if(request.method==='DELETE')return json({error:'The cancelled order and its retired waybill must remain in history.'},409);
       return json({ok:true,order:current,waybill_preserved:true,cancellation_preserved:true});

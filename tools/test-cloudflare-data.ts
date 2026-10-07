@@ -371,7 +371,7 @@ try {
   let localInvoiceOrders:any[]=JSON.parse(JSON.stringify(invoiceOrders)),rejectQueue=true,scheduledRetry=0;
   const effects:Array<()=>void>=[],inFlight={current:new Set()},retryTimer={current:null};
   const queueScope:any={invoiceReady,invoiceComplete,adminUser:{id:adminId,name:'Admin'},sharedStoreReady:true,orders:localInvoiceOrders,
-    autoInvoiceReadyRef:inFlight,invoiceQueueRetryTimerRef:retryTimer,invoiceQueueRetry:0,getStaffSessionToken:()=>token,
+    autoInvoiceReadyRef:inFlight,invoiceQueueRetryTimerRef:retryTimer,invoiceQueueRetry:0,returnPackingPending:false,getStaffSessionToken:()=>token,
     useEffect:(callback:any)=>effects.push(callback),window:{setTimeout:()=>{scheduledRetry++;return 10;}},setInvoiceQueueRetry:()=>{},
     sharedStaffRequest:async(path:string,options?:RequestInit)=>{if(rejectQueue){const error:any=new Error('503');error.status=503;throw error;}const response=await fast(path,options?.method||'GET',options?.body?JSON.parse(String(options.body)):undefined);return response.json();},
     saveInvoiceQueue:(a:any,b:any,c:any,d?:any)=>saveInvoiceQueue(a,b,c,d,async()=>{}),

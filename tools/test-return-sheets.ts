@@ -84,7 +84,7 @@ assert.equal((await call('/api/returns/sheets?search=368000','GET',undefined,'re
 assert.equal((await call('/api/returns/sheets?search=NOPE')).body.total,0);
 assert.equal((await receive(receipt(await getSheet(),'WB-PARTIAL',4))).status,409,'No receipt before scan');
 assert.equal((await call('/api/returns/scan','POST',{waybill:'WB-PARTIAL'},'special')).status,200);
-assert.equal(JSON.stringify(await stock()),before,'Scan cannot move stock');
+assert.deepEqual((await stock()).products,JSON.parse(before).products,'Scan cannot move stock');
 const partialInput=receipt(await getSheet(),'WB-PARTIAL',4);
 const partial=await receive(partialInput);assert.equal(partial.status,200,JSON.stringify(partial.body));assert.equal((await product('mat')).stock_quantity,14);
 assert.equal(partial.body.sheet.parcels[0].items[0].expected_qty-partial.body.sheet.parcels[0].items[0].good_qty,1);

@@ -288,3 +288,19 @@ export async function generatePackingTestA4FourUpPDF(settings: StoreSettings = {
 export async function generatePackingTestMultiPagePDF(settings: StoreSettings = {} as StoreSettings) {
   await generateBatchInvoicesPDF([buildPackingTestOrder(settings,9,10)], settings, 'O-RA_TEST_MULTI_PAGE.pdf');
 }
+
+// Same invoice artwork as the existing packing downloads, collected into the
+// Return batch ZIP so its PDF and courier CSV always contain the same orders.
+export async function buildReturnPackingInvoiceBlob(orders: Order[], settings: StoreSettings): Promise<Blob> {
+  if (!orders.length || orders.length > 50) throw new Error('Choose 1 to 50 orders per PDF part.');
+  if (orders.some(order => validateInvoiceOrder(order).length)) throw new Error('Packing invoice validation failed.');
+  const doc = new jsPDF({ orientation: 'landscape',unit: 'mm',format: 'a6',compress: true }); let pages = 0;
+  for (const order of orders) {
+    const items = splitInvoiceItems(order);
+    for (let page = 0; page < items.length; page++) {
+      if (pages++) doc.addPage('a6','landscape');
+      await addExactPage(doc,order,settings,items[page],page,items.length);
+    }
+  }
+  return doc.output('blob');
+}

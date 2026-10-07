@@ -21,7 +21,7 @@ export const invoiceDurabilityPatch = () => ({
       if(start<0||end<0)throw new Error('[O-RA durable invoices] auto queue not found');
       text=text.slice(0,start)+String.raw`  // AUTO INVOICE QUEUE: publish only invoices acknowledged by durable R2.
   useEffect(()=>{
-    if(!adminUser||!sharedStoreReady||!getStaffSessionToken())return;
+    if(!adminUser||!sharedStoreReady||!getStaffSessionToken()||returnPackingPending)return;
     const ready=orders.filter(o=>invoiceReady(o)&&!invoiceComplete(o)&&!autoInvoiceReadyRef.current.has(o.id))
       .sort((a,b)=>new Date(a.created_at).getTime()-new Date(b.created_at).getTime()).slice(0,50);
     if(!ready.length)return;
@@ -39,7 +39,7 @@ export const invoiceDurabilityPatch = () => ({
       if(result.errors.length){console.warn('Invoice queue:',result.errors.join(' | '));void refreshOrdersFromServer().catch(()=>{});retry();}
     }).catch(error=>{console.warn('Invoice save did not finish; no invoice was marked Generated:',error?.message||error);retry();})
       .finally(()=>ready.forEach(o=>autoInvoiceReadyRef.current.delete(o.id)));
-  },[orders,adminUser?.id,sharedStoreReady,invoiceQueueRetry]);
+  },[orders,adminUser?.id,sharedStoreReady,invoiceQueueRetry,returnPackingPending]);
 
 
 `+text.slice(end);

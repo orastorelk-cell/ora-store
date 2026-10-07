@@ -276,6 +276,8 @@ export async function generateRepairedBatchInvoicesPDFFromCsv(orders:Order[], se
       text = text.replace(repairInsertMarker, repairCode + repairInsertMarker);
     }
 
+    text=text.replace("  if (orders.some(order => validateInvoiceOrder(order).length)) throw new Error('Packing invoice validation failed.');","  if (orders.some(order => validateInvoiceOrder(order).length)) throw new Error('Packing invoice validation failed.');\n  assertInvoiceConfirmSnapshot(orders);");
+
     const orderSafetyOld = "  const reasons=validateInvoiceOrder(order);\n  if(!order.invoice_locked && reasons.length) throw new Error(`Invoice cannot be generated: ${reasons.join(', ')}`);";
     const orderSafetyNew = orderSafetyOld + "\n  assertInvoiceConfirmSnapshot([order]);";
     if (!text.includes(orderSafetyNew)) {

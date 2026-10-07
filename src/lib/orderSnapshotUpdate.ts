@@ -12,19 +12,24 @@ export const prepareOrderSnapshotUpdate = (existing: Row | undefined, incoming: 
       String(lock.assigned_order_number) !== String(order.order_number || ''))
     throw new OrderUpdateConflict('Waybill ' + requestedWaybill + ' is already locked/used by ' + String(lock.assigned_order_number) + '.');
   if (existing) {
-    if (existing.return_sheet_id) {
+    if(existing.return_packing_lock?.operation_id)return {order:existing,waybillPreserved:true};
+    if(existing.return_packing_operation){
+      order.return_packing_operation=existing.return_packing_operation;
+      for(const field of ['customer_name','phone','whatsapp','address','city','district','items','subtotal','total_amount','special_offer_discount','delivery_fee','gift_wrap_selected','gift_wrap_fee','payment_method','payment_paid_type','payment_received_amount','invoice_confirm_snapshot']){if(existing[field]!==undefined)order[field]=existing[field];else delete order[field];}
+    }
+    if (existing.return_sheet_id || existing.return_tracking_waybill) {
       const signature = (value: Row) => {
         try { return JSON.stringify(physicalReturnItems(value).map(item => [item.id,item.expected_qty]).sort()); }
         catch { throw new OrderUpdateConflict('The items linked to this return sheet are invalid.'); }
       };
       if (signature(existing) !== signature(incoming)) throw new OrderUpdateConflict('Items in a return sheet cannot be replaced by an order edit.');
       order.items = existing.items;
-      for (const field of ['return_sheet_id','return_sheet_waybill','return_sheet_revision','return_status','return_received_at','return_checked_by','delivery_status','order_status','call_center_status','is_duplicate_order','is_test_order']) {
+      for (const field of ['return_tracking_waybill','return_state','return_pending_qty','return_damaged_qty','return_checked_at','return_packing_operation','return_sheet_id','return_sheet_waybill','return_sheet_revision','return_status','return_received_at','return_checked_by','delivery_status','order_status','call_center_status','is_duplicate_order','is_test_order']) {
         if (existing[field] !== undefined) order[field] = existing[field];
         else delete order[field];
       }
     }
-    if (String(existing.invoice_pack_batch_id || '').startsWith('PACK-RESTOCK-')) order.invoice_pack_batch_id = existing.invoice_pack_batch_id;
+    if (/^PACK-(RESTOCK|RETURN)-/.test(String(existing.invoice_pack_batch_id || ''))) order.invoice_pack_batch_id = existing.invoice_pack_batch_id;
     const existingWaybill = String(existing.waybill_number || '').trim();
     const waybillProtected = existingWaybill && (existing.waybill_protection_locked === true || existing.invoice_locked === true ||
       existing.fardar_csv_exported_at || existing.fardar_csv_exported_waybill || existing.dispatch_status === 'Handed Over' ||

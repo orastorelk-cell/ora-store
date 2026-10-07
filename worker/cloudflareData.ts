@@ -1,3 +1,4 @@
+import { returnPackingInProgress, returnPackingPending } from '../src/lib/returnSheets';
 // Private R2 persistence for the existing server repository. Business rules and
 // authorization stay in Express; this implements only the REST queries it uses.
 import { Buffer } from 'node:buffer';
@@ -368,6 +369,8 @@ export const cloudflareDataFetch: typeof fetch = async (input,init) => {
     if(resource==='admin_data_store')await recoverKnownBrandImages(bucket,active.prefix);
     if(resource.startsWith('rpc/')) return await rpc(request,bucket,active.prefix,resource.slice(4));
     if(!primaryKeys[resource]) return response({message:'Unsupported Cloudflare table: '+resource},501);
+    const returnAdminRows=!['GET','HEAD'].includes(request.method)&&['order_snapshots','courier_waybills'].includes(resource)?await readDataTable(runtime,'admin_data_store'):[];
+    if(returnPackingInProgress(returnAdminRows))throw new DataError('A packing batch is finishing. Retry its saved operation first.',409);
     let rows:Row[];
     if(['GET','HEAD'].includes(request.method)) {
       rows=(await tableState(bucket,active.prefix,resource)).rows.filter(row=>matches(row,url.searchParams));
@@ -391,7 +394,7 @@ export const cloudflareDataFetch: typeof fetch = async (input,init) => {
             if(row[pk]==null && pk==='id')row.id=crypto.randomUUID();
             if(row[pk]==null)throw new DataError('Missing record key for '+resource,400);
             const at=current.findIndex(item=>String(item[pk])===String(row[pk]));
-            if(resource==='admin_data_store'&&row.key==='storefront-state-v1'&&current.some(item=>String(item.key).startsWith('order-cancel-stock-v1:')&&['pending','stock_saved'].includes(item.payload?.phase))){
+            if(resource==='admin_data_store'&&row.key==='storefront-state-v1'&&(returnPackingInProgress(current)||current.some(item=>String(item.key).startsWith('order-cancel-stock-v1:')&&['pending','stock_saved'].includes(item.payload?.phase)))){
               throw new DataError('An order cancellation is restoring stock. Retry after it completes.',409);
             }
             if(at>=0 && !upsert)throw new DataError('Duplicate record in '+resource,409);
@@ -406,10 +409,11 @@ export const cloudflareDataFetch: typeof fetch = async (input,init) => {
               throw new DataError('Waybill is already locked to another order.',409);
             }
             const saved=at>=0 ? {...current[at],...row} : row;
+            if(resource==='order_snapshots'&&returnPackingPending(returnAdminRows)&&current[at]?.payload?.stock_allocated!==true&&saved.payload?.stock_allocated===true)throw new DataError('Use Return Sheets to allocate checked return stock.',409);
             if(resource==='order_snapshots'&&at>=0&&current[at].payload?.cancel_stock_restore?.operation_id){
               saved.payload=current[at].payload;
             }
-            if(resource==='order_snapshots'&&at>=0&&current[at].payload?.return_sheet_id){
+            if(resource==='order_snapshots'&&at>=0&&(current[at].payload?.return_sheet_id||current[at].payload?.return_tracking_waybill||current[at].payload?.return_packing_lock||current[at].payload?.return_packing_operation)){
               saved.payload=prepareOrderSnapshotUpdate(current[at].payload,saved.payload,[]).order;
             }
             if(resource==='courier_waybills'&&at>=0&&current[at].status==='Cancelled'&&current[at].permanently_retired===true){
@@ -420,11 +424,11 @@ export const cloudflareDataFetch: typeof fetch = async (input,init) => {
           }
         } else if(request.method==='PATCH' || request.method==='DELETE') {
           for(let i=current.length-1;i>=0;i--) if(matches(current[i],url.searchParams)) {
-            if((resource==='order_snapshots'&&(current[i].payload?.cancel_stock_restore?.operation_id||current[i].payload?.return_sheet_id))||
+            if((resource==='order_snapshots'&&(current[i].payload?.cancel_stock_restore?.operation_id||current[i].payload?.return_sheet_id||current[i].payload?.return_tracking_waybill||current[i].payload?.return_packing_lock||current[i].payload?.return_packing_operation))||
               (resource==='courier_waybills'&&current[i].status==='Cancelled'&&current[i].permanently_retired===true)){
               throw new DataError('The cancelled order and retired waybill must remain locked in history.',409);
             }
-            if(resource==='admin_data_store'&&current[i].key==='storefront-state-v1'&&current.some(item=>String(item.key).startsWith('order-cancel-stock-v1:')&&['pending','stock_saved'].includes(item.payload?.phase))){
+            if(resource==='admin_data_store'&&current[i].key==='storefront-state-v1'&&(returnPackingInProgress(current)||current.some(item=>String(item.key).startsWith('order-cancel-stock-v1:')&&['pending','stock_saved'].includes(item.payload?.phase)))){
               throw new DataError('An order cancellation is restoring stock. Retry after it completes.',409);
             }
             if(request.method==='DELETE')changed.unshift(...current.splice(i,1));

@@ -16,12 +16,14 @@ export const adminOrdersConfirmedFilterPatch = (): Plugin => ({
     let text = code;
 
     const stateOld = "  const [orderFilter, setOrderFilter] = useState<OrderStatus | 'All'>('All');";
-    const stateNew = "  // ADMIN ORDERS CONFIRMED FILTER\n  const [orderFilter, setOrderFilter] = useState<OrderStatus | 'All' | 'Confirmed' | 'COD Received' | 'COD Pending' | 'Online Payment'>('All');";
+    const stateNew = "  // ADMIN ORDERS CONFIRMED FILTER\n  const [orderFilter, setOrderFilter] = useState<OrderStatus | 'All' | 'Confirmed' | 'COD Received' | 'COD Pending' | 'Online Payment' | 'Return Received' | 'Return Pending'>('All');";
     if (!text.includes(stateOld)) throw new Error('[O-RA confirmed filter] orderFilter state marker not found');
     text = text.replace(stateOld, stateNew);
 
     const filterOld = "    if (orderFilter !== 'All' && o.order_status !== orderFilter) return false;";
-    const filterNew = String.raw`    if (orderFilter === 'Confirmed') {
+    const filterNew = String.raw`    if (orderFilter === 'Return Received' || orderFilter === 'Return Pending') {
+      if (!returnOrderFilter(o,orderFilter,returnRecords.find(record=>record.order_id===o.id))) return false;
+    } else if (orderFilter === 'Confirmed') {
       // Keep logistics status untouched; this tab is a call-center decision view.
       if (o.call_center_status !== 'Confirmed' || o.order_status === 'Cancelled') return false;
     } else if (orderFilter === 'COD Received') {
@@ -38,7 +40,7 @@ export const adminOrdersConfirmedFilterPatch = (): Plugin => ({
     text = text.replace(filterOld, filterNew);
 
     const buttonsOld = "['All', 'New Orders', 'Processing', 'Packed', 'Shipped', 'Delivered', 'Cancelled']";
-    const buttonsNew = "['All', 'New Orders', 'Confirmed', 'Processing', 'Packed', 'Shipped', 'Delivered', 'Cancelled', 'COD Received', 'COD Pending', 'Online Payment']";
+    const buttonsNew = "['All', 'New Orders', 'Confirmed', 'Processing', 'Packed', 'Shipped', 'Delivered', 'Cancelled', 'COD Received', 'COD Pending', 'Online Payment', 'Return Received', 'Return Pending']";
     if (!text.includes(buttonsOld)) throw new Error('[O-RA confirmed filter] status button marker not found');
     text = text.replace(buttonsOld, buttonsNew);
 

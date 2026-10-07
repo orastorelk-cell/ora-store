@@ -69,7 +69,8 @@ export const restockPurchaseAtomicSafetyPatch = () => ({
 
       const now=new Date().toISOString();
       const before=variant?Number(variant.stock_quantity||0):Number(product.stock_quantity||0);
-      const after=before+quantity;
+      const credit=creditReturnStock(variant||product,quantity);
+      const after=credit.stock_quantity;
       const poNumber=String(poData.po_number||'').trim()||('PO-'+year+'-'+String(basePoNumber+rowIndex).padStart(4,'0'));
 
       purchases.push({
@@ -93,12 +94,13 @@ export const restockPurchaseAtomicSafetyPatch = () => ({
       });
 
       if(variant){
-        product.variants=(product.variants||[]).map(current=>current.id===variant.id?{...current,stock_quantity:after,status:'Active' as const}:current);
+        product.variants=(product.variants||[]).map(current=>current.id===variant.id?{...current,stock_quantity:after,return_stock_debt:credit.return_stock_debt,status:(after>0?'Active':'Out of Stock') as Product['status']}:current);
         product.stock_quantity=(product.variants||[]).reduce((sum,current)=>sum+Number(current.stock_quantity||0),0);
-        product.status='Active';
+        product.status=product.stock_quantity>0?'Active':'Out of Stock';
       }else{
         product.stock_quantity=after;
-        product.status='Active';
+        product.return_stock_debt=credit.return_stock_debt;
+        product.status=after>0?'Active':'Out of Stock';
       }
 
       logs.push({

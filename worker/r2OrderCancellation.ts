@@ -1,3 +1,4 @@
+import { returnPackingInProgress } from '../src/lib/returnSheets';
 import { readDataTable, mutateDataTable } from './cloudflareData';
 import { canonicalJson } from '../src/lib/confirmCsvSave';
 
@@ -51,6 +52,7 @@ const currentOrder=(rows:Row[],id:string,waybill:string)=>{
   return {row,order};
 };
 const canCancel=(order:Row)=>{
+  if(order.return_packing_lock?.operation_id)fail('Finish the return packing batch before cancelling this order.');
   if(order.cancel_stock_restore?.operation_id)return;
   if(order.order_status==='Cancelled')fail('This order was cancelled by an older flow. Its stock must be checked before any restoration.');
   if(order.dispatch_status==='Handed Over'||['Shipped','Delivered'].includes(order.order_status)||order.return_received_at||order.return_status||order.cod_payment_received)fail('This parcel has dispatch, delivery, return or COD history. Use the verified return flow.');
@@ -73,6 +75,7 @@ export const cancelBeforeDispatch=async(env:unknown,id:string,waybill:string,rea
   let requirements:Requirement[]=initial.cancel_stock_restore?.requirements||requirementsFor(initial);
   const op=operationKey(id),now=new Date().toISOString();
   const journal=await mutateDataTable(env,'admin_data_store',rows=>{
+    if(returnPackingInProgress(rows))fail('A packing batch is finishing. Retry its saved operation first.');
     const ledger=rows.find(row=>row.key===op);
     if(ledger){if(ledger.payload?.order_number!==initial.order_number||ledger.payload?.waybill_number!==waybill)fail('Cancellation journal identity mismatch.');return ledger.payload;}
     const state=rows.find(row=>row.key===KEY)?.payload;

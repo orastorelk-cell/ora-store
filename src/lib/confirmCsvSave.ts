@@ -70,7 +70,7 @@ export const applyConfirmCsvDecisions = (orders:OrderData[],entries:ConfirmCsvEn
     if(sameDecision(current,entry)){
       results.push({id:entry.id,order_number:entry.order_number,status:'already_saved',order:current});continue;
     }
-    if(current.stock_allocated||current.invoice_locked||current.waybill_protection_locked||current.fardar_csv_exported_at||
+    if(current.return_packing_lock?.operation_id||current.stock_allocated||current.invoice_locked||current.waybill_protection_locked||current.fardar_csv_exported_at||
       current.dispatch_status==='Handed Over'||['Shipped','Delivered','Cancelled'].includes(current.order_status)){
       failed('Order is already stock/invoice/dispatch locked or cancelled. Refresh before making a correction.');continue;
     }

@@ -1,3 +1,4 @@
+import { creditReturnStock } from '../lib/returnSheets';
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import {
   Language,
@@ -140,6 +141,8 @@ interface StoreContextType {
   fullLiveStartReset: () => Promise<void>;
   refreshOrdersFromServer: () => Promise<void>;
   refreshReturnInventory: () => Promise<void>;
+  returnPackingPending: boolean;
+  returnPackingBatches: {operation_id:string;batch_id:string;created_at:string;count:number}[];
 
   // Cart operations
   addToCart: (product: Product, quantity?: number, variantId?: string) => void;
@@ -601,6 +604,8 @@ useEffect(() => {
   const [lastPlacedOrder, setLastPlacedOrder] = useState<Order | null>(null);
   const [isAdminView, setIsAdminView] = useState(false);
   const [sharedStoreReady, setSharedStoreReady] = useState(false);
+  const [returnPackingPending,setReturnPackingPending] = useState(false);
+  const [returnPackingBatches,setReturnPackingBatches] = useState<{operation_id:string;batch_id:string;created_at:string;count:number}[]>([]);
   const [sharedOrdersReady,setSharedOrdersReady]=useState(false);
   const [orderLoadError,setOrderLoadError]=useState('');
   const sharedStoreVersionRef = useRef(0);
@@ -737,6 +742,8 @@ useEffect(() => {
   const applySharedStorefrontState = (state: any, includePrivateSettings: boolean) => {
     if (!state || typeof state !== 'object') return;
     if (includePrivateSettings && state.return_inventory) {
+      setReturnPackingPending(state.return_inventory.packing_pending === true);
+      setReturnPackingBatches(state.return_inventory.batches || []);
       const sharedHistory: StockHistory[] = Array.isArray(state.return_inventory.stockHistory) ? state.return_inventory.stockHistory : [];
       const sharedReturns: ReturnRecord[] = Array.isArray(state.return_inventory.returnRecords) ? state.return_inventory.returnRecords : [];
       const ids = new Set(sharedHistory.map(row => row.id)), orderIds = new Set(sharedReturns.map(row => row.order_id));
@@ -745,7 +752,7 @@ useEffect(() => {
         return JSON.stringify(next) === JSON.stringify(previous) ? previous : next;
       });
       setReturnRecords(previous => {
-        const next = [...sharedReturns,...previous.filter(row => !row.id.startsWith('return-sheet-v1:') && !orderIds.has(row.order_id))];
+        const next = [...sharedReturns,...previous.filter(row => !row.id.startsWith('return-sheet-v1:') && !row.id.startsWith('return-record:') && !orderIds.has(row.order_id))];
         return JSON.stringify(next) === JSON.stringify(previous) ? previous : next;
       });
     }
@@ -990,8 +997,8 @@ useEffect(() => {
     await storefrontPublishQueueRef.current.catch(() => {});
     const data = await confirmCsvRequestWithRetry(sharedStaffRequest,'/api/admin/storefront/state');
     if (!data?.initialized || !data?.state) throw new Error('Shared stock could not be refreshed.');
-    applySharedStorefrontState(data.state,true);
     await refreshOrdersFromServer();
+    applySharedStorefrontState(data.state,true);
   };
 
   // Receiving at another location updates the shared catalog. A clean staff
@@ -1008,7 +1015,7 @@ useEffect(() => {
         const version = await response.json();
         if (!response.ok || !active || !version.initialized || String(version.updated_at) === String(localStorage.getItem('ora_storefront_updated_at') || '')) return;
         const data = await confirmCsvRequestWithRetry(sharedStaffRequest,'/api/admin/storefront/state');
-        if (active && data?.state && sharedStoreSnapshotRef.current === snapshot) applySharedStorefrontState(data.state,true);
+        if (active && data?.state && sharedStoreSnapshotRef.current === snapshot) { await refreshOrdersFromServer(); if(active&&sharedStoreSnapshotRef.current===snapshot)applySharedStorefrontState(data.state,true); }
       } catch (error: any) { console.warn('Shared return inventory refresh failed:',error.message); }
       finally { running = false; }
     };
@@ -3384,7 +3391,7 @@ useEffect(() => {
     if(normalizedProductType(product)==='bundle')throw new Error('Add purchases to component products, not the bundle.');
     const variant=poData.variant_id?variantById(product,poData.variant_id):undefined;
     if(normalizedProductType(product)==='variant'&&!variant)throw new Error('Select the exact variant/color for this purchase.');
-    const now=new Date().toISOString(),before=variant?Number(variant.stock_quantity||0):Number(product.stock_quantity||0),after=before+poData.quantity_added,poNumber=poData.po_number?.trim()||`PO-${new Date().getFullYear()}-${String(purchaseOrders.length+1).padStart(4,'0')}`;
+    const now=new Date().toISOString(),before=variant?Number(variant.stock_quantity||0):Number(product.stock_quantity||0),credit=creditReturnStock(variant||product,poData.quantity_added),after=credit.stock_quantity,poNumber=poData.po_number?.trim()||`PO-${new Date().getFullYear()}-${String(purchaseOrders.length+1).padStart(4,'0')}`;
     const purchase:PurchaseOrder={id:`po-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,po_number:poNumber,supplier_name:poData.supplier_name.trim(),product_id:product.id,product_name:product.name_en,sku:variant?.sku||product.sku,variant_id:variant?.id,variant_name:variant?.option_value,variant_sku:variant?.sku,quantity_added:poData.quantity_added,unit_buying_price:poData.unit_buying_price,total_cost:poData.quantity_added*poData.unit_buying_price,invoice_ref:poData.invoice_ref?.trim(),bill_image_url:poData.bill_image_url?.trim(),notes:poData.notes?.trim(),performed_by:poData.performed_by||adminUser?.name||'Admin',created_at:now};
     setPurchaseOrders(prev=>[purchase,...prev]);
     // A Purchase / Stock In records the bill cost and increases physical stock only.
@@ -3395,11 +3402,11 @@ useEffect(() => {
       if(p.id!==product.id)return p;
       if(variant){
         const variants=(p.variants||[]).map(v=>
-          v.id===variant.id ? {...v,stock_quantity:after,status:'Active' as const} : v
+          v.id===variant.id ? {...v,stock_quantity:after,return_stock_debt:credit.return_stock_debt,status:(after>0?'Active':'Out of Stock') as Product['status']} : v
         );
-        return{...p,variants,stock_quantity:variants.reduce((n,v)=>n+Number(v.stock_quantity||0),0),status:'Active'};
+        const total=variants.reduce((n,v)=>n+Number(v.stock_quantity||0),0);return{...p,variants,stock_quantity:total,status:total>0?'Active':'Out of Stock'};
       }
-      return{...p,stock_quantity:after,status:'Active'};
+      return{...p,stock_quantity:after,return_stock_debt:credit.return_stock_debt,status:after>0?'Active':'Out of Stock'};
     }));
     setStockHistory(prev=>[{id:`stk-purchase-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,product_id:product.id,product_name:`${product.name_en}${variant?` - ${variant.option_value}`:''}`,change_type:'Purchase Inflow',quantity:poData.quantity_added,previous_stock:before,new_stock:after,reason:`${poNumber} • ${poData.supplier_name}`,performed_by:poData.performed_by||adminUser?.name||'Admin',created_at:now},...prev]);
   };
@@ -3559,6 +3566,8 @@ useEffect(() => {
         fullLiveStartReset,
         refreshOrdersFromServer,
         refreshReturnInventory,
+        returnPackingPending,
+        returnPackingBatches,
         addToCart,
         removeFromCart,
         updateCartQuantity,

@@ -65,7 +65,7 @@ const dosDateTime = (input = new Date()) => {
   };
 };
 
-class StoreOnlyZip {
+export class StoreOnlyZip {
   private localChunks: BlobPart[] = [];
   private centralRecords: Uint8Array[] = [];
   private localOffset = 0;

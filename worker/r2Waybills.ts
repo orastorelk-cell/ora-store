@@ -1,3 +1,4 @@
+import { returnPackingInProgress, returnPackingPending } from '../src/lib/returnSheets';
 import { readDataTable, replaceDataTable } from './cloudflareData';
 import { invoiceComplete } from '../src/lib/invoiceQueue';
 
@@ -16,6 +17,7 @@ export const r2WaybillPoolHandler=async(request:Request,env:unknown)=>{
   if(request.method==='GET')return json({ok:true,records:(await readDataTable(env,'courier_waybills')).map(publicWaybillRow)});
   const body:any=await request.json().catch(()=>null),records=body?.records;
   if(!Array.isArray(records)||!records.length||records.length>50||records.some(r=>!r||!validNumber(r.waybill_number)||!['Available','Assigned','Used','Cancelled'].includes(r.status)))return json({error:'Send 1 to 50 valid waybill records.'},400);
+  if(returnPackingInProgress(await readDataTable(env,'admin_data_store')))return json({error:'A packing batch is reserving waybills. Retry shortly.'},409);
   const owners=ownerMap((await readDataTable(env,'order_snapshots')).map(r=>r.payload).filter(Boolean));
   const result=await replaceDataTable(env,'courier_waybills',rows=>{
     const next=[...rows],byNumber=new Map(next.map((r,i)=>[number(r.waybill_number),i]));let added=0,changed=0;
@@ -36,6 +38,7 @@ export const r2WaybillPoolHandler=async(request:Request,env:unknown)=>{
 };
 
 export const r2AssignWaybill=async(env:unknown,id:string,courier='Fardar')=>{
+  if(returnPackingPending(await readDataTable(env,'admin_data_store')))throw new Error('Check returns and create the packing batch from Return Sheets first.');
   const before=(await readDataTable(env,'order_snapshots')).map(r=>r.payload).filter(Boolean),order=before.find(o=>String(o.id)===id);
   if(!order)throw new Error('Order not found.');
   if(order.order_status==='Cancelled'||order.is_duplicate_order||order.is_test_order)throw new Error('This order cannot receive a waybill.');

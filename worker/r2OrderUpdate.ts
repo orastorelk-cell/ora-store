@@ -1,3 +1,4 @@
+import { returnPackingInProgress, returnPackingPending } from '../src/lib/returnSheets';
 import { readDataTable, replaceDataTable } from './cloudflareData';
 import { prepareOrderSnapshotUpdate, OrderUpdateConflict } from '../src/lib/orderSnapshotUpdate';
 import { sameStorefrontValue } from './r2Storefront';
@@ -16,6 +17,9 @@ export const r2OrderUpdateHandler = async (request: Request, env: unknown, id: s
   try {
     const initialRows = await readDataTable(env, 'order_snapshots');
     const initial = initialRows.find(row => String(row.order_id) === id)?.payload;
+    const adminRows=await readDataTable(env,'admin_data_store');
+    if(returnPackingInProgress(adminRows))return json({error:'A packing batch is finishing. Retry its saved operation before editing orders.'},409);
+    if(returnPackingPending(adminRows)&&initial?.stock_allocated!==true&&incoming.stock_allocated===true)return json({error:'Use the Return Sheets packing button to allocate checked return stock.'},409);
     if (initial?.cancel_stock_restore?.operation_id) return json({ ok: true, order: initial, waybill_preserved: true, cancellation_preserved: true });
     let locks = await readDataTable(env, 'courier_waybills');
     const first = prepareOrderSnapshotUpdate(initial, incoming, locks);

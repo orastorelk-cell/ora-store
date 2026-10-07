@@ -1,6 +1,6 @@
 import { readDataTable, replaceDataTable, resolveKnownBrandImages } from './cloudflareData';
 import { cancellationInProgress } from './r2OrderCancellation';
-import { sharedReturnInventory } from '../src/lib/returnSheets';
+import { returnPackingInProgress, sharedReturnInventory } from '../src/lib/returnSheets';
 import { validProductSave } from '../src/lib/storefrontProductSave';
 
 type VerifyStaff=(request:Request,env:unknown)=>Promise<Record<string,any>|null>;
@@ -66,11 +66,12 @@ export const r2StorefrontHandler=async(request:Request,env:unknown,ctx:any,verif
   const updates=productSave?new Map<string,any>(body.product_updates.map((product:any)=>[product.id,product])):null;
   const expected=productSave&&body.product_expected?new Map<string,any>(body.product_expected.map((product:any)=>[product.id,product])):null;
   const saved=await replaceDataTable<any>(env,'admin_data_store',rows=>{
-    if(cancellationInProgress(rows as any[]))return {rows,result:{cancellationPending:true}};
+    if(cancellationInProgress(rows as any[])||returnPackingInProgress(rows))return {rows,result:{cancellationPending:true}};
     const row=rows.find(row=>row.key===KEY);const current=stateFrom(row);
     if(productSave&&(!current||body.product_updates.some((product:any)=>!current.products.some(existing=>existing.id===product.id))))return {rows,result:{conflict:true}};
     if(!productSave&&!current?.settings?.google_sheet_webhook_url&&incomingWebhook)return {rows,result:{serverTransition:true}};
-    const products=productSave?current!.products.map(product=>updates!.get(product.id)||product):body.products.slice(0,5000);
+    let products=productSave?current!.products.map(product=>updates!.get(product.id)||product):body.products.slice(0,5000);
+    products=products.map((product:any)=>{const old=current?.products.find((item:any)=>item.id===product.id);if(!old)return product;const next={...product};if(next.return_stock_debt===undefined&&old.return_stock_debt)next.return_stock_debt=old.return_stock_debt;if(next.variants)next.variants=next.variants.map((variant:any)=>{const saved=old.variants?.find((item:any)=>item.id===variant.id);return variant.return_stock_debt===undefined&&saved?.return_stock_debt?{...variant,return_stock_debt:saved.return_stock_debt}:variant;});return next;});
     const categories=productSave?current!.categories:body.categories.slice(0,1000);
     const settings=productSave?current!.settings:resolveKnownBrandImages({...body.settings,google_sheet_webhook_url:incomingWebhook||String(current?.settings.google_sheet_webhook_url||'').trim()});
     const unchanged=current&&sameStorefrontValue(products,current.products)&&sameStorefrontValue(categories,current.categories)&&sameStorefrontValue(settings,current.settings);
@@ -85,7 +86,7 @@ export const r2StorefrontHandler=async(request:Request,env:unknown,ctx:any,verif
     return {rows:row?rows.map(item=>item===row?replacement:item):[...rows,replacement],result:{state,changed:true}};
   });
   if(saved.serverTransition)return null;
-  if(saved.cancellationPending)return json({error:'An order cancellation is restoring stock. Finish or retry that cancellation before saving the catalog.',code:'CANCELLATION_PENDING'},409);
+  if(saved.cancellationPending)return json({error:'A stock transaction is finishing. Retry its saved operation before saving the catalog.',code:'CANCELLATION_PENDING'},409);
   if(saved.conflict)return json({error:'The website changed in another session. Your local edit was not overwritten; reload the latest website data before saving again.',code:'STOREFRONT_CONFLICT'},409);
   const state=saved.state!;
   if(saved.changed&&ctx?.waitUntil)ctx.waitUntil(syncCatalog(String(state.settings.google_sheet_webhook_url||''),state.products).catch(()=>console.warn('Catalog Sheet sync could not finish; the website is safely saved in R2.')));

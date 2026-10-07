@@ -66,6 +66,7 @@ export interface ProductVariant {
     discount_enabled?: boolean;
   }[];
   stock_quantity: number;
+  return_stock_debt?: number;
   status: ProductStatus;
   /** Manual storefront override for this exact variant only. */
   force_out_of_stock?: boolean;
@@ -117,6 +118,7 @@ export interface Product {
     discount_enabled?: boolean;
   }[];
   stock_quantity: number;
+  return_stock_debt?: number;
   status: ProductStatus;
   /** Manual storefront override: show Out of Stock and block customer ordering without changing real inventory. */
   force_out_of_stock?: boolean;
