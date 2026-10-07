@@ -1,10 +1,12 @@
-import { activeData, configureCloudflareData, dataBucket, readDataTable, readDataTableWire, mutateDataTable } from './cloudflareData';
+import { activeData, configureCloudflareData, dataBucket, readDataTable, readDataTableWire, mutateDataTable, replaceDataTable } from './cloudflareData';
 import { applyDeliveredReport, type DeliveredEntry } from '../src/lib/deliveredOrders';
 import { applyConfirmCsvDecisions, validConfirmCsvEntries } from '../src/lib/confirmCsvSave';
 import { r2StorefrontHandler } from './r2Storefront';
 import { Buffer } from 'node:buffer';
 import { auditConfirmCsvOrders, validConfirmAuditOrders } from '../src/lib/confirmCsvAudit';
 import { r2InvoiceQueueHandler } from './r2InvoiceQueue';
+import { r2InvoiceDownloadsHandler } from './r2InvoiceDownloads';
+import { r2OrderUpdateHandler } from './r2OrderUpdate';
 import { r2OrderCancellationHandler } from './r2OrderCancellation';
 import { r2WaybillPoolHandler, r2WaybillAssignmentHandler, r2FulfilmentStatusHandler } from './r2Waybills';
 
@@ -40,12 +42,13 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   const refresh=request.method==='POST'&&path==='/api/staff/session/refresh';
   const audit=request.method==='POST'&&path==='/api/orders/confirm-csv/check';
   const invoices=request.method==='POST'&&path==='/api/orders/invoices/ensure';
+  const downloads=request.method==='POST'&&path==='/api/orders/invoice-download-status';
   const cancellation=['GET','POST'].includes(request.method)&&path==='/api/orders/cancel-before-dispatch';
   const pool=(request.method==='GET'&&path==='/api/courier/waybills')||(request.method==='POST'&&path==='/api/courier/waybills/import');
   const assignment=request.method==='POST'&&path==='/api/orders/waybill/assign';
   const fulfilment=request.method==='GET'&&path==='/api/orders/fulfilment-status';
   const orderPut=['PUT','DELETE'].includes(request.method)&&/^\/api\/orders\/[^/]+$/.test(path);
-  if(!read&&!delivered&&!confirmed&&!refresh&&!audit&&!invoices&&!cancellation&&!orderPut&&!pool&&!assignment&&!fulfilment)return null;
+  if(!read&&!delivered&&!confirmed&&!refresh&&!audit&&!invoices&&!downloads&&!cancellation&&!orderPut&&!pool&&!assignment&&!fulfilment)return null;
   const user=await verifyActiveStaff(request,env);
   if(!user)return json({error:'Login session required.'},401);
   if(pool)return r2WaybillPoolHandler(request,env);
@@ -54,6 +57,7 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   if(cancellation)return r2OrderCancellationHandler(request,env,user);
   if(orderPut){
     const id=decodeURIComponent(path.slice('/api/orders/'.length));
+    if(request.method==='PUT')return r2OrderUpdateHandler(request,env,id);
     const current=(await readDataTable(env,'order_snapshots')).find(row=>String(row.order_id)===id)?.payload;
     if(current?.cancel_stock_restore?.operation_id){
       if(request.method==='DELETE')return json({error:'The cancelled order and its retired waybill must remain in history.'},409);
@@ -62,6 +66,7 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
     return null;
   }
   if(invoices)return r2InvoiceQueueHandler(request,env,user);
+  if(downloads)return r2InvoiceDownloadsHandler(request,env);
   if(audit){
     const body:any=await request.json().catch(()=>null);
     if(!validConfirmAuditOrders(body?.orders))return json({error:'Send 1 to 20 unique CSV order decisions.'},400);
@@ -94,13 +99,13 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   if(confirmed){
     const body:any=await request.json().catch(()=>null);
     if(!validConfirmCsvEntries(body?.entries))return json({error:'Send at most 20 valid Confirm/Cancel decisions.'},400);
-    const results=await mutateDataTable(env,'order_snapshots',rows=>{
+    const results=await replaceDataTable(env,'order_snapshots',rows=>{
       const applied=applyConfirmCsvDecisions(rows.map(row=>row.payload).filter(Boolean),body.entries);
       const updates=new Map(applied.updatedOrders.map(order=>[String(order.id),order]));
       const now=new Date().toISOString();let changed=0;
-      for(const row of rows){const order=updates.get(String(row.order_id));if(order){row.payload=order;row.updated_at=now;changed++;}}
+      const next=updates.size?rows.map(row=>{const order=updates.get(String(row.order_id));if(!order)return row;changed++;return {...row,payload:order,updated_at:now};}):rows;
       if(changed!==applied.updatedOrders.length)throw new Error('Invalid order identity; Confirm CSV update stopped.');
-      return applied.results;
+      return {rows:next,result:applied.results};
     });
     return json({ok:true,results});
   }

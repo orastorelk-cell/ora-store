@@ -32,6 +32,7 @@ import {
 import { syncOrderToGoogleSheets, syncOrdersBatchToGoogleSheets, syncProductCatalogToGoogleSheets, clearGoogleSheetTestData, clearGoogleSheetLiveStartData, deleteOrderFromGoogleSheets } from '../lib/googleSheets';
 import { buildOrderItemSnapshot, deliverySplitForSettings, displayUnitPrice, effectiveBuyingPrice, findProductSelection, normalizeProductForStorage, normalizedProductType, productDisplayStock, variantById, variantBySku, repriceAfterBuyingCostChange } from '../lib/productVariants';
 import { canonicalJson, confirmCsvRequestWithRetry, saveConfirmCsvDecisions } from '../lib/confirmCsvSave';
+import { saveInvoiceDownloadStatus } from '../lib/invoiceDownloadStatus';
 
 export interface BulkOrderItemInput {
   order_id?: string;
@@ -350,8 +351,10 @@ const sharedStaffRequest = async (url: string, options: RequestInit = {}) => {
   const response = await fetch(url, { ...options, headers });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error:any = new Error(data?.error || `Request failed (${response.status})`);
+    const path=url.split('?')[0];
+    const error:any = new Error(data?.error || `Request failed (${response.status}, ${options.method||'GET'} ${path})`);
     error.status = response.status;
+    error.path = path;
     throw error;
   }
   return data;
@@ -599,6 +602,7 @@ useEffect(() => {
   const [sharedOrdersReady,setSharedOrdersReady]=useState(false);
   const [orderLoadError,setOrderLoadError]=useState('');
   const sharedStoreVersionRef = useRef(0);
+  const sharedStoreSnapshotRef = useRef<{products:Product[];categories:Category[];settings:StoreSettings}|null>(null);
   const orderServerVersionRef = useRef('');
   // Serialize full storefront publishes. Rapid Admin edits used to start overlapping
   // PUT requests for the ~shared catalog payload, so an older transient failure could
@@ -730,6 +734,7 @@ useEffect(() => {
   // ---------------------------------------------------------------------------
   const applySharedStorefrontState = (state: any, includePrivateSettings: boolean) => {
     if (!state || typeof state !== 'object') return;
+    let savedProducts=products, savedCategories=categories;
     if (Array.isArray(state.products)) {
       const used = new Set<string>();
       const normalized = state.products.map((raw:any, idx:number) => {
@@ -740,12 +745,17 @@ useEffect(() => {
         used.add(sku);
         return normalizeProductForStorage({ ...raw, sku } as Product);
       });
+      savedProducts=normalized;
       setProducts(normalized);
     }
-    if (Array.isArray(state.categories)) setCategories(state.categories as Category[]);
+    if (Array.isArray(state.categories)) {savedCategories=state.categories as Category[];setCategories(savedCategories);}
     if (state.settings && typeof state.settings === 'object' && !Array.isArray(state.settings)) {
-      setSettings((prev) => ({ ...prev, ...state.settings } as StoreSettings));
-    }
+      setSettings((prev) => {
+        const next={...prev,...state.settings} as StoreSettings;
+        sharedStoreSnapshotRef.current={products:savedProducts,categories:savedCategories,settings:next};
+        return next;
+      });
+    }else sharedStoreSnapshotRef.current={products:savedProducts,categories:savedCategories,settings};
     const verifiedVersion = Number(state.version || 0);
     sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, verifiedVersion);
     try {
@@ -756,12 +766,14 @@ useEffect(() => {
 
   useEffect(() => {
     let cancelled = false;
+    setSharedStoreReady(false);
+    sharedStoreSnapshotRef.current=null;
     const loadSharedStore = async () => {
       try {
         const hasStaffSession = Boolean(adminUser && getStaffSessionToken());
         let data:any;
         if (hasStaffSession) {
-          data = await sharedStaffRequest('/api/admin/storefront/state');
+          data = await confirmCsvRequestWithRetry(sharedStaffRequest,'/api/admin/storefront/state');
         } else {
           const cachedUpdatedAt = String(localStorage.getItem('ora_storefront_updated_at') || '');
           const cachedVersion = Math.max(0, Number(localStorage.getItem('ora_storefront_version') || 0));
@@ -803,7 +815,10 @@ useEffect(() => {
             : isLocalStorefrontHost()
               ? await localStorefrontRequest({ products, categories, settings })
               : null;
-          if (saved) sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, Number(saved?.version || 1));
+          if (saved) {
+            sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, Number(saved?.version || 1));
+            sharedStoreSnapshotRef.current={products,categories,settings};
+          }
         }
       } catch (err:any) {
         if (Number(err?.status || 0) === 401 && adminUser && !isLocalStorefrontHost()) {
@@ -830,6 +845,9 @@ useEffect(() => {
   // hiccups cannot create false "Website sync failed" alerts or out-of-order writes.
   useEffect(() => {
     if (!sharedStoreReady || !adminUser) return;
+    const saved=sharedStoreSnapshotRef.current;
+    // A failed load must never publish stale cache; hydration is not a new edit.
+    if(!saved||(saved.products===products&&saved.categories===categories&&saved.settings===settings))return;
 
     const timer = window.setTimeout(() => {
       const seq = ++storefrontPublishSeqRef.current;
@@ -874,6 +892,7 @@ useEffect(() => {
             try {
               const data = await publishOnce();
               sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, Number(data?.version || 0));
+              sharedStoreSnapshotRef.current=snapshot;
               return;
             } catch (err:any) {
               lastError = err;
@@ -2794,37 +2813,8 @@ useEffect(() => {
     const uniqueIds=Array.from(new Set(orderIds.map(String).filter(Boolean))).slice(0,50);
     if(!uniqueIds.length) return;
 
-    const idSet=new Set(uniqueIds);
-    const now=new Date().toISOString();
-
-    // Use the EXISTING durable order PUT endpoint that already works elsewhere
-    // in the system. This avoids depending on a new route that may return 404
-    // on an older/local server process.
-    const updatedOrders=orders
-      .filter(o=>idSet.has(String(o.id)))
-      .map(o=>({
-        ...o,
-        invoice_pack_downloaded_at:now,
-        invoice_pack_downloaded_by:downloadedBy,
-        invoice_pack_download_set_date: downloadSet?.date || o.invoice_pack_download_set_date,
-        invoice_pack_download_set_number: downloadSet?.number || o.invoice_pack_download_set_number,
-      }));
-
-    if(updatedOrders.length!==uniqueIds.length){
-      const foundIds=new Set(updatedOrders.map(o=>String(o.id)));
-      const missing=uniqueIds.filter(id=>!foundIds.has(id));
-      throw new Error(`Could not find ${missing.length} invoice order(s) in the current order list.`);
-    }
-
-    // Persist every order snapshot before changing the local UI state.
-    // /api/orders/:id already writes to .ora-data/order-snapshots.json locally
-    // and to order_snapshots when Supabase is configured.
-    for(const order of updatedOrders){
-      await sharedStaffRequest(`/api/orders/${encodeURIComponent(order.id)}`,{
-        method:'PUT',
-        body:JSON.stringify({order}),
-      });
-    }
+    // One current-data metadata transaction replaces a full order PUT per PDF.
+    const updatedOrders=await saveInvoiceDownloadStatus(uniqueIds,downloadedBy,downloadSet,sharedStaffRequest) as Order[];
 
     const updatedMap=new Map(updatedOrders.map(o=>[String(o.id),o] as [string,Order]));
     setOrders(prev=>prev.map(o=>updatedMap.get(String(o.id)) || o));

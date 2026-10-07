@@ -89,6 +89,7 @@ import { cloudflareDataFetch } from "./worker/cloudflareData";
 import { applyDeliveredReport } from './src/lib/deliveredOrders';
 import { applyConfirmCsvDecisions, validConfirmCsvEntries } from './src/lib/confirmCsvSave';
 import { applyInvoiceQueue, validInvoiceQueueRequest } from './src/lib/invoiceQueue';
+import { applyInvoiceDownloadStatus, invoiceDownloadRequest } from './src/lib/invoiceDownloadStatus';
 import { validateProductBackup } from "./src/lib/productBackup";
 
 dotenv.config();
@@ -2206,47 +2207,13 @@ app.delete('/api/test-orders/:source', requireSuperAdmin, async (req,res)=>{
 
 app.post('/api/orders/invoice-download-status', requireAdminSession, async (req,res)=>{
   try{
-    const orderIds=Array.from(new Set(
-      (Array.isArray(req.body?.orderIds) ? req.body.orderIds : [])
-        .map((v:any)=>String(v||'').trim())
-        .filter(Boolean)
-    )).slice(0,50) as string[];
-
-    if(!orderIds.length){
-      return res.status(400).json({error:'No invoice order IDs were provided.'});
-    }
-
-    const downloadedBy=String(req.body?.downloadedBy || 'Packing Staff').trim() || 'Packing Staff';
-    const downloadedAt=new Date().toISOString();
-    const idSet=new Set(orderIds);
-
-    const current=await getOrderSnapshots();
-    const matched=current.filter((o:any)=>idSet.has(String(o.id)));
-    if(!matched.length){
-      return res.status(404).json({error:'Invoice orders were not found in the durable order store.'});
-    }
-
-    const updated=matched.map((o:any)=>({
-      ...o,
-      invoice_pack_downloaded_at:downloadedAt,
-      invoice_pack_downloaded_by:downloadedBy,
-    }));
-
-    // Persist every updated snapshot BEFORE responding to the browser.
-    // Sequential writes are intentional for the local JSON fallback so that
-    // simultaneous read/modify/write operations cannot lose another order update.
-    for(const order of updated){
-      await saveOrderSnapshot(order);
-    }
-
-    return res.json({
-      ok:true,
-      downloadedAt,
-      updatedCount:updated.length,
-      orders:updated,
-    });
+    const body=invoiceDownloadRequest(req.body);
+    if(!body)return res.status(400).json({error:'Send 1 to 50 valid invoice order IDs and download details.'});
+    const result=applyInvoiceDownloadStatus(await getOrderSnapshots(),body);
+    await saveOrderSnapshotsBatch(result.updatedOrders);
+    return res.json({ok:true,downloadedAt:body.downloadedAt,updatedCount:result.orders.length,orders:result.orders});
   }catch(e:any){
-    return res.status(500).json({error:e?.message || 'Invoice download status could not be saved.'});
+    return res.status(e?.status===404?404:500).json({error:e?.message || 'Invoice download status could not be saved.'});
   }
 });
 // The live Worker applies CSV decisions atomically in R2. Keep the same guards

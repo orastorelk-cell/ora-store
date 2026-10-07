@@ -33,13 +33,14 @@ export const confirmUploadPackingBatchPatch = () => ({
       if (!text.includes('const orderMirrorQueueRef = useRef<Map<string,Promise<void>>>')) {
         if (!text.includes(oldMirror)) throw new Error('[O-RA confirm invoice safety] order mirror marker not found');
         const queuedMirror = String.raw`  const orderMirrorQueueRef = useRef<Map<string,Promise<void>>>(new Map());
+  const orderMirrorChainRef = useRef<Promise<void>>(Promise.resolve());
   const mirrorOrderUpdate = (order: Order) => {
     if (!getStaffSessionToken()) return;
     const key=String(order.id||order.order_number||'');
-    const prior=orderMirrorQueueRef.current.get(key) || Promise.resolve();
+    const prior=orderMirrorChainRef.current;
     let queued:Promise<void>;
     queued=prior.catch(()=>undefined).then(async()=>{
-      await sharedStaffRequest('/api/orders/'+encodeURIComponent(order.id), {
+      await confirmCsvRequestWithRetry(sharedStaffRequest,'/api/orders/'+encodeURIComponent(order.id), {
         method:'PUT',
         body:JSON.stringify({order}),
       });
@@ -49,6 +50,7 @@ export const confirmUploadPackingBatchPatch = () => ({
       if(orderMirrorQueueRef.current.get(key)===queued) orderMirrorQueueRef.current.delete(key);
     });
     orderMirrorQueueRef.current.set(key,queued);
+    orderMirrorChainRef.current=queued;
   };`;
         text = text.replace(oldMirror, queuedMirror);
       }
