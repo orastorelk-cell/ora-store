@@ -13,6 +13,7 @@ import { transformSync } from 'esbuild';
 import { auditConfirmCsvOrders } from '../src/lib/confirmCsvAudit';
 import { applyInvoiceQueue, invoiceComplete, invoiceReady, saveInvoiceQueue } from '../src/lib/invoiceQueue';
 import { utf8CsvBlob, fardarParcelDescription, parseCsv } from '../src/lib/csv';
+import { storefrontSaveBody } from '../src/lib/storefrontProductSave';
 
 class MemoryBucket {
   objects=new Map<string,{value:string;etag:string;customMetadata:any}>();
@@ -97,6 +98,22 @@ try {
   assert.equal((await request('/api/admin/orders/bulk-import','POST',{orders:[]},staff.body.token)).status,403);
   assert.equal((await request('/api/orders','GET',undefined,token)).body.orders.length,6);
   const fast=async(path:string,method='GET',body?:any,auth=token)=>withR2DataFallback(new Request('https://test'+path,{method,headers:{'content-type':'application/json',authorization:'Bearer '+auth},...(body?{body:JSON.stringify(body)}:{})}),env,{},async()=>new Response('Unexpected Node bridge call',{status:599}));
+  const nativeLogin:any=await (await fast('/api/staff/login','POST',{username:' ADMIN ',password:'test-password'},'')).json();
+  assert.equal(nativeLogin.user.id,adminId);
+  assert.equal((await fast('/api/orders','GET',undefined,nativeLogin.token)).status,200,'Native login uses the existing signed session format');
+  assert.equal((await fast('/api/staff/login','POST',{username:'admin',password:'wrong'},'')).status,401);
+  assert.equal((await fast('/api/staff/login','POST',{username:'absent',password:'wrong'},'')).status,401);
+  assert.equal((await fast('/api/staff/login','POST',{username:'admin',password:123},'')).status,400);
+  const accountList:any=await (await fast('/api/staff/accounts')).json();
+  assert.equal(accountList.users.length,2);
+  assert(!JSON.stringify(accountList).includes(passwordHash),'Account reads never expose password verifiers');
+  assert.equal((await fast('/api/staff/accounts','GET',undefined,staff.body.token)).status,403);
+  const legacyId='10000000-0000-0000-0000-000000000003';
+  await sdk.from('admin_users').insert({id:legacyId,username:'legacy',role:'staff',password_hash:'salt:scrypt-verifier',is_active:true});
+  const legacyRequest=new Request('https://test/api/staff/login',{method:'POST',body:JSON.stringify({username:'legacy',password:'test-password'})});
+  const legacyResponse=await withR2DataFallback(legacyRequest,env,{},async()=>Response.json(await legacyRequest.json()));
+  assert.equal((await legacyResponse.json() as any).username,'legacy','Legacy login fallback retains the request body');
+  await sdk.from('admin_users').delete().eq('id',legacyId);
   assert.equal((await fast('/api/orders')).status,200);
   assert.equal((await (await fast('/api/orders/version')).json()).count,6);
   assert.equal((await fast('/api/orders','GET',undefined,'invalid')).status,401);
@@ -158,6 +175,7 @@ try {
   assert.equal((await fast('/api/staff/session/refresh','POST',undefined,'invalid')).status,401);
   await sdk.from('admin_users').update({is_active:false}).eq('id',staffId);
   assert.equal((await fast('/api/staff/session/refresh','POST',undefined,staff.body.token)).status,401);
+  assert.equal((await fast('/api/staff/login','POST',{username:'staff',password:'test-password'},'')).status,403);
   await sdk.from('admin_users').update({is_active:true}).eq('id',staffId);
 
   // A blank URL from an older admin browser cannot clear a working integration.
@@ -168,6 +186,51 @@ try {
   assert.equal(preserveWebhook.unchanged,true);
   assert.equal((await (await fast('/api/admin/storefront/state')).json() as any).state.settings.google_sheet_webhook_url,'https://script.google.com/macros/s/fixture/exec');
   // No ctx.waitUntil is supplied in this fixture: no external Sheet request occurs.
+
+  // Stock-only saves omit invoice images, settings and unrelated products.
+  const stockBase:any=(await (await fast('/api/admin/storefront/state')).json() as any).state;
+  const stockNext={...stockBase,products:stockBase.products.map((product:any)=>({...product,stock_quantity:7,status:'Active'}))};
+  const stockBody:any=storefrontSaveBody(stockBase,stockNext,stockBase.version);
+  assert.equal(stockBody.format,'ora-storefront-products-v1');
+  assert.equal(stockBody.settings,undefined);assert.equal(stockBody.categories,undefined);
+  const stockAck:any=await (await fast('/api/admin/storefront/state','PUT',stockBody)).json();
+  assert.equal(stockAck.ok,true);assert.equal(stockAck.version,stockBase.version+1);
+  const stockSaved:any=(await (await fast('/api/admin/storefront/state')).json() as any).state;
+  assert.equal(stockSaved.products[0].stock_quantity,7);
+  assert.deepEqual(stockSaved.settings,stockBase.settings);assert.deepEqual(stockSaved.categories,stockBase.categories);
+  const stockEtag=rawBucket.objects.get(adminKey)!.etag;
+  assert.equal((await (await fast('/api/admin/storefront/state','PUT',stockBody)).json() as any).unchanged,true);
+  assert.equal(rawBucket.objects.get(adminKey)!.etag,stockEtag,'A stock-save replay must not deduct twice');
+  assert.equal((await fast('/api/admin/storefront/state','PUT',{...stockBody,product_updates:[{...stockNext.products[0],stock_quantity:3}]})).status,409);
+  assert.equal((await fast('/api/admin/storefront/state','PUT',{...stockBody,expected_version:stockAck.version,product_updates:[{id:'missing'}]})).status,409);
+  assert.equal((await fast('/api/admin/storefront/state','PUT',{...stockBody,product_updates:[stockNext.products[0],stockNext.products[0]]})).status,400);
+  assert.equal((await fast('/api/admin/storefront/state','PUT',{format:'ora-storefront-products-v1',product_updates:[]})).status,400);
+  assert.equal(storefrontSaveBody(stockBase,{...stockNext,categories:[{id:'new'}]},stockBase.version).format,undefined);
+  assert.equal(storefrontSaveBody(stockBase,{...stockNext,products:[...stockNext.products,{id:'new'}]},stockBase.version).format,undefined);
+  assert.deepEqual(JSON.parse(await (await bucket.get(adminKey))!.text()).filter((row:any)=>row.key!=='storefront-state-v1'),unrelatedBefore);
+
+  // Binding throttles and an ambiguous successful CAS write must be retry-safe.
+  const stablePut=rawBucket.put.bind(rawBucket),stableGet=rawBucket.get.bind(rawBucket);
+  let writesThrottled=1;
+  rawBucket.put=async(key,value,options)=>{
+    if(key===adminKey&&writesThrottled-->0)throw new Error('R2 put failed: (429) Too Many Requests');
+    return stablePut(key,value,options);
+  };
+  const throttledAck:any=await (await fast('/api/admin/storefront/state','PUT',{...stockBody,expected_version:stockAck.version,product_updates:[{...stockNext.products[0],stock_quantity:6}]})).json();
+  assert.equal(throttledAck.ok,true);assert.equal((await (await fast('/api/admin/storefront/state')).json() as any).state.products[0].stock_quantity,6);
+  let loseAck=true;
+  rawBucket.put=async(key,value,options)=>{
+    const result=await stablePut(key,value,options);
+    if(key===adminKey&&result&&loseAck){loseAck=false;throw new Error('R2 put failed: (503) Service unavailable');}
+    return result;
+  };
+  assert.equal((await (await fast('/api/admin/storefront/state','PUT',{...stockBody,expected_version:throttledAck.version,product_updates:[{...stockNext.products[0],stock_quantity:5}]})).json() as any).ok,true);
+  assert.equal((await (await fast('/api/admin/storefront/state')).json() as any).state.products[0].stock_quantity,5,'An ambiguous successful write is not applied twice');
+  rawBucket.put=stablePut;
+  let readsThrottled=1;
+  rawBucket.get=async key=>{if(key.endsWith('admin_users.json')&&readsThrottled-->0)throw new Error('R2 get failed: (503) Service unavailable');return stableGet(key);};
+  assert.equal((await fast('/api/staff/login','POST',{username:'admin',password:'test-password'},'')).status,200);
+  rawBucket.get=stableGet;
 
   // Execute the production Confirm parser after every Vite business-rule patch.
   // Reproduce 12 orders with 7 already committed, a failed R2 write, and a lost

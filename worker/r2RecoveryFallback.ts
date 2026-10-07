@@ -10,6 +10,7 @@ import { r2OrderUpdateHandler } from './r2OrderUpdate';
 import { r2OrderCancellationHandler } from './r2OrderCancellation';
 import { r2WaybillPoolHandler, r2WaybillAssignmentHandler, r2FulfilmentStatusHandler } from './r2Waybills';
 import { returnSheetsHandler, r2ReturnStorage, returnSheetForWaybill } from './r2ReturnSheets';
+import { r2StaffLoginHandler, r2StaffAccountsHandler } from './r2StaffLogin';
 
 type Env = Record<string, any>;
 type StaffSession = { sub:string; role:'admin'|'staff'; exp:number };
@@ -191,6 +192,10 @@ export const withR2DataFallback=async(request:Request,env:unknown,_ctx:any,next:
   try {
     const recovery=await recoveryHandler(request,env);
     if(recovery)return recovery;
+    const login=await r2StaffLoginHandler(request,env);
+    if(login)return login;
+    const staff=await r2StaffAccountsHandler(request,env,verifyActiveStaff);
+    if(staff)return staff;
     const operational=await operationalHandler(request,env);
     if(operational)return operational;
     const storefront=await r2StorefrontHandler(request,env,_ctx,verifyActiveStaff);

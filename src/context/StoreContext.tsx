@@ -33,6 +33,7 @@ import { syncOrderToGoogleSheets, syncOrdersBatchToGoogleSheets, syncProductCata
 import { buildOrderItemSnapshot, deliverySplitForSettings, displayUnitPrice, effectiveBuyingPrice, findProductSelection, normalizeProductForStorage, normalizedProductType, productDisplayStock, variantById, variantBySku, repriceAfterBuyingCostChange } from '../lib/productVariants';
 import { canonicalJson, confirmCsvRequestWithRetry, saveConfirmCsvDecisions } from '../lib/confirmCsvSave';
 import { saveInvoiceDownloadStatus } from '../lib/invoiceDownloadStatus';
+import { storefrontSaveBody } from '../lib/storefrontProductSave';
 
 export interface BulkOrderItemInput {
   order_id?: string;
@@ -870,7 +871,7 @@ useEffect(() => {
       storefrontPublishQueueRef.current = storefrontPublishQueueRef.current
         .catch(() => {})
         .then(async () => {
-          if (!adminUser) return;
+          if (!adminUser || seq !== storefrontPublishSeqRef.current) return;
 
           const publishOnce = async () => {
             if (isLocalStorefrontHost()) {
@@ -893,13 +894,14 @@ useEffect(() => {
             }
             return sharedStaffRequest('/api/admin/storefront/state', {
               method:'PUT',
-              body:JSON.stringify({...snapshot,expected_version:sharedStoreVersionRef.current}),
+              body:JSON.stringify(storefrontSaveBody(sharedStoreSnapshotRef.current,snapshot,sharedStoreVersionRef.current)),
             });
           };
 
           let lastError:any = null;
           const retryDelays = [0, 1200, 3000];
           for (let attempt=0; attempt<retryDelays.length; attempt++) {
+            if (seq !== storefrontPublishSeqRef.current) return;
             if (retryDelays[attempt] > 0) {
               await new Promise<void>((resolve) => window.setTimeout(resolve, retryDelays[attempt]));
             }

@@ -44,8 +44,13 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({ isOpen, onClos
     try {
       const response = await fetch('/api/staff/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: cleanUser, password: cleanPass }) });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) { setErrorMsg(data?.error || 'Invalid username or password.'); return; }
-      if (!data?.user) { setErrorMsg('Login response is invalid.'); return; }
+      if (!response.ok) {
+        setErrorMsg(response.status >= 500 || response.status === 429
+          ? 'Login service is temporarily busy. Please try again shortly.'
+          : data?.error || 'Invalid username or password.');
+        return;
+      }
+      if (!data?.user || !data?.token) { setErrorMsg('Login response is invalid. Please try again.'); return; }
       const matchedUser: AdminUser = { ...data.user, _sessionToken: data.token } as any;
       onLoginSuccess(matchedUser);
       return;

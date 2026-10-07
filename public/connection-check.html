@@ -33,4 +33,36 @@ $('check').onclick=async()=>{
  $('summary').textContent='Completed '+total+' reads: '+(total-failed)+' passed; '+failed+' failed. Orders, stock and invoices were not changed.';
  }finally{$('check').disabled=false}
 };
+const saveSection=document.createElement('section');
+const saveText=document.createElement('p');saveText.textContent='Check website saves and session renewal using the currently saved values.';
+const saveButton=document.createElement('button');saveButton.id='save-check';saveButton.textContent='Check saves & session';
+const saveResult=document.createElement('pre');saveResult.id='save-result';saveResult.setAttribute('role','status');saveResult.textContent='Ready. The check sends the current catalog unchanged.';
+saveSection.append(saveText,saveButton,saveResult);document.body.append(saveSection);
+saveButton.onclick=async()=>{
+ let token=localStorage.getItem('ora_staff_session_token')||'';
+ if(!token){saveResult.textContent='Sign in to O-RA System in this browser first.';return}
+ saveButton.disabled=true;const results=[];
+ const call=async(name,path,method='GET',body)=>{
+  const response=await fetch(path,{method,cache:'no-store',headers:{authorization:'Bearer '+token,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
+  const raw=await response.text();let data;try{data=JSON.parse(raw)}catch{}
+  results.push(name+': '+response.status);saveResult.textContent=results.join('\n');
+  if(!response.ok)throw new Error(data?.error||raw.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').slice(0,500)||'Save check failed');
+  return data;
+ };
+ try{
+  const before=(await call('Load current catalog','/api/admin/storefront/state')).state;
+  for(let round=1;round<=3;round++){
+   const legacy=await call('Current full save '+round,'/api/admin/storefront/state','PUT',{products:before.products,categories:before.categories,settings:before.settings,expected_version:before.version});
+   if(!legacy.ok||!legacy.unchanged||legacy.version!==before.version)throw new Error('The catalog changed during the check.');
+   const compact=await call('Product save '+round,'/api/admin/storefront/state','PUT',{format:'ora-storefront-products-v1',product_updates:[],expected_version:before.version});
+   if(!compact.ok||!compact.unchanged||compact.version!==before.version)throw new Error('The product save was not acknowledged unchanged.');
+   const refreshed=await call('Session renewal '+round,'/api/staff/session/refresh','POST');
+   if(!refreshed.ok||!refreshed.token)throw new Error('Session renewal did not finish.');
+   token=refreshed.token;localStorage.setItem('ora_staff_session_token',token);
+  }
+  const after=(await call('Verify saved catalog','/api/admin/storefront/state')).state;
+  if(after.version!==before.version||JSON.stringify([after.products,after.categories,after.settings])!==JSON.stringify([before.products,before.categories,before.settings]))throw new Error('The catalog changed during the check.');
+  results.push('All 11 save/session checks passed. Catalog version '+after.version+' is unchanged. Orders, stock and invoices were not changed.');
+ }catch(error){results.push('Failed: '+error.message)}finally{saveResult.textContent=results.join('\n');saveButton.disabled=false}
+};
 </script></body></html>

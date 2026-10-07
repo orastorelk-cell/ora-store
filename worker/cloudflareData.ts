@@ -3,6 +3,7 @@
 import { Buffer } from 'node:buffer';
 import { prepareOrderSnapshotUpdate } from '../src/lib/orderSnapshotUpdate';
 import { constants as zlibConstants, gzip, gunzip } from 'node:zlib';
+import { retryR2Operation } from './r2Retry';
 type Row = Record<string, any>;
 export type DataBucket = {
   get(key: string): Promise<{ text(): Promise<string>; etag: string; customMetadata?: Record<string,string> } | null>;
@@ -81,23 +82,24 @@ export const dataBucket = (env: unknown = runtime): DataBucket | null => {
   };
   const wrapped:DataBucket={
     async get(path) {
-      const object=await bucket.get(path);if(!object)return null;
+      const object=await retryR2Operation<Awaited<ReturnType<DataBucket['get']>>>(()=>bucket.get(path));if(!object)return null;
       return {etag:object.etag,customMetadata:object.customMetadata,text:async()=>{
         return decode(path,await object.text());
       }};
     },
     async put(path,value,settings) {
-      return bucket.put(path,(await encode(path,value)).text,settings);
+      const encoded=(await encode(path,value)).text;
+      return retryR2Operation(()=>bucket.put(path,encoded,settings));
     },
     async compact(path){
       if(!compress)return 'skipped';
-      const object=await bucket.get(path);if(!object)return 'skipped';
+      const object=await retryR2Operation<Awaited<ReturnType<DataBucket['get']>>>(()=>bucket.get(path));if(!object)return 'skipped';
       const original=await object.text();if(JSON.parse(original)?.format!=='ora-aes-gcm-v1')return 'skipped';
       const value=await decode(path,original),packed=await encode(path,value);
       if(!packed.compressed)return 'skipped';
       // Check the exact Unicode/JSON string before touching the durable object.
       if(await decode(path,packed.text)!==value)throw new Error('Lossless data compression verification failed.');
-      const saved=await bucket.put(path,packed.text,{httpMetadata:{contentType:'application/json',cacheControl:'no-store'},customMetadata:object.customMetadata,onlyIf:{etagMatches:object.etag}});
+      const saved=await retryR2Operation(()=>bucket.put(path,packed.text,{httpMetadata:{contentType:'application/json',cacheControl:'no-store'},customMetadata:object.customMetadata,onlyIf:{etagMatches:object.etag}}));
       return saved?'compacted':'conflict';
     },
   };
