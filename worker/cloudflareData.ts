@@ -1,6 +1,7 @@
 // Private R2 persistence for the existing server repository. Business rules and
 // authorization stay in Express; this implements only the REST queries it uses.
 import { Buffer } from 'node:buffer';
+import { prepareOrderSnapshotUpdate } from '../src/lib/orderSnapshotUpdate';
 import { constants as zlibConstants, gzip, gunzip } from 'node:zlib';
 type Row = Record<string, any>;
 export type DataBucket = {
@@ -406,6 +407,9 @@ export const cloudflareDataFetch: typeof fetch = async (input,init) => {
             if(resource==='order_snapshots'&&at>=0&&current[at].payload?.cancel_stock_restore?.operation_id){
               saved.payload=current[at].payload;
             }
+            if(resource==='order_snapshots'&&at>=0&&current[at].payload?.return_sheet_id){
+              saved.payload=prepareOrderSnapshotUpdate(current[at].payload,saved.payload,[]).order;
+            }
             if(resource==='courier_waybills'&&at>=0&&current[at].status==='Cancelled'&&current[at].permanently_retired===true){
               Object.assign(saved,current[at]);
             }
@@ -414,7 +418,7 @@ export const cloudflareDataFetch: typeof fetch = async (input,init) => {
           }
         } else if(request.method==='PATCH' || request.method==='DELETE') {
           for(let i=current.length-1;i>=0;i--) if(matches(current[i],url.searchParams)) {
-            if((resource==='order_snapshots'&&current[i].payload?.cancel_stock_restore?.operation_id)||
+            if((resource==='order_snapshots'&&(current[i].payload?.cancel_stock_restore?.operation_id||current[i].payload?.return_sheet_id))||
               (resource==='courier_waybills'&&current[i].status==='Cancelled'&&current[i].permanently_retired===true)){
               throw new DataError('The cancelled order and retired waybill must remain locked in history.',409);
             }

@@ -1,5 +1,6 @@
 import { readDataTable, replaceDataTable, resolveKnownBrandImages } from './cloudflareData';
 import { cancellationInProgress } from './r2OrderCancellation';
+import { sharedReturnInventory } from '../src/lib/returnSheets';
 
 type VerifyStaff=(request:Request,env:unknown)=>Promise<Record<string,any>|null>;
 const KEY='storefront-state-v1';
@@ -44,10 +45,11 @@ export const r2StorefrontHandler=async(request:Request,env:unknown,ctx:any,verif
   if(!read&&!save)return null;
   if(admin&&!await verifyStaff(request,env))return json({error:'Login session required.'},401);
   if(read){
-    const row=(await readDataTable(env,'admin_data_store')).find(row=>row.key===KEY);
+    const rows=await readDataTable(env,'admin_data_store');
+    const row=rows.find(row=>row.key===KEY);
     const state=stateFrom(row);
     if(path.endsWith('/version'))return json({initialized:Boolean(row?.updated_at),updated_at:String(row?.updated_at||'')});
-    return json({initialized:Boolean(state),state:state?(admin?state:{...state,settings:publicStorefrontSettings(state.settings)}):null});
+    return json({initialized:Boolean(state),state:state?(admin?{...state,return_inventory:sharedReturnInventory(rows)}:{...state,settings:publicStorefrontSettings(state.settings)}):null});
   }
   // Clone keeps the existing webhook-restoration/recovery route able to consume
   // the original request when that uncommon transition needs the server flow.

@@ -12,6 +12,7 @@ export const applyDeliveredReport=(orders:any[],entries:DeliveredEntry[],now=new
     if(!matches.length){result.notFound++;detail('NOT FOUND: '+entry.waybill);continue;}
     if(matches.length!==1){result.ambiguous++;detail('BLOCKED DUPLICATE WAYBILL: '+entry.waybill);continue;}
     const order=matches[0],number=String(entry.order_number||'').trim();
+    if(order.return_sheet_id){result.notShipped++;detail('SKIPPED RETURN SHEET '+order.return_sheet_id+': '+order.order_number);continue;}
     if(/^(FB|TK|WEB|MAN)-/i.test(number)&&key(number)!==key(order.order_number)){
       result.mismatch++;detail('ORDER ID MISMATCH: '+entry.waybill);continue;
     }

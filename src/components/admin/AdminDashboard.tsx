@@ -99,6 +99,7 @@ import { ComboPacksPanel } from './ComboPacksPanel';
 import { BannersPanel } from './BannersPanel';
 import { NotificationsPanel } from './NotificationsPanel';
 import { PackingExpensesPanel } from './PackingExpensesPanel';
+import { ReturnSheetsPanel } from './ReturnSheetsPanel';
 import { getCustomerMembership } from '../../lib/membership';
 import { slugifyCategory, suggestCategoryFields } from '../../lib/categoryAuto';
 import { suggestProductMetadata } from '../../lib/productAutoPopular';
@@ -3162,7 +3163,7 @@ Suitable For:
       { id:'packing', label:`Packing Downloads (${new Set(orders.filter(o=>o.invoice_pack_batch_id && !o.invoice_pack_downloaded_at).map(o=>o.invoice_pack_batch_id)).size})`, icon:Package },
       { id:'delivery', label:`Delivery & Waybills (${waybillRecords.filter((w)=>w.status==='Available').length})`, icon:Truck },
       { id:'dispatch', label:`Dispatch Scan (${orders.filter((o)=>o.dispatch_status==='Handed Over').length})`, icon:ScanLine },
-      { id:'returns', label:`Returns (${returnRecords.length})`, icon:RotateCcw },
+      { id:'returns', label:'Return Sheets', icon:RotateCcw },
       { id:'cod_payments', label:`COD Payments (${orders.filter((o)=>o.cod_payment_received).length})`, icon:WalletCards },
       { id:'bank_transfer_check', label:`Bank Transfer Check (${orders.filter((o)=>o.payment_method==='Bank Payment' && o.payment_verification_status!=='Approved' && o.payment_verification_status!=='Rejected').length})`, icon:ShieldCheck },
     ]},
@@ -5248,117 +5249,7 @@ Suitable For:
         />
       )}
 
-      {activeTab === 'returns' && (() => {
-        const returnOrder=returnOrderId ? orders.find(o=>o.id===returnOrderId) : null;
-        return (
-          <div data-ora-action="return_process" className="space-y-5">
-            <div className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5">
-              <h2 className="text-base font-black text-white flex items-center gap-2">
-                <RotateCcw className="h-5 w-5 text-orange-400"/> Return Verification
-              </h2>
-              <p className="mt-1 text-xs text-neutral-400">
-                Scan the returning waybill first. Stock is added only for verified good O-RA items.
-              </p>
-              <div className="mt-4 flex flex-col sm:flex-row gap-2">
-                <input value={returnScanValue} onChange={e=>setReturnScanValue(e.target.value)}
-                  onKeyDown={e=>{if(e.key==='Enter') loadReturnByWaybill(returnScanValue)}}
-                  placeholder="Scan / type return waybill..."
-                  className="flex-1 rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-3 font-mono text-white"/>
-                <button type="button" onClick={()=>loadReturnByWaybill(returnScanValue)}
-                  className="rounded-xl bg-orange-500 px-4 py-3 text-xs font-black text-black">
-                  Find Return
-                </button>
-                <button type="button" onClick={()=>setCameraScannerMode('return')}
-                  className="rounded-xl border border-blue-500/40 bg-blue-500/10 px-4 py-3 text-xs font-black text-blue-300">
-                  <Camera className="inline h-4 w-4 mr-1"/>Phone Camera
-                </button>
-              </div>
-              {returnMessage && <p className="mt-2 text-xs font-bold text-amber-300">{returnMessage}</p>}
-            </div>
-
-            {returnOrder && (
-              <div className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5 space-y-4">
-                <div>
-                  <div className="font-mono font-black text-orange-300">{returnOrder.order_number}</div>
-                  <div className="text-xs text-neutral-400">{returnOrder.customer_name} • {returnOrder.waybill_number}</div>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[760px] text-xs">
-                    <thead className="bg-neutral-950 text-neutral-500 uppercase">
-                      <tr><th className="p-3 text-left">Code / Item</th><th className="p-3">Expected</th><th className="p-3">Good Received</th><th className="p-3">Damaged</th><th className="p-3">Missing</th></tr>
-                    </thead>
-                    <tbody className="divide-y divide-neutral-800">
-                      {returnOrder.items.map(it=>{
-                        const good=Math.max(0,Math.min(it.quantity,Number(returnGoodQty[returnItemKey(it)] ?? it.quantity)));
-                        const damaged=Math.max(0,Math.min(it.quantity-good,Number(returnDamagedQty[returnItemKey(it)] ?? 0)));
-                        const missing=Math.max(0,it.quantity-good-damaged);
-                        return <tr key={returnItemKey(it)}>
-                          <td className="p-3"><b className="font-mono text-orange-300">{it.sku}</b><div className="text-neutral-300">{it.product_name}{it.variant_name ? ` - ${it.variant_name}` : ''}</div></td>
-                          <td className="p-3 text-center font-bold">{it.quantity}</td>
-                          <td className="p-3"><input type="number" min="0" max={it.quantity} value={good}
-                            onChange={e=>setReturnGoodQty(prev=>({...prev,[returnItemKey(it)]:Number(e.target.value)}))}
-                            className="mx-auto block w-20 rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-center text-white"/></td>
-                          <td className="p-3"><input type="number" min="0" max={it.quantity-good} value={damaged}
-                            onChange={e=>setReturnDamagedQty(prev=>({...prev,[returnItemKey(it)]:Number(e.target.value)}))}
-                            className="mx-auto block w-20 rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-center text-white"/></td>
-                          <td className={`p-3 text-center font-black ${missing?'text-red-400':'text-emerald-400'}`}>{missing}</td>
-                        </tr>;
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                <label className="block text-xs text-neutral-400">Wrong / Unknown Item Found
-                  <input value={returnWrongNote} onChange={e=>setReturnWrongNote(e.target.value)}
-                    placeholder="Example: parcel contained a different/non O-RA item"
-                    className="mt-1 w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2 text-white"/>
-                </label>
-                <label className="block text-xs text-neutral-400">Notes
-                  <textarea value={returnNotes} onChange={e=>setReturnNotes(e.target.value)}
-                    className="mt-1 min-h-20 w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2 text-white"/>
-                </label>
-                <button type="button" onClick={()=>{
-                  const result=confirmReturn({
-                    orderId:returnOrder.id,
-                    checkedBy:adminUser?.name,
-                    items:returnOrder.items.map(it=>({
-                      product_id:it.product_id,
-                      variant_id:it.variant_id,
-                      good_qty:Number(returnGoodQty[returnItemKey(it)] ?? it.quantity),
-                      damaged_qty:Number(returnDamagedQty[returnItemKey(it)] ?? 0),
-                    })),
-                    wrong_item_note:returnWrongNote,
-                    notes:returnNotes,
-                  });
-                  setReturnMessage(result.message);
-                  if(result.success){setReturnOrderId(null);setReturnScanValue('');}
-                }} className="w-full rounded-xl bg-emerald-500 py-3 text-sm font-black text-black">
-                  Confirm Return & Update Good Stock
-                </button>
-              </div>
-            )}
-
-            <div className="rounded-2xl border border-neutral-800 bg-neutral-900 overflow-hidden">
-              <div className="p-4 border-b border-neutral-800 font-bold text-white">Return History</div>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[760px] text-xs">
-                  <thead className="bg-neutral-950 text-neutral-500 uppercase"><tr><th className="p-3 text-left">Date</th><th className="p-3 text-left">Order</th><th className="p-3 text-left">Waybill</th><th className="p-3">Good</th><th className="p-3">Missing</th><th className="p-3">Damaged</th><th className="p-3 text-left">Status</th></tr></thead>
-                  <tbody className="divide-y divide-neutral-800">
-                    {returnRecords.map(r=><tr key={r.id}>
-                      <td className="p-3">{new Date(r.checked_at).toLocaleString()}</td>
-                      <td className="p-3 font-mono text-orange-300">{r.order_number}</td>
-                      <td className="p-3 font-mono">{r.waybill_number}</td>
-                      <td className="p-3 text-center text-emerald-300">{r.items.reduce((n,it)=>n+it.good_qty,0)}</td>
-                      <td className="p-3 text-center text-red-300">{r.items.reduce((n,it)=>n+it.missing_qty,0)}</td>
-                      <td className="p-3 text-center text-amber-300">{r.items.reduce((n,it)=>n+it.damaged_qty,0)}</td>
-                      <td className="p-3">{r.status}</td>
-                    </tr>)}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
+      {activeTab === 'returns' && <ReturnSheetsPanel canEdit={canEditTab('returns') || canUseSpecialAction('return_process')} />}
 
       {activeTab === 'lead_import' && (
         <div className="space-y-6">

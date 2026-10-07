@@ -300,6 +300,9 @@ export interface Order {
   invoice_payment_label_snapshot?: string;
   invoice_advance_percentage_snapshot?: number;
   return_status?: 'None' | 'Pending Verification' | 'Verified' | 'Issue Found';
+  return_sheet_id?: string;
+  return_sheet_waybill?: string;
+  return_sheet_revision?: number;
   return_received_at?: string;
   return_checked_by?: string;
   dispatch_status?: 'Not Scanned' | 'Handed Over';
@@ -348,6 +351,7 @@ export interface Customer {
 export interface StockHistory {
   id: string;
   product_id: string;
+  variant_id?: string;
   product_name: string;
   change_type: 'Increase' | 'Decrease' | 'Order Deduction' | 'Adjustment' | 'Purchase Inflow';
   quantity: number;

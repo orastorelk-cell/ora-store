@@ -138,6 +138,7 @@ interface StoreContextType {
   clearOperationalTestData: () => Promise<void>;
   fullLiveStartReset: () => Promise<void>;
   refreshOrdersFromServer: () => Promise<void>;
+  refreshReturnInventory: () => Promise<void>;
 
   // Cart operations
   addToCart: (product: Product, quantity?: number, variantId?: string) => void;
@@ -734,6 +735,19 @@ useEffect(() => {
   // ---------------------------------------------------------------------------
   const applySharedStorefrontState = (state: any, includePrivateSettings: boolean) => {
     if (!state || typeof state !== 'object') return;
+    if (includePrivateSettings && state.return_inventory) {
+      const sharedHistory: StockHistory[] = Array.isArray(state.return_inventory.stockHistory) ? state.return_inventory.stockHistory : [];
+      const sharedReturns: ReturnRecord[] = Array.isArray(state.return_inventory.returnRecords) ? state.return_inventory.returnRecords : [];
+      const ids = new Set(sharedHistory.map(row => row.id)), orderIds = new Set(sharedReturns.map(row => row.order_id));
+      setStockHistory(previous => {
+        const next = [...sharedHistory,...previous.filter(row => !row.id.startsWith('return-stock:') && !ids.has(row.id))];
+        return JSON.stringify(next) === JSON.stringify(previous) ? previous : next;
+      });
+      setReturnRecords(previous => {
+        const next = [...sharedReturns,...previous.filter(row => !row.id.startsWith('return-sheet-v1:') && !orderIds.has(row.order_id))];
+        return JSON.stringify(next) === JSON.stringify(previous) ? previous : next;
+      });
+    }
     let savedProducts=products, savedCategories=categories;
     if (Array.isArray(state.products)) {
       const used = new Set<string>();
@@ -968,6 +982,37 @@ useEffect(() => {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adminUser?.id]);
+
+  const refreshReturnInventory = async () => {
+    if (!adminUser || !getStaffSessionToken()) return;
+    await storefrontPublishQueueRef.current.catch(() => {});
+    const data = await confirmCsvRequestWithRetry(sharedStaffRequest,'/api/admin/storefront/state');
+    if (!data?.initialized || !data?.state) throw new Error('Shared stock could not be refreshed.');
+    applySharedStorefrontState(data.state,true);
+    await refreshOrdersFromServer();
+  };
+
+  // Receiving at another location updates the shared catalog. A clean staff
+  // view refreshes that version without replacing an unsaved product edit.
+  useEffect(() => {
+    if (!adminUser || !getStaffSessionToken() || !sharedStoreReady) return;
+    let active = true, running = false;
+    const refresh = async () => {
+      const snapshot = sharedStoreSnapshotRef.current;
+      if (running || !snapshot || snapshot.products !== products || snapshot.categories !== categories || snapshot.settings !== settings || document.visibilityState !== 'visible') return;
+      running = true;
+      try {
+        const response = await fetch('/api/storefront/version', { cache: 'no-store' });
+        const version = await response.json();
+        if (!response.ok || !active || !version.initialized || String(version.updated_at) === String(localStorage.getItem('ora_storefront_updated_at') || '')) return;
+        const data = await confirmCsvRequestWithRetry(sharedStaffRequest,'/api/admin/storefront/state');
+        if (active && data?.state && sharedStoreSnapshotRef.current === snapshot) applySharedStorefrontState(data.state,true);
+      } catch (error: any) { console.warn('Shared return inventory refresh failed:',error.message); }
+      finally { running = false; }
+    };
+    const timer = window.setInterval(refresh,30000); window.addEventListener('focus',refresh);
+    return () => { active = false; window.clearInterval(timer); window.removeEventListener('focus',refresh); };
+  },[adminUser?.id,sharedStoreReady,products,categories,settings]);
 
   // Super Admin account list comes from the shared server store. In local development
   // the Express server uses one JSON file shared by every browser. When Supabase
@@ -2979,40 +3024,9 @@ useEffect(() => {
     return orders.find(o=>String(o.waybill_number||'').trim()===clean) || null;
   };
 
-  const confirmReturn = (input: {
-    orderId:string; checkedBy?:string; items:{product_id:string;variant_id?:string;good_qty:number;damaged_qty:number}[]; wrong_item_note?:string; notes?:string;
-  }) => {
-    const order=orders.find(o=>o.id===input.orderId);
-    if(!order)return{success:false,message:'Return order not found.'};
-    if(!order.waybill_number)return{success:false,message:'This order has no waybill.'};
-    if(returnRecords.some(r=>r.order_id===order.id))return{success:false,message:'This return was already verified.'};
-    const checkedAt=new Date().toISOString(),checkedBy=input.checkedBy||adminUser?.name||'Return Staff';
-    let issueFound=Boolean(String(input.wrong_item_note||'').trim()); const rows:ReturnRecord['items']=[]; const history:StockHistory[]=[];
-    const productMap=new Map(cloneInventoryProducts(products).map(p=>[p.id,p] as [string,Product]));
-    const restoreInventory=(productId:string,variantId:string|undefined,qty:number,label:string)=>{
-      if(qty<=0)return; const p=productMap.get(productId); if(!p)return;
-      if(variantId){const target=variantById(p,variantId);if(!target)return;const before=Number(target.stock_quantity||0),after=before+qty;p.variants=(p.variants||[]).map(v=>v.id===variantId?{...v,stock_quantity:after,status:'Active'}:v);p.stock_quantity=(p.variants||[]).reduce((n,v)=>n+Number(v.stock_quantity||0),0);p.status='Active';history.push({id:`stk-return-${Date.now()}-${productId}-${variantId}`,product_id:productId,product_name:label,change_type:'Increase',quantity:qty,previous_stock:before,new_stock:after,reason:`Verified good return from ${order.order_number} / ${order.waybill_number}`,performed_by:checkedBy,created_at:checkedAt});}
-      else{const before=Number(p.stock_quantity||0),after=before+qty;p.stock_quantity=after;p.status='Active';history.push({id:`stk-return-${Date.now()}-${productId}`,product_id:productId,product_name:label,change_type:'Increase',quantity:qty,previous_stock:before,new_stock:after,reason:`Verified good return from ${order.order_number} / ${order.waybill_number}`,performed_by:checkedBy,created_at:checkedAt});}
-    };
-
-    order.items.forEach(expected=>{
-      const entered=input.items.find(x=>x.product_id===expected.product_id && String(x.variant_id||'')===String(expected.variant_id||'')) || input.items.find(x=>x.product_id===expected.product_id && !expected.variant_id);
-      const good=Math.max(0,Math.min(expected.quantity,Number(entered?.good_qty||0))),damaged=Math.max(0,Math.min(expected.quantity-good,Number(entered?.damaged_qty||0))),missing=Math.max(0,expected.quantity-good-damaged);
-      if(missing>0||damaged>0)issueFound=true;
-      rows.push({product_id:expected.product_id,variant_id:expected.variant_id,variant_name:expected.variant_name,sku:expected.sku,product_name:expected.product_name,expected_qty:expected.quantity,good_qty:good,missing_qty:missing,damaged_qty:damaged});
-      if(good>0){
-        if(expected.product_type==='bundle'&&expected.bundle_components?.length){
-          expected.bundle_components.forEach(c=>restoreInventory(c.product_id,c.variant_id,good*Math.max(1,Number(c.quantity_per_bundle||1)),`${c.product_name}${c.variant_name?` - ${c.variant_name}`:''}`));
-        }else restoreInventory(expected.product_id,expected.variant_id,good,`${expected.product_name}${expected.variant_name?` - ${expected.variant_name}`:''}`);
-      }
-    });
-    const record:ReturnRecord={id:`ret-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,order_id:order.id,order_number:order.order_number,waybill_number:order.waybill_number,checked_by:checkedBy,checked_at:checkedAt,status:issueFound?'Issue Found':'Verified',items:rows,wrong_item_note:String(input.wrong_item_note||'').trim()||undefined,notes:String(input.notes||'').trim()||undefined};
-    setProducts(Array.from(productMap.values())); if(history.length)setStockHistory(prev=>[...history,...prev]); setReturnRecords(prev=>[record,...prev]);
-    const updatedOrder:Order={...order,return_status:issueFound?'Issue Found':'Verified',return_received_at:checkedAt,return_checked_by:checkedBy,delivery_status:issueFound?'Return Received - Issue':'Return Received - Verified'};
-    setOrders(prev=>prev.map(o=>o.id===order.id?updatedOrder:o)); mirrorOrderUpdate(updatedOrder);
-    logActivity({action:issueFound?'Return Verified - Issue Found':'Return Verified',module:'Returns',target_id:order.id,target_label:order.order_number,details:`${order.waybill_number} • Good: ${rows.reduce((n,r)=>n+r.good_qty,0)} • Missing: ${rows.reduce((n,r)=>n+r.missing_qty,0)} • Damaged: ${rows.reduce((n,r)=>n+r.damaged_qty,0)}`});
-    return{success:true,message:issueFound?'Return saved with issue(s). Only good received items were added to the exact variant/component stock.':'Return verified. Good items were added back to the exact variant/component stock.'};
-  };
+  const confirmReturn: StoreContextType['confirmReturn'] = () => ({
+    success:false,message:'Use Return Sheets: upload the Fardar CSV, scan the parcel and save its checked item quantities.',
+  });
 
   const syncOrderToSheet = async (orderId: string): Promise<boolean> => {
     const targetOrder = orders.find((o) => o.id === orderId);
@@ -3542,6 +3556,7 @@ useEffect(() => {
         clearOperationalTestData,
         fullLiveStartReset,
         refreshOrdersFromServer,
+        refreshReturnInventory,
         addToCart,
         removeFromCart,
         updateCartQuantity,

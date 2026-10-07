@@ -85,7 +85,10 @@ import dotenv from "dotenv";
 import crypto from "crypto";
 import fs from "fs";
 import { createClient } from "@supabase/supabase-js";
-import { cloudflareDataFetch } from "./worker/cloudflareData";
+import { cloudflareDataFetch, dataBucket } from "./worker/cloudflareData";
+import { returnSheetsHandler, r2ReturnStorage, type ReturnStorage } from './worker/r2ReturnSheets';
+import { sharedReturnInventory } from './src/lib/returnSheets';
+import { prepareOrderSnapshotUpdate } from './src/lib/orderSnapshotUpdate';
 import { applyDeliveredReport } from './src/lib/deliveredOrders';
 import { applyConfirmCsvDecisions, validConfirmCsvEntries } from './src/lib/confirmCsvSave';
 import { applyInvoiceQueue, validInvoiceQueueRequest } from './src/lib/invoiceQueue';
@@ -988,7 +991,8 @@ app.put('/api/storefront/local-state', async (req,res) => {
 app.get('/api/admin/storefront/state', requireAdminSession, async (_req,res) => {
   try {
     const state = await readSharedStorefrontState();
-    return res.json({ initialized:Boolean(state), state:state || null });
+    const rows = dataBucket() ? await r2ReturnStorage().readAdmin() : Object.entries(readAdminDataLocal()).map(([key,payload]) => ({key,payload}));
+    return res.json({ initialized:Boolean(state), state:state ? {...state,return_inventory:sharedReturnInventory(rows)} : null });
   } catch (e:any) {
     return res.status(500).json({ error:e?.message || 'Shared storefront state could not be loaded.' });
   }
@@ -2306,6 +2310,44 @@ app.post('/api/orders/:id/dispatch-scan', requireAdminSession, async (req,res)=>
   }
 });
 
+// Production requests use the native R2 handler. Local development stores the
+// sheet and catalog together in one atomically replaced JSON file.
+const localReturnStorage: ReturnStorage = {
+  readAdmin: async () => Object.entries(readAdminDataLocal()).map(([key,payload]) => ({key,payload})),
+  changeAdmin: async change => {
+    const rows = Object.entries(readAdminDataLocal()).map(([key,payload]) => ({key,payload}));
+    const next = change(rows);
+    if (next.rows !== rows) {
+      const data = Object.fromEntries(next.rows.map(row => [row.key,row.payload]));
+      ensureOraDataDirs();
+      const temporary = adminDataFile + '.returns-tmp';
+      fs.writeFileSync(temporary,JSON.stringify(data),'utf8');
+      fs.renameSync(temporary,adminDataFile);
+    }
+    return next.result;
+  },
+  readOrders: async () => readOrderSnapshotsLocal(),
+  updateOrders: async updates => {
+    let changed = false;
+    const rows = readOrderSnapshotsLocal().map(order => {
+      const update = updates.get(String(order.id));
+      const next = update ? update(order) : order;
+      if (next !== order) changed = true;
+      return next;
+    });
+    if (changed) writeOrderSnapshotsLocal(rows);
+  },
+};
+app.all(/^\/api\/returns\/.*$/,requireStaffPermission('returns'),async (req,res) => {
+  try {
+    if (isLiveServerlessRuntime && !dataBucket()) return res.status(503).json({error:'Durable return storage is unavailable. Please retry.'});
+    const request = new Request('http://localhost' + req.originalUrl,{method:req.method,
+      headers:{'content-type':'application/json'},...(['GET','HEAD'].includes(req.method) ? {} : {body:JSON.stringify(req.body)})});
+    const response = await returnSheetsHandler(request,dataBucket() ? r2ReturnStorage() : localReturnStorage,(req as any).staffSessionUser);
+    return res.status(response.status).json(await response.json());
+  } catch (error:any) { return res.status(503).json({error:error.message || 'Return save could not be confirmed. Retry the same receipt.'}); }
+});
+
 app.post('/api/orders/redispatch-waybill', requireStaffAnyPermission(['delivery','orders']), async (req,res)=>{
   try{
     const oldWaybill=String(req.body?.old_waybill || '').trim();
@@ -2322,6 +2364,7 @@ app.post('/api/orders/redispatch-waybill', requireStaffAnyPermission(['delivery'
       String(candidate?.waybill_number || '').trim()===oldWaybill
     );
     if(!order) return res.status(404).json({error:'Order was not found for the old waybill.'});
+    if(order.return_sheet_id)return res.status(409).json({error:'This parcel belongs to Return Sheet '+order.return_sheet_id+'. Receive its items there and create a new order with a fresh stock allocation for another dispatch.'});
     if(String(order.waybill_number || '').trim()!==oldWaybill){
       return res.status(409).json({error:'This order no longer owns the old waybill. Refresh and try again.'});
     }
@@ -2447,6 +2490,7 @@ app.put('/api/orders/:id', requireAdminSession, async (req,res)=>{
     const existing=current.find((candidate:any)=>String(candidate?.id || '')===id);
     let order={...incoming};
     let waybillPreserved=false;
+    if(existing?.return_sheet_id)order=prepareOrderSnapshotUpdate(existing,incoming,[]).order;
 
     // Durable waybill lock registry. This blocks stale browsers from reusing a
     // waybill that has already been consumed or permanently retired by re-dispatch.
@@ -2543,7 +2587,7 @@ app.put('/api/orders/:id', requireAdminSession, async (req,res)=>{
     await saveOrderSnapshot(order);
 
     return res.json({ok:true,order,waybill_preserved:waybillPreserved});
-  }catch(e:any){return res.status(500).json({error:e?.message||'Order update failed.'});}
+  }catch(e:any){return res.status(e?.status||500).json({error:e?.message||'Order update failed.'});}
 });
 app.delete('/api/orders/:id', requireSuperAdmin, async (req,res)=>{
   try{
@@ -2553,6 +2597,7 @@ app.delete('/api/orders/:id', requireSuperAdmin, async (req,res)=>{
     const current=await getOrderSnapshots();
     const order=current.find((o:any)=>String(o.id)===id);
     if(!order) return res.status(404).json({error:'Order not found.'});
+    if(order.return_sheet_id)return res.status(409).json({error:'Orders linked to return sheets must remain in history.'});
     if(order.order_status==='Shipped' || order.order_status==='Delivered' || order.dispatch_status==='Handed Over'){
       return res.status(409).json({error:'Shipped / delivered orders cannot be deleted.'});
     }

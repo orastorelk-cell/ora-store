@@ -1,4 +1,5 @@
 type Row = Record<string, any>;
+import { physicalReturnItems } from './returnSheets';
 export class OrderUpdateConflict extends Error { readonly status = 409; }
 
 // One-way stock, invoice and courier guards for order snapshot updates.
@@ -11,6 +12,18 @@ export const prepareOrderSnapshotUpdate = (existing: Row | undefined, incoming: 
       String(lock.assigned_order_number) !== String(order.order_number || ''))
     throw new OrderUpdateConflict('Waybill ' + requestedWaybill + ' is already locked/used by ' + String(lock.assigned_order_number) + '.');
   if (existing) {
+    if (existing.return_sheet_id) {
+      const signature = (value: Row) => {
+        try { return JSON.stringify(physicalReturnItems(value).map(item => [item.id,item.expected_qty]).sort()); }
+        catch { throw new OrderUpdateConflict('The items linked to this return sheet are invalid.'); }
+      };
+      if (signature(existing) !== signature(incoming)) throw new OrderUpdateConflict('Items in a return sheet cannot be replaced by an order edit.');
+      order.items = existing.items;
+      for (const field of ['return_sheet_id','return_sheet_waybill','return_sheet_revision','return_status','return_received_at','return_checked_by','delivery_status','order_status','call_center_status','is_duplicate_order','is_test_order']) {
+        if (existing[field] !== undefined) order[field] = existing[field];
+        else delete order[field];
+      }
+    }
     if (String(existing.invoice_pack_batch_id || '').startsWith('PACK-RESTOCK-')) order.invoice_pack_batch_id = existing.invoice_pack_batch_id;
     const existingWaybill = String(existing.waybill_number || '').trim();
     const waybillProtected = existingWaybill && (existing.waybill_protection_locked === true || existing.invoice_locked === true ||
