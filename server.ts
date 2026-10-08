@@ -1,3 +1,5 @@
+import { profitAdCostHandler } from './src/lib/profitAdCostHandler';
+
 const sheetQtyOfferRulesServer = (settings: Record<string, any>, order?: any) => JSON.stringify({
   enabled: settings?.multi_buy_discount_enabled !== false,
   delivery_price_rebalance_enabled: settings?.delivery_price_rebalance_enabled === true,
@@ -2346,6 +2348,16 @@ const localReturnStorage: ReturnStorage = {
     if (changed) writeOrderSnapshotsLocal(rows);
   },
 };
+app.all('/api/admin/profit-ad-costs',requireStaffPermission('profit_report'),async (req,res) => {
+  try {
+    if (isLiveServerlessRuntime && !dataBucket()) return res.status(503).json({error:'Durable advertising storage is unavailable. Please retry.'});
+    const request = new Request('http://localhost' + req.originalUrl,{method:req.method,
+      headers:{'content-type':'application/json'},...(['GET','HEAD'].includes(req.method) ? {} : {body:JSON.stringify(req.body)})});
+    const response = await profitAdCostHandler(request,dataBucket() ? r2ReturnStorage() : localReturnStorage,(req as any).staffSessionUser);
+    return res.status(response.status).json(await response.json());
+  } catch (error:any) { return res.status(503).json({error:error.message || 'Advertising history could not be saved. Retry the same CSV.'}); }
+});
+
 app.all(/^\/api\/returns\/.*$/,requireStaffPermission('returns'),async (req,res) => {
   try {
     if (isLiveServerlessRuntime && !dataBucket()) return res.status(503).json({error:'Durable return storage is unavailable. Please retry.'});

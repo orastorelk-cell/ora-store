@@ -1,5 +1,6 @@
 import { jsPDF } from 'jspdf';
 import { profitAdvertisingSummary, profitMoney, PROFIT_PACKING_COST, type PaidWaybillProfitReport, type PaymentAmountBasis } from './paidWaybillProfit';
+import { facebookAllocatedAdvertisingSummary, type FacebookAdAllocation } from './facebookProfitAds';
 
 export interface ProfitPdfOptions {
   facebook: string;
@@ -7,11 +8,15 @@ export interface ProfitPdfOptions {
   sourceName: string;
   paymentBasis: PaymentAmountBasis;
   generatedAt?: Date;
+  facebookAllocation?: FacebookAdAllocation;
+  advertisingError?: string;
 }
 
 export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, options: ProfitPdfOptions) {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4', compress: true });
-  const advertising = profitAdvertisingSummary(report, options.facebook, options.tiktok);
+  const allocation = options.facebookAllocation;
+  const computed = allocation ? facebookAllocatedAdvertisingSummary(report, allocation, options.tiktok) : profitAdvertisingSummary(report, options.facebook, options.tiktok);
+  const advertising = options.advertisingError ? { ...computed, netProfit: null } : computed;
   const width = 273, left = 12, bottom = 194;
   const text = (value: unknown) => String(value ?? '').replace(/[–—]/g, '-').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ').trim();
   const money = (value: number | null) => value === null ? 'Pending' : profitMoney(value);
@@ -38,7 +43,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     ['Actual Fardar delivery cost', -report.totals.courier],
     [`Packing (${report.totals.ready} orders x Rs. ${PROFIT_PACKING_COST})`, -report.totals.packing],
     ['PROFIT BEFORE ADVERTISING', report.totals.beforeAds],
-    ['Facebook advertising cost', advertising.facebook === null && report.ranges.Facebook ? null : -(advertising.facebook ?? 0)],
+    [allocation ? 'Facebook (paid orders + ad losses + Commercial)' : 'Facebook advertising cost', advertising.facebook === null && report.ranges.Facebook ? null : -(advertising.facebook ?? 0)],
     ['TikTok advertising cost', advertising.tiktok === null && report.ranges.TikTok ? null : -(advertising.tiktok ?? 0)],
   ];
   rows.forEach(([label, value], index) => {
@@ -66,10 +71,10 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
   doc.setFillColor(complete ? positive ? 236 : 254 : 255, complete ? positive ? 253 : 242 : 251, complete ? positive ? 245 : 242 : 235);
   doc.roundedRect(left, y - 4, width, 24, 2, 2, 'F');
   doc.setTextColor(complete ? positive ? 6 : 185 : 146, complete ? positive ? 95 : 28 : 64, complete ? positive ? 70 : 28 : 14);
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.text(complete ? 'FINAL NET PROFIT' : 'FINAL NET PROFIT - PENDING REVIEW', left + 4, y + 4);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.text(allocation ? complete ? 'PAID-ORDER PROFIT AFTER ADVERTISING' : 'PAID-ORDER PROFIT - PENDING REVIEW' : complete ? 'FINAL NET PROFIT' : 'FINAL NET PROFIT - PENDING REVIEW', left + 4, y + 4);
   doc.setFontSize(19); doc.text(money(advertising.netProfit), left + width - 4, y + 6, { align: 'right' });
   doc.setFontSize(8); doc.setFont('helvetica', 'normal');
-  doc.text(complete ? 'Gross revenue - Purchasing - Fardar - Packing - Facebook - TikTok' : `${report.totals.review} paid order(s) need review. ${advertising.missing.length ? `Enter ${advertising.missing.join(' / ')} cost (0 if none).` : 'Review missing amounts before treating this as a final profit.'}`, left + 4, y + 14);
+  doc.text(complete ? 'Gross revenue - Purchasing - Fardar - Packing - Facebook - TikTok' : options.advertisingError ? text(options.advertisingError).slice(0, 140) : allocation ? 'Review missing costs, lead matching or delivery confirmation. Pending / unmatched ad spend is shown separately.' : `${report.totals.review} paid order(s) need review. ${advertising.missing.length ? `Enter ${advertising.missing.join(' / ')} cost (0 if none).` : 'Review missing amounts before treating this as a final profit.'}`, left + 4, y + 14);
   doc.setTextColor(55, 65, 81); y += 31;
   const notes = [
     'Summary totals include complete orders only. Every selected paid order is listed in the detail pages.',
@@ -78,7 +83,51 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     'An identified net Fardar remittance is reconciled to gross receipts before subtracting the courier charge once.',
   ];
   doc.setFontSize(8);
-  notes.forEach(note => { const lines = doc.splitTextToSize(note, width); doc.text(lines, left, y); y += lines.length * 4 + 1; });
+  notes.forEach(note => { const lines = doc.splitTextToSize(note, width); if (y + lines.length * 4 > bottom) { doc.addPage(); title('Report notes'); y = 35; } doc.text(lines, left, y); y += lines.length * 4 + 1; });
+
+  if (allocation) {
+    doc.addPage(); title('Facebook cost allocation | Average cost per original form lead'); y = 35;
+    const intro = [
+      `Selected paid-order cost: ${money(allocation.paidCost)} | Known ad losses: ${money(allocation.lostCost)} | Commercial included: ${money(allocation.commercialCost)}`,
+      `Pending lead cost: ${money(allocation.pendingCost)} | Unmatched lead cost: ${money(allocation.unmatchedCost)} | Total recorded spend (all saved reports): ${money(allocation.totalSpend)}`,
+      'Original Facebook lead dates link each order to its saved cost period. Older records without a lead date use their system date.',
+      'Pending costs remain separate until delivered and paid. Full incurred spend remains recorded; this is a management allocation for paid orders.',
+    ];
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
+    intro.forEach(note => { const lines = doc.splitTextToSize(note, width); doc.text(lines, left, y); y += lines.length * 4 + 2; }); y += 3;
+    const adsWidths = [38, 46, 27, 16, 36, 36, 36, 38];
+    const adHeader = () => {
+      doc.setFillColor(243, 244, 246); doc.rect(left, y - 4, width, 9, 'F');
+      let x = left; doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5);
+      ['CODE', 'LEAD PERIOD', 'SPEND', 'LEADS', 'PAID', 'PENDING', 'AD LOSS', 'UNMATCHED'].forEach((label, i) => { doc.text(label, x + 2, y); x += adsWidths[i]; }); y += 9;
+    };
+    adHeader();
+    allocation.cohorts.forEach((row, index) => {
+      const values = [row.code, `${row.from} to ${row.to}`, money(row.spend), `${row.leads} / ${row.matched}`,
+        `${row.paid} leads / ${money(row.paidCost)}`, `${row.pending} leads / ${money(row.pendingCost)}`,
+        `${row.lost} leads / ${money(row.lostCost)}`, `${row.unmatched} leads / ${money(row.unmatchedCost)}`];
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5);
+      const cells = values.map((value, i) => doc.splitTextToSize(text(value), adsWidths[i] - 4));
+      const height = Math.max(...cells.map(lines => lines.length)) * 4 + 5;
+      if (y + height > bottom) { doc.addPage(); title('Facebook cost allocation - continued'); y = 35; adHeader(); }
+      if (!(index % 2)) { doc.setFillColor(249, 250, 251); doc.rect(left, y - 3, width, height, 'F'); }
+      let x = left; doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(31, 41, 55);
+      cells.forEach((lines, i) => { doc.text(lines, x + 2, y); x += adsWidths[i]; }); y += height;
+      const warnings = [...row.issues, ...(row.fallbackDates ? [`${row.fallbackDates} lead(s) use system dates.`] : [])];
+      for (const note of warnings) for (const line of doc.splitTextToSize(text(note), width - 6)) {
+        if (y + 4 > bottom) { doc.addPage(); title('Facebook allocation review'); y = 35; }
+        doc.setTextColor(146, 64, 14); doc.text(line, left + 3, y); y += 4;
+      }
+      doc.setTextColor(31, 41, 55); y += 2;
+    });
+    for (const warning of [...allocation.issues, ...(allocation.missingOrderIds.length ? [`${allocation.missingOrderIds.length} paid Facebook orders have no completed ad-cost match.`] : [])]) {
+      for (const line of doc.splitTextToSize(text(warning), width - 6)) {
+        if (y + 4 > bottom) { doc.addPage(); title('Facebook allocation review'); y = 35; }
+        doc.setTextColor(146, 64, 14); doc.text(line, left + 3, y); y += 4;
+      }
+    }
+    doc.setTextColor(31, 41, 55);
+  }
 
   const columns = [
     { label: 'WAYBILL / ORDER', width: 30 }, { label: 'SYSTEM DATE', width: 24 }, { label: 'ITEM / QUANTITY', width: 64 },
@@ -86,13 +135,15 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     { label: 'PACKING', width: 24 }, { label: 'PROFIT*', width: 34 },
   ];
   const header = () => {
-    title('Order details | * Order profit is before advertising costs. All amounts are LKR.');
+    title(allocation ? 'Order details | Profit before ads, FB cost and After FB. Shared ad losses / Commercial are in the summary.' : 'Order details | * Order profit is before advertising costs. All amounts are LKR.');
     y = 35; doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5); doc.setFillColor(243, 244, 246); doc.rect(left, y - 4, width, 9, 'F');
     let x = left;
     columns.forEach(column => { doc.text(column.label, x + 2, y + 1); x += column.width; }); y += 9;
   };
   doc.addPage(); header();
   report.rows.forEach((row, rowIndex) => {
+    const savedCost = row.orderId ? allocation?.orderCosts.get(row.orderId) : undefined;
+    const afterFacebook = savedCost?.state === 'paid' && row.profit !== null ? row.profit - savedCost.cost : null;
     const purchaseLines = row.items.flatMap(item => [money(item.purchasing), ...item.allocations.map(allocation => `${text(allocation.reference)}: ${allocation.quantity} x ${money(allocation.unitCost)}`)]);
     const saleLines = row.items.map(item => `${item.quantity} x ${money(item.unitSale)} = ${money(item.sales)}`);
     const cellValues = [
@@ -101,10 +152,13 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
       row.items.length ? row.items.flatMap(item => [text(item.name), `${text(item.sku)} | Qty ${item.quantity}`]) : ['No matched order'],
       [...saleLines, `Received: ${money(row.received)}`],
       [...purchaseLines, row.items.length > 1 ? `Total: ${money(row.purchasing)}` : ''],
-      [money(row.courier)], [money(row.packing)], [money(row.profit)],
+      [money(row.courier)], [money(row.packing)], [money(row.profit), ...(allocation && row.source === 'Facebook'
+        ? savedCost?.state === 'paid' ? [`FB ad: ${money(savedCost.cost)}`, `After FB: ${money(afterFacebook)}`] : ['FB ad: Pending match'] : [])],
     ];
     doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5);
     const cells = cellValues.map((values, index) => values.filter(Boolean).flatMap(value => doc.splitTextToSize(value, columns[index].width - 4)));
+    const profitLineValues = cellValues[7].filter(Boolean).flatMap((value, index) => doc.splitTextToSize(value, columns[7].width - 4)
+      .map(() => index === 0 ? row.profit : value.startsWith('After FB:') ? afterFacebook : null));
     const issues = row.issues.flatMap(issue => doc.splitTextToSize(`Review: ${text(issue)}`, width - 6));
     let offset = 0;
     const length = Math.max(1, ...cells.map(lines => lines.length));
@@ -117,9 +171,14 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
       let x = left;
       cells.forEach((lines, index) => {
         const visible = lines.slice(offset, offset + count);
-        doc.setTextColor(index === 7 && row.profit !== null ? row.profit >= 0 ? 6 : 185 : 31, index === 7 && row.profit !== null ? row.profit >= 0 ? 95 : 28 : 41, index === 7 && row.profit !== null ? row.profit >= 0 ? 70 : 28 : 55);
+        doc.setTextColor(31, 41, 55);
         doc.setFont('helvetica', index === 0 || index === 7 ? 'bold' : 'normal');
-        if (visible.length) doc.text(visible, index >= 3 ? x + columns[index].width - 2 : x + 2, y, { align: index >= 3 ? 'right' : 'left', lineHeightFactor: 1.32 });
+        if (index === 7) visible.forEach((line, lineIndex) => {
+          const value = profitLineValues[offset + lineIndex];
+          doc.setTextColor(...(value === null ? [31, 41, 55] : value >= 0 ? [6, 95, 70] : [185, 28, 28]) as [number, number, number]);
+          doc.text(line, x + columns[index].width - 2, y + lineIndex * 3.5, { align: 'right' });
+        });
+        else if (visible.length) doc.text(visible, index >= 3 ? x + columns[index].width - 2 : x + 2, y, { align: index >= 3 ? 'right' : 'left', lineHeightFactor: 1.32 });
         x += columns[index].width;
       });
       y += height; offset += count;
