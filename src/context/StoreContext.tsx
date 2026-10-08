@@ -31,11 +31,12 @@ import {
   initialSettings,
   initialStaffAccounts,
 } from '../data/initialData';
-import { syncOrderToGoogleSheets, syncOrdersBatchToGoogleSheets, syncProductCatalogToGoogleSheets, clearGoogleSheetTestData, clearGoogleSheetLiveStartData, deleteOrderFromGoogleSheets } from '../lib/googleSheets';
+import { syncOrderToGoogleSheets, syncOrdersBatchToGoogleSheets, syncProductCatalogToGoogleSheets, clearGoogleSheetTestData, clearGoogleSheetLiveStartData, deleteOrderFromGoogleSheets } from '../lib/googleSheetRequests';
 import { buildOrderItemSnapshot, deliverySplitForSettings, displayUnitPrice, effectiveBuyingPrice, findProductSelection, normalizeProductForStorage, normalizedProductType, productDisplayStock, variantById, variantBySku, repriceAfterBuyingCostChange } from '../lib/productVariants';
 import { canonicalJson, confirmCsvRequestWithRetry, saveConfirmCsvDecisions } from '../lib/confirmCsvSave';
 import { saveInvoiceDownloadStatus } from '../lib/invoiceDownloadStatus';
 import { storefrontSaveBody } from '../lib/storefrontProductSave';
+import { publicStorefrontRequest } from '../lib/publicStorefrontRequest';
 
 export interface BulkOrderItemInput {
   order_id?: string;
@@ -542,21 +543,6 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   });
 
-  // Load shared settings from the server so ALL visitors see admin changes
-useEffect(() => {
-  fetch(`/api/storefront/state?fresh=${Date.now()}`, { cache:'no-store' })
-    .then((r) => r.json())
-    .then((data) => {
-      const serverSettings = data && data.state && data.state.settings;
-      if (serverSettings && typeof serverSettings === 'object') {
-        setSettings((prev) => ({ ...prev, ...serverSettings }));
-        try { localStorage.setItem('ora_settings', JSON.stringify({ ...initialSettings, ...serverSettings })); } catch (e) {}
-      }
-    })
-    .catch(() => {});
-}, []);
-
-
   // Admin User & Staff Accounts
   const [adminUser, setAdminUser] = useState<AdminUser | null>(() => {
     const saved = localStorage.getItem('ora_admin_user');
@@ -598,7 +584,7 @@ useEffect(() => {
   const [isBrandModalOpen, setIsBrandModalOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [lastPlacedOrder, setLastPlacedOrder] = useState<Order | null>(null);
-  const [isAdminView, setIsAdminView] = useState(false);
+  const [isAdminView, setIsAdminView] = useState(() => ['/system', '/ora-manager'].includes(String(window.location.pathname || '').replace(/\/+$/, '')));
   const [sharedStoreReady, setSharedStoreReady] = useState(false);
   const [returnPackingPending,setReturnPackingPending] = useState(false);
   const [returnPackingBatches,setReturnPackingBatches] = useState<{operation_id:string;batch_id:string;created_at:string;count:number}[]>([]);
@@ -800,18 +786,15 @@ useEffect(() => {
           const hasUsableCache = cachedUpdatedAt && products.length > 0;
 
           if (hasUsableCache) {
-            const versionResponse = await fetch(`/api/storefront/version?fresh=${Date.now()}`, { cache:'no-store' });
-            const versionData = await versionResponse.json().catch(() => ({}));
-            if (versionResponse.ok && versionData?.initialized && String(versionData.updated_at || '') === cachedUpdatedAt) {
+            const versionData = await publicStorefrontRequest('/api/storefront/version').catch(() => null);
+            if (versionData?.initialized && String(versionData.updated_at || '') === cachedUpdatedAt) {
               sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, cachedVersion);
               data = { initialized:true, cache_verified:true };
             }
           }
 
           if (!data?.cache_verified) {
-            const response = await fetch(`/api/storefront/state?fresh=${Date.now()}`, { cache:'no-store' });
-            data = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(data?.error || `Shared storefront load failed (${response.status})`);
+            data = await publicStorefrontRequest('/api/storefront/state');
           }
         }
         if (cancelled) return;
@@ -954,21 +937,20 @@ useEffect(() => {
   // without remounting React. Re-read the authoritative shared catalog whenever
   // the page is shown again or becomes visible, as well as on focus/interval.
   useEffect(() => {
-    if (adminUser && getStaffSessionToken()) return;
+    if (!sharedStoreReady || (adminUser && getStaffSessionToken())) return;
     let cancelled = false;
     const refreshPublicStore = async () => {
+      if (document.visibilityState === 'hidden') return;
       try {
         const cachedUpdatedAt = String(localStorage.getItem('ora_storefront_updated_at') || '');
         if (cachedUpdatedAt) {
-          const versionResponse = await fetch(`/api/storefront/version?fresh=${Date.now()}`, { cache:'no-store' });
-          const versionData = await versionResponse.json().catch(() => ({}));
-          if (!versionResponse.ok || cancelled || !versionData?.initialized) return;
+          const versionData = await publicStorefrontRequest('/api/storefront/version');
+          if (cancelled || !versionData?.initialized) return;
           if (String(versionData.updated_at || '') === cachedUpdatedAt) return;
         }
 
-        const response = await fetch(`/api/storefront/state?fresh=${Date.now()}`, { cache:'no-store' });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok || cancelled || !data?.initialized || !data?.state) return;
+        const data = await publicStorefrontRequest('/api/storefront/state');
+        if (cancelled || !data?.initialized || !data?.state) return;
         const version = Number(data.state.version || 0);
         if (version && version <= sharedStoreVersionRef.current && String(data.state.updated_at || '') === cachedUpdatedAt) return;
         applySharedStorefrontState(data.state, false);
@@ -988,7 +970,7 @@ useEffect(() => {
       document.removeEventListener('visibilitychange', onVisibility);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adminUser?.id]);
+  }, [adminUser?.id, sharedStoreReady]);
 
   const refreshReturnInventory = async () => {
     if (!adminUser || !getStaffSessionToken()) return;

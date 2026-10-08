@@ -8,11 +8,54 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="O-RA" />
+    <script>
+      // Start the public catalog while the application code is downloading.
+      // Staff pages keep their authenticated loading path.
+      (() => {
+        if (/^\/(system|ora-manager)(\/|$)/.test(location.pathname)) return;
+        let path = '/api/storefront/state';
+        try {
+          if (localStorage.getItem('ora_staff_session_token') && localStorage.getItem('ora_admin_user')) return;
+          if (localStorage.getItem('ora_storefront_updated_at') && localStorage.getItem('ora_products')) path = '/api/storefront/version';
+        } catch {}
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15000);
+        const promise = fetch(path, { cache: 'no-store', signal: controller.signal }).then(async response => {
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || 'Storefront could not load.');
+          const state = data.state;
+          if (state && state.settings && !state.settings.maintenance_mode) {
+            try {
+            const settings = state.settings;
+            const slides = (Array.isArray(settings.hero_banners) ? settings.hero_banners : []).filter(slide => slide.enabled !== false).sort((a, b) => Number(a.order || 0) - Number(b.order || 0));
+            const first = slides[0];
+            const product = first && first.type === 'product' && Array.isArray(state.products) && state.products.find(product => product.id === first.product_id);
+            const hero = first && (first.image || product && product.images && product.images[0]) || settings.hero_banner_image;
+            for (const src of new Set([settings.mobile_logo || settings.website_logo, hero])) {
+              if (!src) continue;
+              try {
+                const url = new URL(src, location.origin);
+                if (url.protocol !== 'https:' && url.protocol !== 'http:') continue;
+                const link = document.createElement('link');
+                link.rel = 'preload'; link.as = 'image'; link.href = url.href;
+                link.referrerPolicy = 'no-referrer'; link.fetchPriority = 'high';
+                document.head.appendChild(link);
+              } catch {}
+            }
+            } catch {}
+          }
+          return data;
+        }).finally(() => clearTimeout(timer));
+        promise.catch(() => {});
+        window.__oraStorefrontBoot = { path, startedAt: Date.now(), promise };
+      })();
+    </script>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/icons/ora-192.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Sinhala:wght@600;700;800&family=Noto+Sans+Tamil:wght@600;700;800&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Sinhala:wght@600;700;800&family=Noto+Sans+Tamil:wght@600;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'" />
+    <noscript><link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Sinhala:wght@600;700;800&family=Noto+Sans+Tamil:wght@600;700;800&display=swap" rel="stylesheet" /></noscript>
     <link rel="icon" type="image/png" href="/src/assets/ora-favicon.png" />
     <title>O-RA Online Store</title>
   </head>

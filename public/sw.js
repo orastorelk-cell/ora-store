@@ -1,4 +1,4 @@
-const CACHE = 'ora-store-shell-v5';
+const CACHE = 'ora-store-shell-v6';
 const SHELL = ['/', '/manifest.webmanifest', '/icons/ora-192.png', '/icons/ora-512.png'];
 
 self.addEventListener('install', (event) => {
@@ -17,7 +17,27 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
+  if (url.origin !== self.location.origin) return;
+  const publicImage = /^\/api\/media\/media\/(product|branding)\//.test(url.pathname);
+  if (url.pathname.startsWith('/api/') && !publicImage) return;
+  const immutable = publicImage || /^\/catalog-thumbnails\/[a-f0-9]{24}\.webp$/.test(url.pathname) || /^\/assets\/.+-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$/.test(url.pathname);
+  if (immutable) {
+    event.respondWith(caches.match(req).catch(() => undefined).then(async cached => {
+      if (cached) return cached;
+      const response = await fetch(req);
+      if (response.ok) {
+        const copy = response.clone();
+        event.waitUntil(caches.open(CACHE).then(async cache => {
+          await cache.put(req, copy);
+          // Keep the image cache bounded on phones with limited storage.
+          const keys = await cache.keys();
+          if (keys.length > 400) await Promise.all(keys.slice(0, keys.length - 400).filter(key => !SHELL.includes(new URL(key.url).pathname)).map(key => cache.delete(key)));
+        }).catch(() => undefined));
+      }
+      return response;
+    }));
+    return;
+  }
 
   if (req.mode === 'navigate') {
     event.respondWith(

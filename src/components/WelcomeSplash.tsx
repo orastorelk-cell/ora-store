@@ -10,6 +10,9 @@ const isManagerPath = () =>
 
 const shouldShowWelcomeIntro = () => {
   if (typeof window === 'undefined' || isManagerPath()) return false;
+  // Count the introduction from navigation, not from the end of the catalog
+  // request. A slow connection must not add another two seconds of waiting.
+  if (performance.now() >= 650) return false;
   try {
     return window.sessionStorage.getItem(SESSION_KEY) !== '1';
   } catch {
@@ -35,8 +38,8 @@ export const WelcomeSplash: React.FC = () => {
     } catch {}
 
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    const minimumTimer = window.setTimeout(() => setIntroMinimumDone(true), reduceMotion ? 650 : 1650);
-    const removeTimer = window.setTimeout(() => setIntroVisible(false), reduceMotion ? 900 : 2150);
+    const minimumTimer = window.setTimeout(() => setIntroMinimumDone(true), reduceMotion ? 0 : Math.max(0, 450 - performance.now()));
+    const removeTimer = window.setTimeout(() => setIntroVisible(false), reduceMotion ? 0 : Math.max(0, 650 - performance.now()));
 
     return () => {
       window.clearTimeout(minimumTimer);
@@ -65,7 +68,7 @@ export const WelcomeSplash: React.FC = () => {
   return (
     <div
       aria-hidden="true"
-      className={`ora-welcome-splash fixed inset-0 z-[9999] flex items-center justify-center overflow-hidden bg-white px-6 transition-opacity duration-500 ${
+      className={`ora-welcome-splash fixed inset-0 z-[9999] flex items-center justify-center overflow-hidden bg-white px-6 transition-opacity duration-150 ${
         introVisible && leaving ? 'pointer-events-none opacity-0' : 'opacity-100'
       }`}
     >

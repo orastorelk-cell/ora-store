@@ -5,9 +5,11 @@ import { useStore } from '../context/StoreContext';
 import { activeVariants, normalizedProductType, productPriceRange, regularDisplayUnitPrice, selectionDiscountPercent } from '../lib/productVariants';
 import { formatLkr } from '../lib/currency';
 import { isInWishlist, toggleWishlist, WISHLIST_CHANGED_EVENT } from '../lib/wishlist';
+import { catalogThumbnail, restoreOriginalImage } from '../lib/catalogThumbnail';
 
 interface ProductCardProps {
   product: Product;
+  eagerImage?: boolean;
 }
 
 const LEGACY_DEFAULT_IMAGE = 'photo-1523275335684-37898b6baf30';
@@ -23,7 +25,7 @@ const cleanImages = (images: string[] = []) => {
   return realRows.length ? realRows : rows;
 };
 
-export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
+export const ProductCard: React.FC<ProductCardProps> = ({ product, eagerImage = false }) => {
   const { language, addToCart, setSelectedProduct, startBuyNow, settings } = useStore();
   const [wishlisted, setWishlisted] = React.useState(() => isInWishlist(product.id));
 
@@ -85,11 +87,15 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
       <div className="ora-product-card-image relative aspect-square overflow-hidden bg-gray-50 rounded-xl mb-2.5">
         {primaryImage ? (
           <img
-            src={primaryImage}
+            src={catalogThumbnail(primaryImage)}
             alt={product.name_en}
             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
             referrerPolicy="no-referrer"
-            loading="lazy"
+            loading={eagerImage ? 'eager' : 'lazy'}
+            decoding="async"
+            width={480}
+            height={480}
+            onError={(event) => restoreOriginalImage(event.currentTarget, primaryImage)}
           />
         ) : (
           <div className="h-full w-full flex flex-col items-center justify-center text-gray-300">

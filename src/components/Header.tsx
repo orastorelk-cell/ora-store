@@ -163,6 +163,7 @@ export const Header: React.FC = () => {
                 <>
                   <img
                     src={settings.mobile_logo || settings.website_logo}
+                    decoding="async"
                     alt={settings.brand_store_name || 'O-RA'}
                     className="ora-mobile-header-logo sm:hidden object-contain object-left shrink-0"
                     style={{
@@ -176,6 +177,7 @@ export const Header: React.FC = () => {
                   />
                   <img
                     src={settings.website_logo || settings.mobile_logo}
+                    decoding="async"
                     alt={settings.brand_store_name || 'O-RA'}
                     className="hidden sm:block object-contain object-left"
                     style={{

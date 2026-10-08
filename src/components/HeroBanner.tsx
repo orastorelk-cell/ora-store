@@ -112,7 +112,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({ onBrowseAll }) => {
           onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} onTouchCancel={handleTouchCancel}
         >
           {hasBannerOverlay && <div className="absolute top-0 right-0 p-8 opacity-10 text-8xl sm:text-9xl font-black select-none pointer-events-none">O-RA</div>}
-          {heroImage && <img src={heroImage} alt={heroTitle || 'O-RA Promotional Banner'} className={`absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 pointer-events-none ${hasBannerOverlay?'opacity-45':'opacity-100'}`} referrerPolicy="no-referrer" />}
+          {heroImage && <img src={heroImage} alt={heroTitle || 'O-RA Promotional Banner'} className={`absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 pointer-events-none ${hasBannerOverlay?'opacity-45':'opacity-100'}`} referrerPolicy="no-referrer" loading="eager" decoding="async" fetchPriority="high" />}
           {hasBannerOverlay && <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/30 to-black/10 pointer-events-none" />}
 
           <div className="relative z-10 flex items-center justify-between gap-3">

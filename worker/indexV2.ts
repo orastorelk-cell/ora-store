@@ -246,7 +246,7 @@ const fastBulkSheetFallback = async (request: Request, env: unknown, response: R
 
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
-    const mediaResponse = await r2MediaHandler(request, env);
+    const mediaResponse = await r2MediaHandler(request, env, ctx);
     if (mediaResponse) return mediaResponse;
 
     // Clone once before baseWorker consumes the body. The clones are used only

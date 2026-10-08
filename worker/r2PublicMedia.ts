@@ -3,20 +3,43 @@ import { Buffer } from 'node:buffer';
 type MediaBucket={get(key:string):Promise<any>;head?(key:string):Promise<any>;put(key:string,value:ArrayBufferView,options?:any):Promise<any>};
 const json=(data:unknown,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
 
-export const r2MediaHandler=async(request:Request,env:any):Promise<Response|null>=>{
+export const r2MediaHandler=async(request:Request,env:any,ctx?:any):Promise<Response|null>=>{
   const bucket=env?.ORA_MEDIA_R2 as MediaBucket;
   if(!bucket?.get||!bucket?.put)return null;
   const url=new URL(request.url);
   if(request.method==='GET'&&url.pathname.startsWith('/api/media/')){
-    const key=url.pathname.slice('/api/media/'.length).split('/').map(part=>decodeURIComponent(part)).join('/');
+    let key:string;
+    try{key=url.pathname.slice('/api/media/'.length).split('/').map(part=>decodeURIComponent(part)).join('/');}
+    catch{return new Response('Invalid image path',{status:400});}
     if(!key.startsWith('media/')||key.includes('..'))return new Response('Not found',{status:404});
+    // Only immutable public catalog/branding files enter the edge cache. Order
+    // receipts, purchases, damage photos and all operational JSON keep their paths.
+    const publicImage=key.startsWith('media/product/')||key.startsWith('media/branding/');
+    const cache=publicImage?(globalThis as any).caches?.default:undefined;
+    const cacheUrl=new URL(url);cacheUrl.search='';
+    const cacheKey=new Request(cacheUrl.toString());
+    const conditional=(response:Response)=>{
+      const etag=response.headers.get('etag');
+      const tags=(request.headers.get('if-none-match')||'').split(',').map(tag=>tag.trim().replace(/^W\//,''));
+      return etag&&(tags.includes(etag)||tags.includes('*'))?new Response(null,{status:304,headers:response.headers}):response;
+    };
+    if(cache){
+      try{
+        const cached=await cache.match(cacheKey);
+        if(cached){const headers=new Headers(cached.headers);headers.set('x-ora-media-cache','HIT');return conditional(new Response(cached.body,{status:cached.status,headers}));}
+      }catch{}
+    }
     const object=await bucket.get(key);if(!object)return new Response('Not found',{status:404});
     const headers=new Headers();try{object.writeHttpMetadata?.(headers);}catch{}
     if(!headers.has('content-type'))headers.set('content-type','application/octet-stream');
     if(!headers.has('cache-control'))headers.set('cache-control','public, max-age=31536000, immutable');
     if(object.httpEtag)headers.set('etag',object.httpEtag);
     headers.set('x-ora-storage','r2');
-    return new Response(object.body,{headers});
+    if(Number.isSafeInteger(object.size)&&object.size>=0)headers.set('content-length',String(object.size));
+    headers.set('x-ora-media-cache',publicImage?'MISS':'BYPASS');
+    const response=new Response(object.body,{headers});
+    if(cache&&ctx?.waitUntil)ctx.waitUntil(cache.put(cacheKey,response.clone()).catch(()=>undefined));
+    return conditional(response);
   }
   if(request.method!=='POST'||url.pathname!=='/api/uploads/image')return null;
   const body:any=await request.clone().json().catch(()=>null);

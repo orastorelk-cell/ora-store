@@ -4,21 +4,22 @@ import { Header } from './components/Header';
 import { HeroBanner } from './components/HeroBanner';
 import { ProductCard } from './components/ProductCard';
 import { CatalogPriceRange, CatalogSortMode, ProductFilterBar } from './components/ProductFilterBar';
-import { CartDrawer } from './components/CartDrawer';
-import { CheckoutModal } from './components/CheckoutModal';
-import { ProductDetailModal } from './components/ProductDetailModal';
-import { OrderTrackingModal } from './components/OrderTrackingModal';
+import { CustomerOverlays } from './components/CustomerOverlays';
+import { DeferredPanel } from './components/DeferredPanel';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { OraAssistant } from './components/OraAssistant';
 import { StoreInfoPage, StoreInfoPageKind } from './components/StoreInfoPage';
 import { StoreFooter } from './components/StoreFooter';
 import { ProductRequestSection } from './components/ProductRequestSection';
-import { AdminDashboard } from './components/admin/AdminDashboard';
-import { AdminLoginModal } from './components/admin/AdminLoginModal';
 import { getTranslation } from './lib/i18n';
 import { customerProductSearchScore } from './lib/productSearch';
 import { activeVariants, displayUnitPrice, normalizedProductType } from './lib/productVariants';
 import { Sparkles, ShieldCheck, Truck, Headphones, Flame } from 'lucide-react';
+
+// Staff reports, scanners and PDF tooling are only needed inside the system.
+const AdminDashboard = React.lazy(() => import('./components/admin/AdminDashboard').then((module) => ({ default: module.AdminDashboard })));
+const AdminLoginModal = React.lazy(() => import('./components/admin/AdminLoginModal').then((module) => ({ default: module.AdminLoginModal })));
+const ManagerLoading = () => <div className="min-h-screen flex items-center justify-center bg-gray-50 text-gray-700" role="status">Loading system…</div>;
 
 const CustomerStorefront: React.FC = () => {
   const {
@@ -261,16 +262,16 @@ const CustomerStorefront: React.FC = () => {
       return (
         <div className="min-h-screen bg-gray-50 text-gray-900 font-sans">
           <Header />
-          <AdminLoginModal
+          <DeferredPanel fallback={<ManagerLoading />}><AdminLoginModal
             isOpen={true}
             onClose={() => setIsAdminView(false)}
             onLoginSuccess={(u) => loginAdmin(u)}
             staffUsers={staffUsers}
-          />
+          /></DeferredPanel>
         </div>
       );
     }
-    return <AdminDashboard />;
+    return <DeferredPanel fallback={<ManagerLoading />}><AdminDashboard /></DeferredPanel>;
   }
 
   // Never flash old localStorage products while the first authoritative catalog
@@ -318,7 +319,7 @@ const CustomerStorefront: React.FC = () => {
         <Header />
         <StoreInfoPage kind={infoKind} />
         <StoreFooter />
-        <CartDrawer /><CheckoutModal /><ProductDetailModal /><OrderTrackingModal /><OraAssistant /><MobileBottomNav />
+        <CustomerOverlays /><OraAssistant /><MobileBottomNav />
       </div>
     );
   }
@@ -343,8 +344,8 @@ const CustomerStorefront: React.FC = () => {
             </div>
 
             <div className="ora-product-grid grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4 xl:gap-5">
-              {discountProducts.map((product) => (
-                <ProductCard key={product.id} product={product} />
+              {discountProducts.map((product, index) => (
+                <ProductCard key={product.id} product={product} eagerImage={index < 4} />
               ))}
             </div>
           </section>
@@ -392,8 +393,8 @@ const CustomerStorefront: React.FC = () => {
             </div>
           ) : (
             <div className="ora-product-grid grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4 xl:gap-5">
-              {visibleProducts.map((product) => (
-                <ProductCard key={product.id} product={product} />
+              {visibleProducts.map((product, index) => (
+                <ProductCard key={product.id} product={product} eagerImage={Boolean(selectedCategorySlug || searchQuery || discountProducts.length === 0) && index < 4} />
               ))}
             </div>
           )}
@@ -454,10 +455,7 @@ const CustomerStorefront: React.FC = () => {
       <StoreFooter />
 
       {/* Floating & Modal Widgets */}
-      <CartDrawer />
-      <CheckoutModal />
-      <ProductDetailModal />
-      <OrderTrackingModal />
+      <CustomerOverlays />
       <OraAssistant />
       <MobileBottomNav />
     </div>
