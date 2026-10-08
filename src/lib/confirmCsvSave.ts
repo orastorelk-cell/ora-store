@@ -85,12 +85,14 @@ export const applyConfirmCsvDecisions = (orders:OrderData[],entries:ConfirmCsvEn
 };
 
 type StaffRequest = (url:string,options?:RequestInit)=>Promise<any>;
+export const transientStaffFailure = (error:any) =>
+  [429,500,502,503,504,507].includes(Number(error?.status)) || error instanceof TypeError || error?.name==='AbortError';
 export const confirmCsvRequestWithRetry = async (request:StaffRequest,url:string,options?:RequestInit,
   pause:(ms:number)=>Promise<void>=ms=>new Promise(resolve=>setTimeout(resolve,ms))) => {
   for(let attempt=0;attempt<4;attempt++){
     try{return await request(url,options);}catch(error:any){
-      if(attempt===3||(![429,502,503,504].includes(error?.status)&&!(error instanceof TypeError)))throw error;
-      await pause(500*2**attempt);
+      if(attempt===3||!transientStaffFailure(error))throw error;
+      await pause(Math.max(1100*2**attempt,Math.min(15_000,Number(error?.retryAfterMs)||0)));
     }
   }
 };

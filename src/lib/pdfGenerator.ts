@@ -295,11 +295,18 @@ export async function buildReturnPackingInvoiceBlob(orders: Order[], settings: S
   if (!orders.length || orders.length > 50) throw new Error('Choose 1 to 50 orders per PDF part.');
   if (orders.some(order => validateInvoiceOrder(order).length)) throw new Error('Packing invoice validation failed.');
   const doc = new jsPDF({ orientation: 'landscape',unit: 'mm',format: 'a6',compress: true }); let pages = 0;
-  for (const order of orders) {
+  // Resolve missing districts once per order, with four bounded requests at a
+  // time. Multiple invoice pages must not repeatedly wait on the same Sheet.
+  const prepared:Order[]=[];
+  for(let offset=0;offset<orders.length;offset+=4)prepared.push(...await Promise.all(orders.slice(offset,offset+4).map(async order=>{
+    const district=await resolveInvoiceDistrict(order,settings);return district?{...order,district}:order;
+  })));
+  const invoiceSettings={...settings,google_sheet_webhook_url:''};
+  for (const order of prepared) {
     const items = splitInvoiceItems(order);
     for (let page = 0; page < items.length; page++) {
       if (pages++) doc.addPage('a6','landscape');
-      await addExactPage(doc,order,settings,items[page],page,items.length);
+      await addExactPage(doc,order,invoiceSettings,items[page],page,items.length);
     }
   }
   return doc.output('blob');

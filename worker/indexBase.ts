@@ -1,4 +1,5 @@
 import { cloudflareDataFetch } from './cloudflareData';
+import { markR2SheetSynced } from './r2SheetSyncStatus';
 import { httpServerHandler } from 'cloudflare:node';
 import { waitUntil } from 'cloudflare:workers';
 import app from '../server';
@@ -192,7 +193,8 @@ const guaranteeNewOrderSheetSync = async (request: Request, env: unknown, respon
   }
 };
 
-const markVerifiedBulkOrders = async (runtime: SheetRuntime, orders: any[]) => {
+const markVerifiedBulkOrders = async (runtime: SheetRuntime, orders: any[],env:unknown) => {
+  if((env as any)?.ORA_MEDIA_R2)return markR2SheetSynced(orders,env,true);
   const syncedAt = new Date().toISOString();
   const out: any[] = [];
   for (const order of orders) {
@@ -237,7 +239,7 @@ const guaranteeBulkImportSheetSync = async (request: Request, env: unknown, resp
         String(lastOrder?.order_number || ''),
         expectedItemRows(lastOrder),
       );
-      const syncedOrders = await markVerifiedBulkOrders(runtime, orders);
+      const syncedOrders = await markVerifiedBulkOrders(runtime, orders,env);
       return makeJsonResponse({
         ...data,
         orders: syncedOrders,
@@ -279,7 +281,7 @@ const guaranteeBulkImportSheetSync = async (request: Request, env: unknown, resp
         expectedItemRows(lastOrder),
       );
 
-      const verified = await markVerifiedBulkOrders(runtime, chunk);
+      const verified = await markVerifiedBulkOrders(runtime, chunk,env);
       syncedOrders.push(...verified);
       totalRows += rows;
       totalSynced += synced;

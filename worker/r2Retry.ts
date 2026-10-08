@@ -3,8 +3,11 @@
 // transient binding failures; corruption, permissions and failed CAS conditions
 // still propagate to their existing guards.
 export const transientR2Failure = (error: any): boolean =>
-  [429, 500, 502, 503, 504].includes(Number(error?.status || error?.statusCode || error?.code)) ||
-  /\b(?:429|500|502|503|504)\b|too many requests|rate.?limit|slowdown|temporarily unavailable|internal error/i.test(String(error?.message || error));
+  [429, 500, 502, 503, 504, 507].includes(Number(error?.status || error?.statusCode || error?.code)) ||
+  /\b(?:429|500|502|503|504|507)\b|too many requests|rate.?limit|slowdown|temporarily unavailable|internal error/i.test(String(error?.message || error));
+
+export const pauseR2Conflict = (attempt:number) => new Promise<void>(resolve=>
+  setTimeout(resolve,1100+Math.min(attempt,3)*200+Math.floor(Math.random()*250)));
 
 export const retryR2Operation = async <T>(operation: () => Promise<T>): Promise<T> => {
   for (let attempt = 0; ; attempt++) {

@@ -1,5 +1,6 @@
 import { creditReturnStock } from '../lib/returnSheets';
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { staffJsonRequest } from '../lib/staffRequest';
 import {
   Language,
   Product,
@@ -353,16 +354,7 @@ const sharedStaffRequest = async (url: string, options: RequestInit = {}) => {
   const headers = new Headers(options.headers || {});
   headers.set('Content-Type', 'application/json');
   if (token) headers.set('Authorization', `Bearer ${token}`);
-  const response = await fetch(url, { ...options, headers });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const path=url.split('?')[0];
-    const error:any = new Error(data?.error || `Request failed (${response.status}, ${options.method||'GET'} ${path})`);
-    error.status = response.status;
-    error.path = path;
-    throw error;
-  }
-  return data;
+  return staffJsonRequest(url,{...options,headers});
 };
 
 const refreshStaffSessionToken = async () => {
@@ -402,11 +394,15 @@ const publicOrderSave = async (order: Order, customerAccessToken?: string, defer
 };
 
 const staffBulkOrderSaveAndSheetSync = async (orders: Order[]): Promise<{orders:Order[];sheetSync:any}> => {
-  const data=await sharedStaffRequest('/api/admin/orders/bulk-import',{
+  const data=await confirmCsvRequestWithRetry(async(url,options)=>{
+    const result=await sharedStaffRequest(url,options);
+    if(result?.ok!==true||!Array.isArray(result.orders)){const error:any=new Error('Server did not verify the saved import.');error.status=503;throw error;}
+    return result;
+  },'/api/admin/orders/bulk-import',{
     method:'POST',
     body:JSON.stringify({orders}),
   });
-  return {orders:Array.isArray(data?.orders)?data.orders:orders,sheetSync:data?.sheet_sync||null};
+  return {orders:data.orders,sheetSync:data?.sheet_sync||null};
 };
 
 
@@ -611,6 +607,8 @@ useEffect(() => {
   const sharedStoreVersionRef = useRef(0);
   const sharedStoreSnapshotRef = useRef<{products:Product[];categories:Category[];settings:StoreSettings}|null>(null);
   const orderServerVersionRef = useRef('');
+  const orderRefreshRef=useRef<{user:string;promise:Promise<void>}|null>(null);
+  const adminIdentityRef=useRef('');adminIdentityRef.current=adminUser?.id||'';
   // Serialize full storefront publishes. Rapid Admin edits used to start overlapping
   // PUT requests for the ~shared catalog payload, so an older transient failure could
   // raise "Website sync failed" even when a newer save was already succeeding.
@@ -997,7 +995,7 @@ useEffect(() => {
     await storefrontPublishQueueRef.current.catch(() => {});
     const data = await confirmCsvRequestWithRetry(sharedStaffRequest,'/api/admin/storefront/state');
     if (!data?.initialized || !data?.state) throw new Error('Shared stock could not be refreshed.');
-    await refreshOrdersFromServer();
+    await refreshOrdersFromServer(true);
     applySharedStorefrontState(data.state,true);
   };
 
@@ -1041,14 +1039,30 @@ useEffect(() => {
 
   const readOrderServerVersion = async () => {
     const data = await sharedStaffRequest('/api/orders/version');
-    return `${Math.max(0, Number(data?.count || 0))}|${String(data?.updated_at || '')}`;
+    return data?.revision?String(data.revision):`${Math.max(0, Number(data?.count || 0))}|${String(data?.updated_at || '')}`;
   };
 
-  const refreshOrdersFromServer = async () => {
+  const refreshOrdersFromServer = async (afterMutation=false) => {
     if (!adminUser || !getStaffSessionToken()) return;
+    const user=adminUser.id;
+    if(orderRefreshRef.current?.user===user){
+      const previous=orderRefreshRef.current.promise;
+      if(!afterMutation)return previous;
+      await previous.catch(()=>{});
+      // A read already in flight before a mutation cannot verify its new stock
+      // or invoice state. Coalesce ordinary polls, then obtain a fresh snapshot.
+      return refreshOrdersFromServer();
+    }
+    const pending=(async()=>{
     let data:any;
-    try{data=await confirmCsvRequestWithRetry(sharedStaffRequest,'/api/orders?format=snapshots');}
-    catch(error:any){setOrderLoadError('Orders could not load from the server. Your previous list is kept. Automatic retry is active.');throw error;}
+    try{data=await confirmCsvRequestWithRetry(async(url,options)=>{
+      const result=await sharedStaffRequest(url,options);
+      const list=Array.isArray(result?.snapshots)?result.snapshots.map((row:any)=>row?.payload):result?.orders;
+      if(!Array.isArray(list)||list.some((order:any)=>!order?.id||!order.order_number||!Array.isArray(order.items))){const error:any=new Error('The server returned an incomplete order list.');error.status=503;throw error;}
+      return result;
+    },'/api/orders?format=snapshots');}
+    catch(error:any){if(adminIdentityRef.current===user)setOrderLoadError('Orders could not load from the server. Your previous list is kept. Automatic retry is active.');throw error;}
+    if(adminIdentityRef.current!==user||!getStaffSessionToken())return;
     const serverOrders: Order[] = Array.isArray(data?.snapshots) ? data.snapshots.map((row:any)=>row?.payload) : data?.orders;
     if(!Array.isArray(serverOrders)||serverOrders.some(order=>!order||!order.id||!order.order_number||!Array.isArray(order.items))){setOrderLoadError('The server returned an incomplete order list. Automatic retry is active.');throw new Error('Order loading did not finish. The previous order list has been kept; retrying the server.');}
     const sortedServerOrders = [...serverOrders].sort((a,b)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime());
@@ -1108,10 +1122,15 @@ useEffect(() => {
     } catch {}
 
     try {
-      orderServerVersionRef.current = await readOrderServerVersion();
+      // Seed from the same snapshot. A separate newer version could hide orders
+      // that arrived while this list was loading.
+      orderServerVersionRef.current = data?.revision?String(data.revision):'';
     } catch (err:any) {
       console.warn('Order version seed failed:', err?.message || err);
     }
+    })();
+    orderRefreshRef.current={user,promise:pending};
+    try{await pending;}finally{if(orderRefreshRef.current?.promise===pending)orderRefreshRef.current=null;}
   };
 
   // Server is the authoritative order mirror. On Admin login, replace the browser
@@ -1151,9 +1170,9 @@ useEffect(() => {
       }
     };
 
-    const timer = window.setInterval(() => { void refreshIfChanged(); }, 60_000);
+    const timer = window.setInterval(() => { void refreshIfChanged(); }, orderLoadError?15_000:60_000);
     return () => window.clearInterval(timer);
-  }, [adminUser?.id]);
+  }, [adminUser?.id,!!orderLoadError]);
 
   // Keep a visible Call Center product catalog current. Debounced to avoid spamming
   // Apps Script during rapid edits.

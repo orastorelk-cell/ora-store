@@ -17,7 +17,7 @@ export const returnSheetRequest = async (path: string, body?: unknown) => {
         headers: { 'content-type': 'application/json',authorization: 'Bearer ' + (localStorage.getItem('ora_staff_session_token') || '') },body: serialized });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || result.ok !== true) { const error: any = new Error(result.error || 'Return request failed (' + response.status + ').'); error.status = response.status; throw error; } return result;
-    } catch (error: any) { if (attempt >= 2 || (error.status && ![429,500,502,503,504].includes(error.status))) throw error; await new Promise(resolve => setTimeout(resolve,[900,2200][attempt])); }
+    } catch (error: any) { const finishing=error.status===409&&/packing batch is finishing|stock batch is finishing/i.test(error.message);if (attempt >= 3 || (error.status && ![429,500,502,503,504,507].includes(error.status)&&!finishing)) throw error; await new Promise(resolve => setTimeout(resolve,[1100,2200,4400][attempt])); }
   }
 };
 type Entry = { choice: string; good: string; damaged: string; different?: boolean; receivedId?: string };

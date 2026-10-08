@@ -5,7 +5,7 @@ export const adminDashboardUnifiedUploadPatch = () => ({
     const id = rawId.split('?')[0].replace(/\\/g, '/');
     if (!id.endsWith('/src/components/admin/AdminDashboard.tsx')) return null;
 
-    let text = code;
+    let text = "import { InvoiceDoubleCheck } from './InvoiceDoubleCheck';\n" + code;
 
     const stateMarker = "  // Branding changes stay as a draft until the admin explicitly saves them.\n";
     if (!text.includes(stateMarker)) throw new Error('[O-RA UI patch] state marker not found');
@@ -201,6 +201,8 @@ export const adminDashboardUnifiedUploadPatch = () => ({
 
               <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-[11px] leading-5 text-blue-800"><b>One action:</b> upload one mixed WEB + FB + TK CSV, or select the three exported CSV files together in this same file picker. No separate channel upload boxes.</div>
             </div>
+
+            <InvoiceDoubleCheck />
 
             {unifiedConfirmBatch.at && (
               <div className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-6 shadow-sm space-y-4">

@@ -4,7 +4,7 @@ import { returnPackingInProgress, returnPackingPending } from '../src/lib/return
 import { Buffer } from 'node:buffer';
 import { prepareOrderSnapshotUpdate } from '../src/lib/orderSnapshotUpdate';
 import { constants as zlibConstants, gzip, gunzip } from 'node:zlib';
-import { retryR2Operation } from './r2Retry';
+import { pauseR2Conflict, retryR2Operation } from './r2Retry';
 type Row = Record<string, any>;
 export type DataBucket = {
   get(key: string): Promise<{ text(): Promise<string>; etag: string; customMetadata?: Record<string,string> } | null>;
@@ -54,6 +54,14 @@ export const dataBucket = (env: unknown = runtime): DataBucket | null => {
   if(!secret)throw new Error('A private STAFF_SESSION_SECRET is required for Cloudflare data storage.');
   const existing=encryptedBuckets.get(bucket);
   if(existing?.secret===secret&&existing.compress===compress)return existing.bucket;
+  const decoded=new Map<string,{etag:string;text:string}>();let decodedSize=0;
+  const cacheText=(path:string,etag:string,text:string)=>{
+    const previous=decoded.get(path);if(previous){decodedSize-=previous.text.length;decoded.delete(path);}
+    // Bound cached plaintext to 8 Mi characters (at most 16 MiB of string data).
+    if(text.length>8_388_608)return;
+    while(decodedSize+text.length>8_388_608&&decoded.size){const oldest=decoded.keys().next().value!;decodedSize-=decoded.get(oldest)!.text.length;decoded.delete(oldest);}
+    decoded.set(path,{etag,text});decodedSize+=text.length;
+  };
   const key=crypto.subtle.digest('SHA-256',new TextEncoder().encode('ora-r2-data-v2:'+secret))
     .then(bytes=>crypto.subtle.importKey('raw',bytes,'AES-GCM',false,['encrypt','decrypt']));
   const decode=async(path:string,text:string)=>{
@@ -85,12 +93,14 @@ export const dataBucket = (env: unknown = runtime): DataBucket | null => {
     async get(path) {
       const object=await retryR2Operation<Awaited<ReturnType<DataBucket['get']>>>(()=>bucket.get(path));if(!object)return null;
       return {etag:object.etag,customMetadata:object.customMetadata,text:async()=>{
-        return decode(path,await object.text());
+        const cached=decoded.get(path);if(cached?.etag===object.etag)return cached.text;
+        const text=await decode(path,await object.text());cacheText(path,object.etag,text);return text;
       }};
     },
     async put(path,value,settings) {
       const encoded=(await encode(path,value)).text;
-      return retryR2Operation(()=>bucket.put(path,encoded,settings));
+      const saved=await retryR2Operation<{etag:string}|null>(()=>bucket.put(path,encoded,settings));
+      if(saved)cacheText(path,saved.etag,value);return saved;
     },
     async compact(path){
       if(!compress)return 'skipped';
@@ -108,6 +118,13 @@ export const dataBucket = (env: unknown = runtime): DataBucket | null => {
 };
 const options = { httpMetadata:{contentType:'application/json',cacheControl:'no-store'}, customMetadata:{oraData:'1'} };
 const parsedCaches = new WeakMap<DataBucket,Map<string,{etag:string;value:any;text:string}>>();
+const cacheSaved = (bucket:DataBucket,path:string,etag:string,text:string,value:any) => {
+  let cache=parsedCaches.get(bucket);
+  if(!cache){cache=new Map();parsedCaches.set(bucket,cache);}
+  // Keep one revision per table; an ETag check is still required for every read.
+  if(cache.size>=48&&!cache.has(path))cache.delete(cache.keys().next().value!);
+  cache.set(path,{etag,text,value});
+};
 const parsedObject = async (bucket: DataBucket, key: string) => {
   const object = await bucket.get(key);
   if (!object) return null;
@@ -224,7 +241,8 @@ const mutateTable = async <T>(bucket:DataBucket,prefix:string,table:string,chang
     if(before===after)return result;
     if (table !== '__sequences') await preserveHourlyBackup(bucket,table,state.rows,before);
     const saved = await bucket.put(prefix+table+'.json',after,{...options,customMetadata:{oraData:'1',oraCount:String(rows.length),oraUpdatedAt:new Date().toISOString()},onlyIf:{etagMatches:state.etag}});
-    if(saved) return result;
+    if(saved){cacheSaved(bucket,prefix+table+'.json',saved.etag,after,rows);return result;}
+    if(attempt<7)await pauseR2Conflict(attempt);
   }
   throw new DataError('Concurrent Cloudflare writes; refresh and retry.',409);
 };
@@ -245,7 +263,8 @@ export const readDataTableWire=async(env:unknown,table:string)=>{
   const active=await activeData(bucket);if(!active)throw new DataError('Cloudflare recovery is required.');
   const object=await bucket.get(active.prefix+table+'.json');
   if(!object)throw new DataError('Cloudflare table is missing: '+table);
-  return object;
+  const cached=parsedCaches.get(bucket)?.get(active.prefix+table+'.json');
+  return cached?.etag===object.etag?{...object,text:async()=>cached.text}:object;
 };
 export const mutateDataTable=async<T>(env:unknown,table:string,change:(rows:Row[])=>T):Promise<T>=>{
   if(!primaryKeys[table])throw new DataError('Unknown Cloudflare table.',400);
@@ -268,7 +287,8 @@ export const replaceDataTable=async<T>(env:unknown,table:string,change:(rows:rea
     if(after===state.text)return next.result;
     await preserveHourlyBackup(bucket,table,state.rows,state.text);
     const saved=await bucket.put(active.prefix+table+'.json',after,{...options,customMetadata:{oraData:'1',oraCount:String(next.rows.length),oraUpdatedAt:new Date().toISOString()},onlyIf:{etagMatches:state.etag}});
-    if(saved)return next.result;
+    if(saved){cacheSaved(bucket,active.prefix+table+'.json',saved.etag,after,next.rows);return next.result;}
+    if(attempt<7)await pauseR2Conflict(attempt);
   }
   throw new DataError('Concurrent Cloudflare writes; refresh and retry.',409);
 };

@@ -1,4 +1,5 @@
 import { returnPackingInProgress } from '../src/lib/returnSheets';
+import { returnPackingHandler } from './r2ReturnPacking';
 import { activeData, configureCloudflareData, dataBucket, readDataTable, readDataTableWire, mutateDataTable, replaceDataTable } from './cloudflareData';
 import { applyDeliveredReport, type DeliveredEntry } from '../src/lib/deliveredOrders';
 import { applyConfirmCsvDecisions, validConfirmCsvEntries } from '../src/lib/confirmCsvSave';
@@ -45,6 +46,7 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   const refresh=request.method==='POST'&&path==='/api/staff/session/refresh';
   const audit=request.method==='POST'&&path==='/api/orders/confirm-csv/check';
   const invoices=request.method==='POST'&&path==='/api/orders/invoices/ensure';
+  const invoiceRecovery=['GET','POST'].includes(request.method)&&/^\/api\/orders\/invoices\/recovery(?:\/[A-Za-z0-9_-]{16,100}(?:\/downloaded)?)?$/.test(path);
   const downloads=request.method==='POST'&&path==='/api/orders/invoice-download-status';
   const cancellation=['GET','POST'].includes(request.method)&&path==='/api/orders/cancel-before-dispatch';
   const pool=(request.method==='GET'&&path==='/api/courier/waybills')||(request.method==='POST'&&path==='/api/courier/waybills/import');
@@ -53,7 +55,7 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   const orderPut=['PUT','DELETE'].includes(request.method)&&/^\/api\/orders\/[^/]+$/.test(path);
   const returns=path.startsWith('/api/returns/');
   const redispatch=request.method==='POST'&&path==='/api/orders/redispatch-waybill';
-  if(!read&&!delivered&&!confirmed&&!refresh&&!audit&&!invoices&&!downloads&&!cancellation&&!orderPut&&!pool&&!assignment&&!fulfilment&&!returns&&!redispatch)return null;
+  if(!read&&!delivered&&!confirmed&&!refresh&&!audit&&!invoices&&!invoiceRecovery&&!downloads&&!cancellation&&!orderPut&&!pool&&!assignment&&!fulfilment&&!returns&&!redispatch)return null;
   const user=await verifyActiveStaff(request,env);
   if(!user)return json({error:'Login session required.'},401);
   if((confirmed||delivered||downloads||redispatch||(orderPut&&request.method==='DELETE'))&&returnPackingInProgress(await readDataTable(env,'admin_data_store')))return json({error:'A packing batch is finishing. Retry its saved operation first.'},409);
@@ -79,6 +81,11 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
     }
     return null;
   }
+  if(invoiceRecovery){
+    const permissions=user.permissions||[],modules=['orders','confirm_upload','packing','invoices'];
+    if(user.role!=='admin'&&!modules.some(permission=>permissions.includes(permission)&&(request.method==='GET'||!permissions.includes('level:'+permission+':view'))))return json({error:'Confirm Upload / packing edit permission required.'},403);
+    return returnPackingHandler(request,r2ReturnStorage(env),user,true);
+  }
   if(invoices)return r2InvoiceQueueHandler(request,env,user);
   if(downloads)return r2InvoiceDownloadsHandler(request,env);
   if(audit){
@@ -100,12 +107,13 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
     }else if(new URL(request.url).searchParams.get('format')==='snapshots'){
       const wire=await readDataTableWire(env,'order_snapshots'),text=await wire.text();
       if(!text.startsWith('[')||!text.endsWith(']'))throw new Error('Invalid Cloudflare order data.');
-      return new Response('{"snapshots":'+text+'}',{headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-ora-storage':'cloudflare-r2'}});
+      return new Response('{"revision":'+JSON.stringify(wire.etag)+',"snapshots":'+text+'}',{headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-ora-storage':'cloudflare-r2'}});
     }
     const rows=await readDataTable(env,'order_snapshots');
     if(path.endsWith('/version')){
       const updated_at=rows.reduce((latest,row)=>String(row.updated_at||'')>latest?String(row.updated_at||''):latest,'');
-      return json({count:rows.length,updated_at});
+      const wire=await readDataTableWire(env,'order_snapshots');
+      return json({count:rows.length,updated_at,revision:wire.etag});
     }
     const orders=rows.map(row=>row.payload).filter(Boolean);
     return json({orders});
@@ -203,5 +211,10 @@ export const withR2DataFallback=async(request:Request,env:unknown,_ctx:any,next:
     const storefront=await r2StorefrontHandler(request,env,_ctx,verifyActiveStaff);
     if(storefront)return storefront;
     return await next();
-  }catch(e:any){return json({error:e?.message||'Cloudflare data recovery failed.'},503);}
+  }catch(e:any){
+    const requested=Number(e?.status),status=Number.isInteger(requested)&&requested>=400&&requested<=599?requested:503;
+    const response=json({error:e?.message||'Cloudflare data request failed.'},status);
+    if([429,500,502,503,504,507].includes(status))response.headers.set('Retry-After','2');
+    return response;
+  }
 };

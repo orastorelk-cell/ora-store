@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { X, ShieldCheck, User, Lock, AlertCircle, ArrowRight, KeyRound, Mail, CheckCircle2 } from 'lucide-react';
 import { AdminUser } from '../../types';
+import { confirmCsvRequestWithRetry } from '../../lib/confirmCsvSave';
+import { staffJsonRequest } from '../../lib/staffRequest';
 
 interface AdminLoginModalProps {
   isOpen: boolean;
@@ -42,21 +44,21 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({ isOpen, onClos
     const cleanUser = username.trim().toLowerCase();
     const cleanPass = password.trim();
     try {
-      const response = await fetch('/api/staff/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: cleanUser, password: cleanPass }) });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        setErrorMsg(response.status >= 500 || response.status === 429
-          ? 'Login service is temporarily busy. Please try again shortly.'
-          : data?.error || 'Invalid username or password.');
-        return;
-      }
-      if (!data?.user || !data?.token) { setErrorMsg('Login response is invalid. Please try again.'); return; }
+      const data = await confirmCsvRequestWithRetry(async(url,options)=>{
+        const result=await staffJsonRequest(url,options);
+        if(!result?.user?.id||typeof result?.token!=='string'||!result.token){
+          const error:any=new Error('Login response is incomplete.');
+          error.status=503;
+          throw error;
+        }
+        return result;
+      },'/api/staff/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:cleanUser,password:cleanPass})});
       const matchedUser: AdminUser = { ...data.user, _sessionToken: data.token } as any;
       onLoginSuccess(matchedUser);
       return;
-    } catch (serverError) {
+    } catch (serverError:any) {
       console.warn('Shared staff login API unavailable.', serverError);
-      setErrorMsg('Login service is temporarily unavailable. Please try again.');
+      setErrorMsg([400,401,403].includes(serverError?.status)?serverError.message:'Login service is temporarily unavailable after automatic retries. Please try again.');
     } finally { setIsLoggingIn(false); }
   };
 

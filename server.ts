@@ -86,6 +86,7 @@ import crypto from "crypto";
 import fs from "fs";
 import { createClient } from "@supabase/supabase-js";
 import { cloudflareDataFetch, dataBucket } from "./worker/cloudflareData";
+import { markR2SheetSynced } from './worker/r2SheetSyncStatus';
 import { returnSheetsHandler, r2ReturnStorage, type ReturnStorage } from './worker/r2ReturnSheets';
 import { sharedReturnInventory } from './src/lib/returnSheets';
 import { prepareOrderSnapshotUpdate } from './src/lib/orderSnapshotUpdate';
@@ -2031,10 +2032,14 @@ app.post('/api/admin/orders/bulk-import', requireStaffAnyPermission(['lead_impor
     const existing=await getOrderSnapshots();
     // Server-side Lead ID protection: the browser also dedupes, but the server must
     // remain authoritative when the same CSV is uploaded from another browser/tab.
+    const existingById=new Map(existing.map((order:any)=>[String(order.id),order]));
+    const replayed:any[]=[];
     const importedLeadKeys=new Set(existing
       .filter((o:any)=>String(o?.platform_lead_id||'').trim())
       .map((o:any)=>`${String(o?.order_source||'').toLowerCase()}::${String(o?.platform_lead_id||'').trim().toLowerCase()}`));
     const uniqueIncoming=incoming.filter((o:any)=>{
+      const previous=existingById.get(String(o.id));
+      if(previous){replayed.push(previous);return false;}
       const lead=String(o?.platform_lead_id||'').trim();
       if(!lead) return true;
       const key=`${String(o?.order_source||'').toLowerCase()}::${lead.toLowerCase()}`;
@@ -2042,7 +2047,7 @@ app.post('/api/admin/orders/bulk-import', requireStaffAnyPermission(['lead_impor
       importedLeadKeys.add(key);
       return true;
     });
-    if(!uniqueIncoming.length) return res.json({ok:true,orders:[],sheet_sync:{ok:true,skipped:true,reason:'All supplied Lead IDs were already imported.'}});
+    if(!uniqueIncoming.length) return res.json({ok:true,orders:replayed,sheet_sync:{ok:!replayed.some(order=>!order.is_synced_google_sheets),skipped:true,reason:'All supplied orders / Lead IDs were already imported.',error:replayed.some(order=>!order.is_synced_google_sheets)?'Saved orders are waiting for Google Sheet sync.':undefined}});
 
     const used=new Set(existing.map((o:any)=>String(o.order_number||'').toUpperCase()).filter(Boolean));
     const maxByPrefix:Record<string,number>={};
@@ -2075,9 +2080,12 @@ app.post('/api/admin/orders/bulk-import', requireStaffAnyPermission(['lead_impor
           order.synced_at=syncedAt;
         }
       }
-      await saveOrderSnapshotsBatch(incoming);
+      if(dataBucket()){
+        const synced=await markR2SheetSynced(uniqueIncoming);
+        uniqueIncoming.splice(0,uniqueIncoming.length,...synced);
+      }else await saveOrderSnapshotsBatch(uniqueIncoming);
     }
-    return res.json({ok:true,orders:uniqueIncoming,sheet_sync:sheetSync});
+    return res.json({ok:true,orders:[...replayed,...uniqueIncoming],sheet_sync:sheetSync});
   }catch(e:any){ return res.status(500).json({error:e?.message||'Bulk order import failed.'}); }
 });
 

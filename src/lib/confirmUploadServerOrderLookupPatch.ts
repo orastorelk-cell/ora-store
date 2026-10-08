@@ -27,10 +27,11 @@ export const confirmUploadServerOrderLookupPatch = (): Plugin => ({
     if(!getStaffSessionToken())throw new Error('Sign in before uploading Confirm CSV.');
     const serverData=await confirmCsvRequestWithRetry(async(url,options)=>{
       const data=await sharedStaffRequest(url,options);
-      if(!Array.isArray(data?.orders)){const error:any=new Error('The durable order list could not be verified.');error.status=503;throw error;}
-      return data;
-    },'/api/orders');
-    serverOrders=serverData.orders;
+      const orders=Array.isArray(data?.snapshots)?data.snapshots.map((row:any)=>row?.payload):data?.orders;
+      if(!Array.isArray(orders)){const error:any=new Error('The durable order list could not be verified.');error.status=503;throw error;}
+      return {orders};
+    },'/api/orders?format=snapshots');
+    serverOrders=serverData.orders.filter((order:any)=>order?.id&&order.order_number);
     const merged=serverOrders;
     const existing=new Map(merged.map(o=>[String(o.order_number||'').toUpperCase(),o] as [string,Order]));`;
 
