@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import { dataBucket, readDataTable, replaceDataTable } from './cloudflareData';
 import { cancellationInProgress } from './r2OrderCancellation';
 import { returnPackingHandler } from './r2ReturnPacking';
+import { RETURN_SCAN_PREFIX, returnScanDate, returnScanHistory } from '../src/lib/returnScanHistory';
 import { buildReturnSheet, parseReturnCsv, RETURN_SHEET_PREFIX, RETURN_UNLISTED_PREFIX, RETURN_CONTROL_KEY,
   ReturnSheetError, returnFail, receiveReturnParcel, correctReturnParcel, returnContainersFromRows,
   sheetsFromRows, summarizeReturnSheet, sharedReturnInventory, pendingReturnQty, parcelFullyReceived,
@@ -113,6 +114,15 @@ export const returnSheetsHandler = async (request: Request, storage: ReturnStora
         return new Response(Buffer.from(match[2],'base64'),{ headers: { 'content-type': 'image/' + match[1],'cache-control': 'private, no-store','x-content-type-options': 'nosniff' } });
       }
       if (path === '/api/returns/unlisted') return returnJson({ ok: true,parcels: returnContainersFromRows(rows).filter(sheet => !sheet.id).flatMap(sheet => sheet.parcels).sort((a,b) => String(b.scanned_at).localeCompare(String(a.scanned_at))) });
+      if (path === '/api/returns/scans') {
+        const search = (url.searchParams.get('search') || '').trim().toLowerCase().slice(0,100), date = url.searchParams.get('date') || '';
+        const dateAt = Date.parse(date + 'T00:00:00Z');
+        if (date && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(dateAt) || new Date(dateAt).toISOString().slice(0,10) !== date)) returnFail('Choose a valid scan date.',400);
+        const scans = returnScanHistory(rows).filter(scan => (!search || scan.waybill.toLowerCase().includes(search)) && (!date || returnScanDate(scan.scanned_at) === date));
+        const before = url.searchParams.get('before'), index = before ? scans.findIndex(scan => scan.id === before) : -1;
+        if (before && index === -1) returnFail('Refresh scan history before loading more.',400);
+        return returnJson({ ok: true,scans: scans.slice(index + 1,index + 51),total: scans.length });
+      }
       if (path === '/api/returns/sheets') {
         const search = (url.searchParams.get('search') || '').trim().toLowerCase().slice(0,100), state = url.searchParams.get('status');
         const all = sheetsFromRows(rows).filter(sheet => !search || sheet.id.includes(search)).sort((a,b) => b.uploaded_at.localeCompare(a.uploaded_at));
@@ -157,17 +167,30 @@ export const returnSheetsHandler = async (request: Request, storage: ReturnStora
     }
     if (path === '/api/returns/scan') {
       const waybill = String(input.waybill || '').trim(); if (!/^[A-Za-z0-9_-]{3,80}$/.test(waybill)) returnFail('Scan or enter a valid waybill.',400);
+      // Older open staff tabs need no new parameter. Updated tabs reuse scan_id
+      // on transport retries, so a lost acknowledgment cannot duplicate history.
+      const scanId = input.scan_id === undefined ? crypto.randomUUID() : String(input.scan_id);
+      if (!/^[A-Za-z0-9_-]{16,100}$/.test(scanId)) returnFail('A valid scan ID is required.',400);
+      const scanKey = RETURN_SCAN_PREFIX + scanId;
       const orders = await storage.readOrders();
       const result = await storage.changeAdmin(rows => {
+        const previous = rows.find(row => row.key === scanKey)?.payload;
+        if (previous && previous.waybill !== waybill) returnFail('This scan ID was already used for another waybill.');
         let sheet = returnSheetForWaybill(rows,waybill);
         if (!sheet) sheet = buildReturnSheet({ id: '',filename: '',source: [{ waybill,order_id: '',returned_date: '',reason: '' }] },orders,returnCatalog(rows).payload.products,returnActor(user));
         const parcel = sheet.parcels.find(parcel => parcel.waybill === waybill)!;
-        if (parcel.scanned_at) return { rows,result: sheet };
+        if (previous) return { rows,result: sheet };
+        const now = new Date().toISOString(), actor = returnActor(user);
+        const sequence = rows.reduce((max,row) => String(row.key).startsWith(RETURN_SCAN_PREFIX) ? Math.max(max,Number(row.payload?.sequence) || 0) : max,0) + 1;
+        const recordScan = (saved: readonly Row[]) => upsertReturnRow(saved,scanKey,{ id: scanId,waybill,scanned_at: now,scanned_by: actor,sequence });
+        // Rescanning changes only a separate history row, never the parcel's
+        // original timestamp, revision, quantities, photos or catalog version.
+        if (parcel.scanned_at) return { rows: recordScan(rows),result: sheet };
         if(returnPackingInProgress(rows))returnFail('A packing batch is finishing. Retry the scan shortly.');
-        const now = new Date().toISOString(), next = { ...sheet,updated_at: now,parcels: sheet.parcels.map(value => value === parcel ? { ...parcel,scanned_at: now,scanned_by: returnActor(user) } : value) };
+        const next = { ...sheet,updated_at: now,parcels: sheet.parcels.map(value => value === parcel ? { ...parcel,scanned_at: now,scanned_by: actor } : value) };
         let saved = saveSheetRow(rows,next);
         if (!parcel.review_reason) { saved = setReturnPackingPending(saved,true); saved = saveReturnCatalog(saved,returnCatalog(saved).payload.products); }
-        return { rows: saved,result: next };
+        return { rows: recordScan(saved),result: next };
       });
       await annotateSheetOrders(storage,result);
       return returnJson({ ok: true,...responseSheet(result),waybill,message: result.id ? 'Check the parcel items in the popup.' : 'Parcel saved without a Sheet ID. A later matching CSV will link these receipts automatically.' });

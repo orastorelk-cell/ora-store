@@ -9,6 +9,7 @@ import { withR2DataFallback } from '../worker/r2RecoveryFallback';
 import { creditReturnStock, returnOrderFilter } from '../src/lib/returnSheets';
 import { returnSheetsHandler, r2ReturnStorage } from '../worker/r2ReturnSheets';
 import { returnPackingCsv } from '../src/lib/returnExports';
+import { RETURN_SCAN_PREFIX, returnScanDate, returnScanHistory } from '../src/lib/returnScanHistory';
 
 class MemoryBucket {
   objects=new Map<string,{value:string;etag:string;customMetadata:any}>(); revision=0;failKey='';failMode='';
@@ -152,3 +153,61 @@ const colourCorrection={operation_id:crypto.randomUUID(),expected_revision:wrong
 assert.equal((await order('wrong-colour')).items[0].variant_id,'blue');assert.equal((await order('wrong-colour')).invoice_number,'INV-wrong-colour');
 console.log('PASS: actual wrong-item/colour stock credits, legacy mixed receipts, private photos and photo-only saves, exact-item damage corrections and deferred balances, mismatch reporting, retry and late-CSV durability, and unchanged order/invoice identities.');
 console.log('PASS: unlisted receipts, late CSV linking without duplicate stock, private damage photos, received/pending filters, corrections and deferred balance, actual single/bulk purchasing, manual FIFO/variant/bundle packing, journal retries/concurrency, common invoice/CSV batch and preserved prior invoices.');
+
+// Scan history must be usable while a receiver holds a pre-deployment popup.
+// Its read requests and other staff rescans cannot invalidate that draft.
+assert.equal((await call('/api/returns/scans','GET',undefined,'other')).status,403);
+assert.equal((await call('/api/returns/scans','GET',undefined,'viewer')).status,200);
+assert.equal((await call('/api/returns/scans?date=2026-02-30')).status,400);
+assert.equal((await call('/api/returns/scan','POST',{waybill:'WB-EXTRA',scan_id:'bad'},'receiver')).status,400);
+const savedLegacy=JSON.stringify((await get('WB-EXTRA')).parcels[0]);
+await replaceDataTable(env,'admin_data_store',rows=>({rows:rows.filter(row=>!(String(row.key).startsWith(RETURN_SCAN_PREFIX)&&row.payload.waybill==='WB-EXTRA')),result:null}));
+const legacyHistory=await call('/api/returns/scans?search=wb-extra');assert.equal(legacyHistory.body.total,1);
+assert.equal(legacyHistory.body.scans[0].id,'legacy:WB-EXTRA');assert.equal(legacyHistory.body.scans[0].sheet_id,'777');
+assert.equal(JSON.stringify((await get('WB-EXTRA')).parcels[0]),savedLegacy,'Reading existing first scans requires no parcel migration');
+await replaceDataTable(env,'order_snapshots',rows=>({rows:[...rows,{order_id:'history-active',order_number:'FIXTURE-history-active',payload:returned('history-active','WB-HISTORY-ACTIVE',2)}],result:null}));
+const activeScan=await scan('WB-HISTORY-ACTIVE'),draft=structuredClone(activeScan.sheet.parcels[0]);
+assert.equal((await call('/api/returns/scans?search=HISTORY-ACTIVE')).body.total,1,'First scan appears once, without a duplicate legacy row');
+const beforeRescan=await readDataTable(env,'admin_data_store'),nonScanRows=JSON.stringify(beforeRescan.filter(row=>!String(row.key).startsWith(RETURN_SCAN_PREFIX))),activeOrder=JSON.stringify(await order('history-active'));
+const rescanId=crypto.randomUUID(),rescanBody={waybill:'WB-HISTORY-ACTIVE',scan_id:rescanId};
+const rescanned=await call('/api/returns/scan','POST',rescanBody,'receiver');assert.equal(rescanned.status,200);assert.deepEqual(rescanned.body.sheet.parcels[0],draft);
+assert.equal(JSON.stringify((await readDataTable(env,'admin_data_store')).filter(row=>!String(row.key).startsWith(RETURN_SCAN_PREFIX))),nonScanRows,'Rescanning touches no receipt, parcel, catalog or packing rows');
+assert.equal(JSON.stringify(await order('history-active')),activeOrder,'Rescanning preserves current invoice and order metadata');
+const latest=await call('/api/returns/scans');assert.equal(latest.body.scans[0].id,rescanId);assert.equal(latest.body.scans[0].waybill,'WB-HISTORY-ACTIVE');
+const unchangedRevision=raw.revision;await call('/api/returns/scans?search=wb-history-active&date='+returnScanDate(latest.body.scans[0].scanned_at));
+assert.equal(raw.revision,unchangedRevision,'History search/date refresh is strictly read-only');
+await call('/api/returns/scan','POST',rescanBody,'receiver');assert.equal((await call('/api/returns/scans?search=HISTORY-ACTIVE')).body.total,2,'Retrying one scan ID cannot duplicate history');
+assert.equal((await call('/api/returns/scan','POST',{...rescanBody,waybill:'WB-EXTRA'},'receiver')).status,409);
+const stockBeforeDraft=(await product()).stock_quantity;
+const oldClientReceipt=await call('/api/returns/parcels/WB-HISTORY-ACTIVE/receive','POST',{operation_id:crypto.randomUUID(),expected_revision:draft.revision,waybill:draft.waybill,items:[{id:draft.items[0].id,good_qty:1,damaged_qty:0,not_received:false,photo_ids:[]}],notes:'Already-open receiver popup'},'receiver');
+assert.equal(oldClientReceipt.status,200,JSON.stringify(oldClientReceipt));assert.equal((await product()).stock_quantity,stockBeforeDraft+1,'Already-open receiver saves stock exactly once after a rescan');
+const historyAfterReceipt=JSON.stringify((await get('WB-HISTORY-ACTIVE')).parcels[0]);
+const concurrentScanIds=[crypto.randomUUID(),crypto.randomUUID()];const scanResults=await Promise.all(concurrentScanIds.map(scan_id=>call('/api/returns/scan','POST',{waybill:'WB-HISTORY-ACTIVE',scan_id},'receiver')));
+assert.ok(scanResults.every(result=>result.status===200),JSON.stringify(scanResults));
+assert.equal((await call('/api/returns/scans?search=HISTORY-ACTIVE')).body.total,4,'Concurrent staff scans both survive the atomic journal save');
+assert.equal(JSON.stringify((await get('WB-HISTORY-ACTIVE')).parcels[0]),historyAfterReceipt);
+const lostScanId=crypto.randomUUID();let lostScanAck=false;
+const lostScanStorage={...native,changeAdmin:async(change:any)=>{const result=await native.changeAdmin(change);if(!lostScanAck){lostScanAck=true;throw new Error('Synthetic scan acknowledgment lost');}return result;}};
+await assert.rejects(()=>returnSheetsHandler(new Request('https://fixture/api/returns/scan',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({waybill:'WB-HISTORY-ACTIVE',scan_id:lostScanId})}),lostScanStorage,{id:'receiver',role:'staff',permissions:['returns']}),/Synthetic scan acknowledgment lost/);
+assert.equal((await call('/api/returns/scan','POST',{waybill:'WB-HISTORY-ACTIVE',scan_id:lostScanId},'receiver')).status,200);
+assert.equal((await call('/api/returns/scans?search=HISTORY-ACTIVE')).body.total,5);
+const linkedHistory=await call('/api/returns/sheets','POST',{filename:'781.csv',csv:csv(['WB-HISTORY-ACTIVE'])});assert.equal(linkedHistory.status,200);
+const linkedScans=(await call('/api/returns/scans?search=HISTORY-ACTIVE')).body;assert.equal(linkedScans.total,5);assert.ok(linkedScans.scans.every((scan:any)=>scan.sheet_id==='781'),'Late CSV linking updates labels without duplicating or losing scan events');
+
+// Midnight is the staff's calendar date (UTC+05:30), including older history.
+await replaceDataTable(env,'admin_data_store',rows=>({rows:[...rows,
+  {key:RETURN_SCAN_PREFIX+'midnight-before-fixture',payload:{waybill:'WB-TZ-BEFORE',scanned_at:'2026-10-07T18:29:59.000Z',scanned_by:'Fixture'}},
+  {key:RETURN_SCAN_PREFIX+'midnight-after-fixture',payload:{waybill:'WB-TZ-AFTER',scanned_at:'2026-10-07T18:30:00.000Z',scanned_by:'Fixture'}},
+  ...Array.from({length:105},(_,index)=>({key:RETURN_SCAN_PREFIX+'page-fixture-'+index,payload:{waybill:'WB-PAGE-'+index,scanned_at:'2026-10-06T12:00:00.000Z',scanned_by:'Fixture',sequence:index+1}})),
+],result:null}));
+assert.deepEqual((await call('/api/returns/scans?search=WB-TZ&date=2026-10-07')).body.scans.map((scan:any)=>scan.waybill),['WB-TZ-BEFORE']);
+assert.deepEqual((await call('/api/returns/scans?search=WB-TZ&date=2026-10-08')).body.scans.map((scan:any)=>scan.waybill),['WB-TZ-AFTER']);
+const firstPage=(await call('/api/returns/scans?search=WB-PAGE')).body;assert.equal(firstPage.total,105);assert.equal(firstPage.scans.length,50);assert.equal(firstPage.scans[0].waybill,'WB-PAGE-104','Equal timestamps retain last-scan-first sequence');
+await replaceDataTable(env,'admin_data_store',rows=>({rows:[...rows,{key:RETURN_SCAN_PREFIX+'page-fixture-new',payload:{waybill:'WB-PAGE-NEW',scanned_at:'2026-10-06T13:00:00.000Z',scanned_by:'Fixture',sequence:106}}],result:null}));
+const secondPage=(await call('/api/returns/scans?search=WB-PAGE&before='+firstPage.scans.at(-1).id)).body;
+const thirdPage=(await call('/api/returns/scans?search=WB-PAGE&before='+secondPage.scans.at(-1).id)).body;
+assert.equal(new Set([...firstPage.scans,...secondPage.scans,...thirdPage.scans].map(scan=>scan.id)).size,105,'New scans between page loads cannot skip or duplicate older rows');
+assert.equal((await call('/api/returns/scans?search=WB-PAGE&before=missing')).status,400);
+assert.equal((await call('/api/returns/scans?search=missing-waybill')).body.total,0);
+assert.equal(returnScanHistory(await readDataTable(env,'admin_data_store')).filter(scan=>scan.waybill==='WB-EXTRA').length,1);
+console.log('PASS: shared newest-first scan history, existing first-scan fallback, repeat/concurrent scans, retry deduplication, Sri Lanka date filters, cursor pagination during new scans, read-only polling and already-open receipt compatibility.');
