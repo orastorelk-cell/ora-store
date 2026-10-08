@@ -36,6 +36,7 @@ export function OutOfStockPdfDownload({ rows }: { rows: readonly OutOfStockNeedR
 
   return <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
     <button type="button" onClick={download} disabled={busy || !rows.length}
+      title="Download item photos, waiting quantities, Order IDs and saved shop references"
       className="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-xs font-black text-black hover:bg-orange-400 disabled:cursor-not-allowed disabled:opacity-40">
       {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
       {busy ? progress : 'Download PDF'}
