@@ -17,7 +17,12 @@ const recoveryReady=(order:Row)=>order.call_center_status==='Confirmed'&&!invoic
   !['Cancelled','Shipped','Delivered'].includes(order.order_status)&&!order.is_duplicate_order&&!order.is_test_order&&
   !order.return_tracking_waybill&&!order.return_sheet_id&&order.dispatch_status!=='Handed Over'&&
   !order.invoice_pack_downloaded_at&&!order.fardar_csv_exported_at;
-const recoverySignature=(order:Row)=>{const {return_packing_lock,...current}=order;return JSON.stringify(current);};
+const recoverySignature=(order:Row)=>{
+  // A Sheet acknowledgment may finish while this operation holds stock locks.
+  // Its sync timestamps do not alter the invoice or physical parcel.
+  const {return_packing_lock,is_synced_google_sheets,synced_at,sheet_sync_verified_at,updated_at,...current}=order;
+  return JSON.stringify(current);
+};
 
 // The catalog and stock deduction share one ETag transaction with this journal.
 // Courier reservation and order writes resume from its recorded plan after any

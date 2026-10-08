@@ -132,7 +132,9 @@ await stockAck.request(invoiceRecoveryPath,{operation_id:stockAckId});
 stockAck.raw.failKey=stockAck.active.prefix+'admin_data_store.json';stockAck.raw.failAfter=true;
 await assert.rejects(stockAck.request(invoiceRecoveryPath,{operation_id:stockAckId,advance:true}),/Synthetic response lost/);
 assert.equal(await stockAck.currentStock(),4);
+await markR2SheetSynced(await stockAck.currentOrders(),stockAck.env,true);
 await finishInvoiceRecovery(stockAckId,stockAck.request);assert.equal(await stockAck.currentStock(),4,'A lost stock-commit acknowledgment resumes without another deduction');
+assert.equal((await stockAck.currentOrders())[0].is_synced_google_sheets,true,'An in-flight Sheet acknowledgment does not interrupt or get lost during recovery');
 
 // Execute the actual legacy bulk route too: replayed IDs remain unchanged and
 // the second Sheet-status save must not import Lead IDs rejected by deduplication.
