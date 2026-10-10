@@ -41,6 +41,7 @@ export const r2AssignWaybill=async(env:unknown,id:string,courier='Fardar')=>{
   if(returnPackingPending(await readDataTable(env,'admin_data_store')))throw new Error('Check returns and create the packing batch from Return Sheets first.');
   const before=(await readDataTable(env,'order_snapshots')).map(r=>r.payload).filter(Boolean),order=before.find(o=>String(o.id)===id);
   if(!order)throw new Error('Order not found.');
+  if(order.sheet_confirm_hold)throw new Error('Finish the saved Google Sheet import before assigning this order.');
   if(order.order_status==='Cancelled'||order.is_duplicate_order||order.is_test_order)throw new Error('This order cannot receive a waybill.');
   if(number(order.waybill_number))return order;
   if(order.call_center_status!=='Confirmed'||order.stock_allocated!==true||order.stock_status!=='Allocated')throw new Error('Confirm the order and allocate stock before assigning a waybill.');

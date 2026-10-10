@@ -7,7 +7,7 @@ export const invoiceComplete = (order:RecordData) => order.invoice_locked===true
   Number.isFinite(Date.parse(order.invoice_generated_at||''));
 export const invoiceReady = (order:RecordData) => order.call_center_status==='Confirmed' && order.stock_allocated===true &&
   order.stock_status==='Allocated' && Boolean(String(order.waybill_number||'').trim()) &&
-  !order.is_duplicate_order && !order.is_test_order && order.order_status!=='Cancelled';
+  !order.is_duplicate_order && !order.is_test_order && !order.sheet_confirm_hold && order.order_status!=='Cancelled';
 export const validInvoiceQueueRequest = (body:any) => Array.isArray(body?.order_ids) && body.order_ids.length>0 &&
   body.order_ids.length<=50 && new Set(body.order_ids).size===body.order_ids.length &&
   body.order_ids.every((id:any)=>typeof id==='string'&&id.length>0&&id.length<=150) &&

@@ -291,8 +291,8 @@ export async function generatePackingTestMultiPagePDF(settings: StoreSettings = 
 
 // Same invoice artwork as the existing packing downloads, collected into the
 // Return batch ZIP so its PDF and courier CSV always contain the same orders.
-export async function buildReturnPackingInvoiceBlob(orders: Order[], settings: StoreSettings): Promise<Blob> {
-  if (!orders.length || orders.length > 50) throw new Error('Choose 1 to 50 orders per PDF part.');
+export async function buildReturnPackingInvoiceBlob(orders: Order[], settings: StoreSettings,maximum=50): Promise<Blob> {
+  if (!Number.isSafeInteger(maximum) || maximum<1 || maximum>1000 || !orders.length || orders.length > maximum) throw new Error('Choose 1 to '+maximum+' orders per PDF.');
   if (orders.some(order => validateInvoiceOrder(order).length)) throw new Error('Packing invoice validation failed.');
   const doc = new jsPDF({ orientation: 'landscape',unit: 'mm',format: 'a6',compress: true }); let pages = 0;
   // Resolve missing districts once per order, with four bounded requests at a

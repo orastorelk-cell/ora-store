@@ -12,6 +12,19 @@ export const prepareOrderSnapshotUpdate = (existing: Row | undefined, incoming: 
       String(lock.assigned_order_number) !== String(order.order_number || ''))
     throw new OrderUpdateConflict('Waybill ' + requestedWaybill + ' is already locked/used by ' + String(lock.assigned_order_number) + '.');
   if (existing) {
+    // A browser mirror cannot acknowledge, remove or replace a server Sheet
+    // import receipt. Hold imported orders until the complete batch is saved.
+    if(existing.sheet_confirm_hold)return {order:existing,waybillPreserved:true};
+    if(existing.sheet_confirm_import){
+      order.sheet_confirm_import=existing.sheet_confirm_import;
+      for(const field of ['items','subtotal','special_offer_discount','delivery_rebalance_qty_offer','delivery_rebalance_qty_offer_amount','delivery_rebalance_amount_snapshot','delivery_visible_fee_snapshot',
+        'delivery_fee','gift_wrap_selected','gift_wrap_fee','total_amount','customer_name','address','city','district','fardar_city','city_verified','city_mapping_source',
+        'confirm_upload_batch_id','invoice_confirm_snapshot','call_center_status','call_center_updated_at','product_change_history','notes','cancelled_at','cancelled_by','cancel_reason']){
+        if(existing[field]!==undefined)order[field]=existing[field];else delete order[field];
+      }
+      if(!['Shipped','Delivered'].includes(String(order.order_status))||['Cancelled','Delivered'].includes(String(existing.order_status)))order.order_status=existing.order_status;
+    }else delete order.sheet_confirm_import;
+    delete order.sheet_confirm_hold;
     if(existing.return_packing_lock?.operation_id)return {order:existing,waybillPreserved:true};
     if(existing.return_packing_operation){
       order.return_packing_operation=existing.return_packing_operation;

@@ -93,3 +93,32 @@ Check these in order:
 6. Google Sheet sync
 
 Only after these pass should the custom `.com.lk` domain be attached.
+
+## Google Sheet Confirm / Cancel auto upload
+
+In **Confirm / Cancel Upload**, **New Confirm Orders Auto Upload** reads the
+connected order tabs, groups every item row by Order ID, ignores Pending orders,
+and saves all decisions in one guarded R2 write before allocating stock. Ready
+orders receive one `PACK-SHEET-…` invoice batch. The download contains one A6 PDF
+and one UTF-8 Fardar CSV. Existing invoices and courier numbers are preserved.
+
+Super Admin connects the Sheet once using **Connect Google Sheet once**:
+
+1. Enable Google Sheets API in a Google Cloud project.
+2. Create a service account and obtain its JSON key file.
+3. Share the order spreadsheet with that account's email as **Editor**.
+4. Enter the Sheet link, choose the JSON file, and save the connection. Leaving
+   tab names blank detects `CALL CENTER ORDERS`, `FACEBOOK ORDERS`, and
+   `TIKTOK ORDERS` when they exist. Custom tabs require their exact names.
+
+The Apps Script deployment stays unchanged. Credentials and job snapshots live
+in encrypted private R2 objects, outside public storefront settings. The minute
+cron resumes accepted jobs after a closed browser or lost response; it does not
+start new imports without pressing the button. Sheet acknowledgments affect only
+matching, successfully saved rows. Edited rows are rechecked before stock
+allocation, and rows changed after invoicing remain unmarked for review.
+
+`src/lib/confirmSheetPlan.ts` is generated from the production Confirm CSV rules.
+After changing those rules, run `node --import tsx tools/generate-confirm-sheet-plan.ts`.
+The build checks this module for drift.
+Run `npm run test:sheet-confirm` for the native R2 / mocked Google workflow tests.

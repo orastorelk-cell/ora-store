@@ -27,11 +27,12 @@ const recoverySignature=(order:Row)=>{
 // The catalog and stock deduction share one ETag transaction with this journal.
 // Courier reservation and order writes resume from its recorded plan after any
 // lost acknowledgement; no retry deducts stock or creates another invoice.
-export const returnPackingHandler = async (request: Request, storage: ReturnStorage, user: Row, recovery=false) => {
+export type SheetPackingOptions = {operationId:string;orderIds:string[];batchId:string};
+export const returnPackingHandler = async (request: Request, storage: ReturnStorage, user: Row, recovery=false,sheet?:SheetPackingOptions) => {
   const basePath=recovery?'/api/orders/invoices/recovery':'/api/returns/packing';
-  const checkJournal=(journal:Row|undefined)=>{if(journal&&!!(journal.kind==='confirm_recovery')!==recovery)returnFail('This batch belongs to a different packing workflow.');return journal;};
+  const checkJournal=(journal:Row|undefined)=>{if(journal&&(sheet?journal.kind!=='sheet_confirm':journal.kind==='sheet_confirm'||!!(journal.kind==='confirm_recovery')!==recovery))returnFail('This batch belongs to a different packing workflow.');return journal;};
   const beforeSignature=recovery?recoverySignature:signature;
-  const reason=recovery?'Confirm Upload Double Check':'Return packing batch';
+  const reason=sheet?'Google Sheet Confirm Upload':recovery?'Confirm Upload Double Check':'Return packing batch';
   const failPrepared=(rows:readonly Row[],current:Row,error:string)=>{
     const failed:Row={...current,phase:'failed',error};if(recovery)delete failed.products_after;
     const saved=setJournal(rows,failed);
@@ -78,15 +79,16 @@ export const returnPackingHandler = async (request: Request, storage: ReturnStor
   let journal = existing || await storage.changeAdmin(rows => {
     const previous = checkJournal(currentJournal(rows,id));
     if (previous) { if (previous.phase === 'failed') returnFail('Start a new packing operation. ' + (previous.error || ''));  return { rows,result: previous }; }
-    if (returnPackingInProgress(rows) || cancellationInProgress(rows as Row[])) returnFail('Another stock batch is finishing. Retry after it completes.');
+    if (returnPackingInProgress(rows,sheet?.operationId) || cancellationInProgress(rows as Row[])) returnFail('Another stock batch is finishing. Retry after it completes.');
     const unchecked = returnContainersFromRows(rows).flatMap(sheet => sheet.parcels).filter(parcel => parcel.scanned_at && !parcel.checked_at && !parcel.review_reason);
     if (unchecked.length&&!recovery) returnFail('Check ' + unchecked.length + ' opened return parcel(s) before creating this packing batch.');
     const catalog = returnCatalog(rows), products = structuredClone(catalog.payload.products);
     const owners = new Map(orders.filter(order => order.waybill_number).map(order => [String(order.waybill_number).trim(),String(order.id)]));
     const available = pool.filter(row => row.status === 'Available' && !row.permanently_retired && /fardar/i.test(String(row.courier_name || 'Fardar')) && !owners.has(String(row.waybill_number))).sort((a,b) => String(a.imported_at || '').localeCompare(String(b.imported_at || '')));
-    const plans: Row[] = [], logs: Row[] = [], skipped = { stock: 0,waybills: 0,details: 0,limit: 0,return_checks:0 }; const now = new Date().toISOString();
-    for (const order of orders.filter(recovery?recoveryReady:ready).sort((a,b) => String(a.created_at).localeCompare(String(b.created_at)))) {
-      if (plans.length >= (recovery?50:200)) { skipped.limit++; continue; }
+    const plans: Row[] = [], logs: Row[] = [], skipped = { stock: 0,waybills: 0,details: 0,limit: 0,return_checks:0,...(sheet?{payment:0}:{}) }; const now = new Date().toISOString();
+    for (const order of orders.filter(order=>(recovery?recoveryReady:ready)(order) && (sheet?sheet.orderIds.includes(String(order.id)) && (!order.sheet_confirm_hold||order.sheet_confirm_hold===sheet.operationId):!order.sheet_confirm_hold)).sort((a,b) => String(a.created_at).localeCompare(String(b.created_at)))) {
+      if (plans.length >= (sheet?1000:recovery?50:200)) { skipped.limit++; continue; }
+      if(sheet&&order.order_source==='Website'&&order.payment_method==='Bank Payment'&&order.payment_verification_status!=='Approved'){skipped.payment=(skipped.payment||0)+1;continue;}
       if(recovery&&unchecked.length&&order.stock_allocated!==true){skipped.return_checks++;continue;}
       if (order.stock_allocated===true&&order.stock_status!=='Allocated'){skipped.details++;continue;}
       if (!order.customer_name || !order.phone || !order.address || !(order.fardar_city || order.city) || !Number.isFinite(Number(order.total_amount))) { skipped.details++; continue; }
@@ -112,12 +114,12 @@ export const returnPackingHandler = async (request: Request, storage: ReturnStor
       logs.push(...history);
       const at = available.findIndex(row => String(row.waybill_number) === wb); if (at >= 0) available.splice(at,1);
     }
-    const prepared = { operation_id: id,batch_id: (recovery?'PACK-RECOVERY-':'PACK-RETURN-') + id,phase: recovery&&!plans.length?'complete':'prepared',created_at: now,actor: returnActor(user),plans,order_ids: plans.map(plan => plan.id),products_after: products,stock_history: logs,settings: catalog.payload.settings || {},skipped,
-      ...(recovery?{kind:'confirm_recovery',previous_packing_pending:!!rows.find(row=>row.key===RETURN_CONTROL_KEY)?.payload?.packing_pending}:{}) };
+    const prepared = { operation_id: id,batch_id: sheet?.batchId || (recovery?'PACK-RECOVERY-':'PACK-RETURN-') + id,phase: recovery&&!plans.length?'complete':'prepared',created_at: now,actor: returnActor(user),plans,order_ids: plans.map(plan => plan.id),products_after: products,stock_history: logs,settings: catalog.payload.settings || {},skipped,
+      ...(recovery?{kind:sheet?'sheet_confirm':'confirm_recovery',previous_packing_pending:!!rows.find(row=>row.key===RETURN_CONTROL_KEY)?.payload?.packing_pending}:{}) };
     if(recovery&&!plans.length){delete (prepared as Row).products_after;return {rows:setJournal(rows,prepared),result:prepared};}
     return { rows: saveReturnCatalog(setReturnPackingPending(setJournal(rows,prepared),true),catalog.payload.products),result: prepared };
   });
-  if (journal.phase === 'complete') return returnPackingHandler(new Request(new URL(basePath+'/' + id,request.url)),storage,user,recovery);
+  if (journal.phase === 'complete') return returnPackingHandler(new Request(new URL(basePath+'/' + id,request.url)),storage,user,recovery,sheet);
   // Recovery requests advance one durable phase at a time to keep each request
   // bounded. Repeating the same ID resumes the saved plan after a timeout.
   if(recovery&&input.advance!==true)return returnJson({ok:true,pending:true,phase:journal.phase,operation_id:id});
@@ -158,7 +160,7 @@ export const returnPackingHandler = async (request: Request, storage: ReturnStor
       return { rows: setJournal(saveReturnCatalog(rows,current.products_after),next),result: next };
     });
   }
-  if(recovery&&journal.phase==='complete')return returnPackingHandler(new Request(new URL(basePath+'/'+id,request.url)),storage,user,recovery);
+  if(recovery&&journal.phase==='complete')return returnPackingHandler(new Request(new URL(basePath+'/'+id,request.url)),storage,user,recovery,sheet);
   if(recovery&&startedPhase==='prepared')return returnJson({ok:true,pending:true,phase:journal.phase,operation_id:id});
   if (journal.phase === 'stock_saved') {
     await storage.updateOrders(new Map(journal.plans.map((plan: Row) => [plan.id,(order: Row) => {
@@ -168,8 +170,9 @@ export const returnPackingHandler = async (request: Request, storage: ReturnStor
         ...(plan.new_allocation ? { stock_allocated_at: journal.created_at,stock_allocated_by: journal.actor } : {}),
         waybill_number: plan.waybill,courier_name: plan.courier_name,shipment_mode: 'manual',fardar_city: order.fardar_city || order.city,city_verified: true,
         delivery_status: 'Ready to Ship',tracking_status: 'Ready for Packing',invoice_pack_batch_id: journal.batch_id,return_packing_operation: id,
-        fardar_csv_exported_at:journal.created_at,fardar_csv_exported_by:journal.actor,fardar_csv_export_batch_id:journal.batch_id,fardar_csv_exported_waybill:plan.waybill,
-        waybill_protection_locked:true,waybill_protection_reason:reason+': invoices and Fardar CSV created together.' };
+        ...(!sheet?{fardar_csv_exported_at:journal.created_at,fardar_csv_exported_by:journal.actor,fardar_csv_export_batch_id:journal.batch_id,fardar_csv_exported_waybill:plan.waybill}:{}),
+        waybill_protection_locked:true,waybill_protection_reason:sheet?reason+': invoice saved.':reason+': invoices and Fardar CSV created together.' };
+      if(sheet)delete updated.sheet_confirm_hold;
       const result = applyInvoiceQueue([updated],[String(updated.id)],journal.batch_id,journal.settings,journal.actor);
       const saved=result.updatedOrders[0]||(result.results[0]?.status==='already_saved'?result.results[0].order:undefined);
       if (!saved) returnFail('Invoice validation failed for ' + plan.order_number + '.'); return saved;
@@ -181,5 +184,5 @@ export const returnPackingHandler = async (request: Request, storage: ReturnStor
       return { rows: saved,result: next };
     });
   }
-  return returnPackingHandler(new Request(new URL(basePath+'/' + id,request.url)),storage,user,recovery);
+  return returnPackingHandler(new Request(new URL(basePath+'/' + id,request.url)),storage,user,recovery,sheet);
 };

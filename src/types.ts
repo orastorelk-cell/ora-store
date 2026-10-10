@@ -223,6 +223,14 @@ export interface Order {
   delivery_visible_fee_snapshot?: number;
   call_center_status?: 'Pending' | 'Confirmed' | 'No Answer' | 'Cancelled' | 'Reschedule';
   call_center_updated_at?: string;
+  confirm_upload_batch_id?: string;
+  invoice_confirm_snapshot?: {
+    captured_at:string;city?:string;district?:string;normal_total?:number;offer?:string;discount?:number;
+    delivery_fee?:number;gift_wrap?:string;wrapping_cost?:number;final_total?:number;
+    items:{item_code:string;item_name?:string;variant?:string;qty:number;unit_price:number;line_total?:number;item_action?:string}[];
+  };
+  sheet_confirm_hold?: string;
+  sheet_confirm_import?: {spreadsheet_id:string;fingerprint:string;operation_id:string;saved_at:string};
   cancelled_at?: string;
   cancelled_by?: string;
   cancel_reason?: string;
