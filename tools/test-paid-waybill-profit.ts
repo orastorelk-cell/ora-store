@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { build } from 'esbuild';
-import { buildPaidWaybillProfitReport as buildReport, selectSavedPaidProfitOrders, profitAdvertisingPeriodKey, parseProfitWaybillFile, profitAdvertisingSummary, profitSystemDay, PROFIT_PACKING_COST } from '../src/lib/paidWaybillProfit';
+import { buildPaidWaybillProfitReport as buildReport, selectSavedPaidProfitOrders, profitAdvertisingPeriodKey, parseProfitWaybillFile, parseProfitWaybillUpload, profitAdvertisingSummary, profitSystemDay, PROFIT_PACKING_COST } from '../src/lib/paidWaybillProfit';
 import { createPaidWaybillProfitPdf } from '../src/lib/paidWaybillProfitPdf';
 import { profitBatchFixture, profitOrderFixture as order, profitPurchaseFixture as purchase } from './profit-report-fixtures';
 import type { Order, ReturnRecord } from '../src/types';
@@ -51,7 +51,22 @@ const noCourierReport = buildReport({ orders: [noCourier], purchases, waybills: 
 assert.equal(noCourierReport.rows[0].courier, null, 'Do not substitute the customer delivery fee or internal estimate for the actual Fardar charge.');
 assert.equal(noCourierReport.rows[0].profit, null);
 assert.equal(buildReport({ orders: [earlier], purchases: [], waybills: ['18160001'] }).rows[0].purchasing, null);
-assert.equal(buildReport({ orders: [earlier], purchases: [purchase({ created_at: '2026-10-01T09:00:00Z' })], waybills: ['18160001'] }).rows[0].profit, null, 'Later purchases must not rewrite the cost of older allocations.');
+const fallback = buildReport({ orders: [earlier], purchases: [purchase({ created_at: '2026-10-01T09:00:00Z' })], waybills: ['18160001'] });
+assert.equal(fallback.rows[0].purchasing, 450, 'An older order with missing history uses the latest matching Purchasing price.');
+assert.equal(fallback.rows[0].profit, 300);
+assert.equal(fallback.rows[0].items[0].allocations[0].costBasis, 'latest-purchase');
+assert.equal(buildReport({ orders: [earlier], purchases: [...purchases, purchase({ id: 'future', unit_buying_price: 950, created_at: '2026-10-01T09:00:00Z' })] }).rows[0].purchasing, 450, 'Complete FIFO history keeps its recorded cost.');
+const sixMissing = immutable(Array.from({ length: 6 }, (_, i) => order({ id: `missing-${i}`, waybill_number: `FALLBACK-${i}`, stock_allocated: false })));
+const latest = purchase({ id: 'latest', po_number: 'PO-LATEST', unit_buying_price: 600, created_at: '2026-10-10T09:00:00Z' });
+const missingBefore = JSON.stringify(sixMissing);
+const filledSix = buildReport({ orders: sixMissing, purchases: [latest, purchase({ unit_buying_price: 500 }), purchase({ sku: 'R0053-GREEN', variant_sku: 'R0053-GREEN', unit_buying_price: 2000, created_at: '2026-10-10T12:00:00Z' })] });
+assert.equal(filledSix.totals.ready, 6);
+assert.equal(filledSix.totals.purchasing, 3600);
+assert(filledSix.rows.every(row => row.items[0].allocations[0].reference === 'PO-LATEST'));
+assert.equal(JSON.stringify(sixMissing), missingBefore, 'Latest-price reporting does not allocate stock, change payment state or unlock invoices.');
+const partial = order({ items: [{ ...earlier.items[0], quantity: 3, subtotal: 3000 }], total_amount: 3250, cod_payment_amount: 3250 });
+assert.equal(buildReport({ orders: [partial], purchases: [purchase(), latest] }).rows[0].purchasing, 1800, 'A Pending item uses its full quantity at the latest unit price.');
+assert.equal(buildReport({ orders: sixMissing, purchases: [latest, purchase({ unit_buying_price: 0, created_at: '2026-10-10T12:00:00Z' })] }).rows[0].purchasing, 0, 'A recorded free purchase is a valid zero cost.');
 assert.equal(buildReport({ orders: [earlier], purchases: [purchase({ sku: 'R0053-GREEN', variant_sku: 'R0053-GREEN', variant_id: 'green' })], waybills: ['18160001'] }).rows[0].purchasing, null, 'Variants must match exactly.');
 
 const bank = order({ payment_method: 'Bank Payment', payment_paid_type: 'Full', cod_payment_received: false, payment_received_amount: 1250 });
@@ -124,6 +139,9 @@ const bundle = order({ id: 'bundle', waybill_number: 'BUNDLE', items: [{ ...earl
 const bundleReport = buildReport({ orders: [bundle], purchases, waybills: ['BUNDLE'] });
 assert.equal(bundleReport.rows[0].purchasing, 2100, 'Bundle cost uses actual physical components and quantities.');
 assert.equal(bundleReport.rows[0].packing, 100);
+const fallbackBundle = buildReport({ orders: [{ ...bundle, stock_allocated: false }], purchases: [latest] });
+assert.equal(fallbackBundle.rows[0].purchasing, 2400, 'Latest component price is multiplied by component quantity and bundle quantity.');
+assert.equal(fallbackBundle.rows[0].items[0].allocations[0].quantity, 4);
 
 const returned: ReturnRecord = { id: 'returned', order_id: earlier.id, order_number: earlier.order_number, waybill_number: '18160001', checked_by: 'Test', checked_at: '2026-09-02T09:00:00Z', status: 'Verified',
   items: [{ product_id: 'watch', sku: 'R0053-BLACK', variant_id: 'black', product_name: 'Sport Watch', expected_qty: 1, good_qty: 1, missing_qty: 0, damaged_qty: 0 }] };
@@ -142,6 +160,10 @@ assert.equal(parseProfitWaybillFile('Order;Waybill Number\nFB-1;18160001').colum
 assert.equal(parseProfitWaybillFile('Order\tWaybill\nFB-1\t18160001').column, 1);
 assert.equal(parseProfitWaybillFile('Customer,Parcel\nSample,18160001', ['18160001']).column, 1);
 assert.throws(() => parseProfitWaybillFile('Waybill,Name\n"18160001,broken'), /unfinished/);
+assert.deepEqual(parseProfitWaybillUpload('Waybill Number,Other\n18160001,x\n18160001.0,y\n18160002,z'), ['18160001', '18160001', '18160002']);
+assert.deepEqual(parseProfitWaybillUpload('18160001\n18160002'), ['18160001', '18160002']);
+assert.throws(() => parseProfitWaybillUpload('Order,Name\nFB-000001,Example'), /column/);
+assert.equal(buildReport({ orders: [{ ...earlier, cod_payment_received: false, payment_received_amount: 1250 }], purchases, waybills: ['18160001'] }).totals.ready, 0, 'Uploading a waybill does not treat an unreceived COD payment as revenue.');
 
 const batch = profitBatchFixture();
 const batchReport = buildReport(batch);

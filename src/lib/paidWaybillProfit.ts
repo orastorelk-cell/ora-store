@@ -12,6 +12,7 @@ export interface PurchaseAllocation {
   sku: string;
   quantity: number;
   unitCost: number | null;
+  costBasis?: 'latest-purchase';
 }
 export interface ProfitItem {
   name: string;
@@ -115,6 +116,16 @@ export function parseProfitWaybillFile(text: string, knownWaybills: string[] = [
   };
 }
 
+/** Import a report selection only; this never creates orders, payments or invoices. */
+export function parseProfitWaybillUpload(text: string, knownWaybills: string[] = []) {
+  if (text.length > 2_000_000) throw new Error('Choose a waybill CSV / text file smaller than 2 MB.');
+  const parsed = parseProfitWaybillFile(text, knownWaybills);
+  if (parsed.column < 0) throw new Error('A Waybill / Tracking Number column is required.');
+  const waybills = parsed.rows.map(row => normalizeProfitWaybill(row[parsed.column])).filter(Boolean);
+  if (!waybills.length || waybills.length > 10000) throw new Error('The file must contain 1 to 10,000 waybills.');
+  return waybills;
+}
+
 const inventoryKey = (selection: { sku?: string; product_id: string; variant_id?: string }) =>
   skuKey(selection.sku) || `${selection.product_id}::${selection.variant_id || 'base'}`;
 const validQuantity = (value: unknown) => Number.isInteger(Number(value)) && Number(value) > 0;
@@ -147,7 +158,8 @@ export function selectSavedPaidProfitOrders(orders: Order[], selection: PaidProf
 
 /** Reconstruct FIFO cost from purchased quantities across ALL allocated orders, not just this upload.
  * This ledger is private, read-only report state. It never changes inventory, orders or purchases.
- * Missing purchase units remain unknown; catalog buying_price/effective_buying_price are never used.
+ * Missing units are resolved separately with the latest matching Purchasing price for the report.
+ * Catalog buying_price/effective_buying_price are never used.
  */
 function purchaseCosts(orders: Order[], purchases: PurchaseOrder[], returns: ReturnRecord[]) {
   type Lot = PurchaseAllocation & { remaining: number };
@@ -238,6 +250,20 @@ function purchaseCosts(orders: Order[], purchases: PurchaseOrder[], returns: Ret
   return costByOrder;
 }
 
+/** Price fallback only: it neither consumes stock nor rewrites historical FIFO lots. */
+function latestPurchasePrices(purchases: PurchaseOrder[]) {
+  const latest = new Map<string, PurchaseAllocation>();
+  const sorted = [...purchases].filter(purchase => validQuantity(purchase.quantity_added)
+    && Number.isFinite(timestamp(purchase.created_at)) && amount(purchase.unit_buying_price) !== null)
+    .sort((a, b) => timestamp(b.created_at) - timestamp(a.created_at) || b.id.localeCompare(a.id, 'en', { numeric: true }));
+  for (const purchase of sorted) {
+    const sku = inventoryKey({ ...purchase, sku: purchase.variant_sku || purchase.sku });
+    if (!latest.has(sku)) latest.set(sku, { purchaseId: purchase.id, reference: purchase.po_number || purchase.id, sku,
+      quantity: 0, unitCost: amount(purchase.unit_buying_price), costBasis: 'latest-purchase' });
+  }
+  return latest;
+}
+
 function receivedPayment(order: Order, courier: number | null, basis: PaymentAmountBasis) {
   if (order.cod_payment_received) {
     const cod = amount(order.cod_payment_amount);
@@ -267,6 +293,7 @@ export function buildPaidWaybillProfitReport(input: {
   const normalized = (input.waybills || []).map(normalizeProfitWaybill).filter(Boolean);
   const waybills = [...new Set(normalized)];
   const costs = purchaseCosts(input.orders, input.purchases, input.returns || []);
+  const latestPrices = latestPurchasePrices(input.purchases);
   const byWaybill = new Map<string, Order[]>();
   input.orders.forEach(order => {
     const key = normalizeProfitWaybill(order.waybill_number);
@@ -286,7 +313,10 @@ export function buildPaidWaybillProfitReport(input: {
     else if (savedOrder && (byWaybill.get(waybill)?.length || 0) > 1) row.issues.push('Waybill belongs to multiple orders. Resolve the duplicate.');
     if (!row.systemDate) row.issues.push('System arrival date is missing.');
     if (order.order_status === 'Cancelled' || order.payment_status === 'Refunded' || excluded(order)) row.issues.push('Cancelled, refunded, duplicate or test order: excluded.');
-    else row.eligible = Boolean(savedProfitPaymentKind(order));
+    else {
+      row.eligible = Boolean(savedProfitPaymentKind(order));
+      if (!row.eligible) row.issues.push('This waybill has no saved COD Received or full online payment.');
+    }
     row.courier = amount(order.fardar_delivery_fee);
     if (row.courier === null) row.issues.push('Actual Fardar delivery cost is missing.');
     const payment = receivedPayment(order, row.courier, input.paymentBasis || 'auto');
@@ -295,13 +325,23 @@ export function buildPaidWaybillProfitReport(input: {
     row.packing = PROFIT_PACKING_COST;
     row.items = (order.items || []).map((item, index) => {
       const qty = Number(item.quantity), unit = amount(item.unit_price);
-      const allocations = costs.get(order.id)?.[index] || [];
       const valid = validQuantity(qty);
-      const purchasing = valid && allocations.length && allocations.every(allocation => allocation.unitCost !== null)
-        ? round(allocations.reduce((sum, allocation) => sum + allocation.quantity * allocation.unitCost!, 0)) : null;
+      const required = item.product_type === 'bundle' && item.bundle_components?.length
+        ? item.bundle_components.map(component => ({ sku: inventoryKey(component), quantity: qty * Math.max(1, Number(component.quantity_per_bundle || 1)) }))
+        : [{ sku: inventoryKey(item), quantity: qty }];
+      const original = costs.get(order.id)?.[index];
+      const uncovered: PurchaseAllocation[] = valid ? required.map(selection => ({ purchaseId: '', reference: 'Missing purchase history',
+        sku: selection.sku, quantity: selection.quantity, unitCost: null })) : [];
+      const completeHistory = original?.length && original.every(allocation => allocation.unitCost !== null);
+      const allocations = (completeHistory ? original : uncovered).map(allocation => {
+        const latest = allocation.unitCost === null ? latestPrices.get(allocation.sku) : undefined;
+        return latest ? { ...latest, quantity: allocation.quantity } : allocation;
+      });
+      const purchasing = valid && allocations.length && allocations.every(allocation => allocation.unitCost !== null && validQuantity(allocation.quantity))
+        ? amount(round(allocations.reduce((sum, allocation) => sum + allocation.quantity * allocation.unitCost!, 0))) : null;
       const sales = valid ? amount(item.subtotal) ?? (unit === null ? null : round(unit * qty)) : null;
       if (!valid || sales === null || unit === null) row.issues.push(`${item.sku || item.product_name}: sale price / quantity needs review.`);
-      if (purchasing === null) row.issues.push(`${item.sku || item.product_name}: purchasing history does not cover the allocated quantity.`);
+      if (purchasing === null) row.issues.push(`${item.sku || item.product_name}: a matching Purchasing price is missing.`);
       return { name: `${item.product_name}${item.variant_name ? ` - ${item.variant_name}` : ''}`, sku: item.sku, quantity: qty, unitSale: unit, sales, purchasing, allocations };
     });
     if (!row.items.length) row.issues.push('This order has no items.');

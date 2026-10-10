@@ -6,7 +6,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { build } from 'esbuild';
 import { allocateFacebookAdCosts, emptyFacebookAdLedger, facebookAdCode, facebookAllocatedAdvertisingSummary,
-  mergeFacebookAdLedger, parseFacebookAdCostCsv, readFacebookAdLedger, FACEBOOK_AD_LEDGER_KEY } from '../src/lib/facebookProfitAds';
+  mergeFacebookAdLedger, parseFacebookAdCostCsv, readFacebookAdLedger, facebookReportingPeriods, FACEBOOK_AD_LEDGER_KEY } from '../src/lib/facebookProfitAds';
 import { buildPaidWaybillProfitReport } from '../src/lib/paidWaybillProfit';
 import { createPaidWaybillProfitPdf } from '../src/lib/paidWaybillProfitPdf';
 import { profitOrderFixture, profitPurchaseFixture } from './profit-report-fixtures';
@@ -103,6 +103,33 @@ const pennyLedger = mergeFacebookAdLedger(emptyFacebookAdLedger(), [{ ...rows[0]
 const pennies = allocateFacebookAdCosts(pennyLedger, cancelled, report, selection).cohorts[0];
 assert.equal(Math.round((pennies.paidCost + pennies.pendingCost + pennies.lostCost + pennies.unmatchedCost) * 100), 100, 'Every cent reconciles across all states.');
 
+// The uploaded waybills select revenue and item-ad costs independently of CSV reporting dates.
+const waybillOrders = orders.map((order, index) => index < 2 ? { ...order, stock_allocated: false, created_at: '2026-10-09T09:00:00Z', cod_payment_received_at: '2026-10-10T09:00:00Z' }
+  : index === 8 ? { ...order, order_status: 'Cancelled' as const } : order);
+const waybillPurchases = [...purchases, profitPurchaseFixture({ id: 'last-r0003', po_number: 'PO-LATEST-R0003', sku: 'R0003-BLUE', variant_sku: 'R0003-BLUE', unit_buying_price: 600, created_at: '2026-10-10T09:00:00Z' })];
+const waybills = [waybillOrders[0].waybill_number!, waybillOrders[1].waybill_number!, waybillOrders[0].waybill_number!];
+const waybillReport = buildPaidWaybillProfitReport({ orders: waybillOrders, purchases: waybillPurchases, waybills });
+assert.equal(waybillReport.rows.length, 2); assert.equal(waybillReport.duplicates, 1);
+assert.equal(waybillReport.totals.purchasing, 1200); assert.equal(waybillReport.totals.beforeAds, 300);
+const scopedLedger = mergeFacebookAdLedger(ledger, [{ ...rows[0], from: '2026-09-20', to: '2026-09-30', spend: 100, leads: 1 },
+  { ...rows[1], from: '2026-09-20', to: '2026-09-30', spend: 200 }, { ...rows[0], code: 'R0048', campaign: 'R0048', adSet: 'R0048', spend: 999, leads: 3 },
+  { ...rows[0], code: 'R0017', campaign: 'R0017', adSet: 'R0017', spend: 250, leads: 0 }],
+  { ...meta, expectedVersion: 1, importedAt: '2026-10-10T17:00:00Z' }).ledger;
+const waybillPeriods = facebookReportingPeriods(scopedLedger, ['2026-10-01|2026-10-08']);
+assert.deepEqual(waybillPeriods, [{ from: '2026-10-01', to: '2026-10-08' }]);
+const scope = { orderIds: waybillReport.rows.map(row => row.orderId!), reportingPeriods: waybillPeriods };
+const waybillAllocation = allocateFacebookAdCosts(scopedLedger, waybillOrders, waybillReport, {}, scope);
+assert.equal(waybillAllocation.paidCost, 855.58, 'Only uploaded paid waybills contribute their item-ad costs.');
+assert.equal(waybillAllocation.lostCost, 0, 'A different cancelled waybill does not reduce this uploaded set.');
+assert.equal(waybillAllocation.commercialCost, 1028.42, 'Use full Commercial spend for the selected CSV period, excluding other saved periods.');
+assert.equal(waybillAllocation.unmatchedCost, 999, 'Unmatched costs for other leads remain visible and separate.');
+assert.equal(facebookAllocatedAdvertisingSummary(waybillReport, waybillAllocation, '').netProfit, -1584);
+const scopedBefore = JSON.stringify({ scopedLedger, waybillOrders, waybillPurchases });
+allocateFacebookAdCosts(scopedLedger, waybillOrders, waybillReport, {}, scope);
+assert.equal(JSON.stringify({ scopedLedger, waybillOrders, waybillPurchases }), scopedBefore);
+const missingScoped = allocateFacebookAdCosts(emptyFacebookAdLedger(), waybillOrders, waybillReport, {}, scope);
+assert.equal(facebookAllocatedAdvertisingSummary(waybillReport, missingScoped, '').netProfit, null, 'Selected waybills still need their own matching ad costs.');
+
 if (process.argv[2]) {
   const uploaded = parseFacebookAdCostCsv(fs.readFileSync(process.argv[2], 'utf8'));
   assert.equal(uploaded.length, 13); assert.equal(uploaded[0].code, 'CB-R0010-R0044');
@@ -176,9 +203,24 @@ try {
   assert(!loading.includes('Rs. -1,411.79'), 'Never label a profit complete before durable ad costs finish loading.');
   const viewer = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, { ...props, canImportAds: false }));
   assert(!viewer.includes('Upload Facebook Cost CSV'));
+  const uploadProps = { ...props, orders: waybillOrders, purchases: waybillPurchases, advertisingLedger: scopedLedger, useUploadedWaybills: true,
+    initialDraft: { ...props.initialDraft, fromDate: '2026-12-31', toDate: '2026-01-01', waybills, waybillFileName: 'Fardar-waybill-selection.csv', facebookPeriods: ['2026-10-01|2026-10-08'] } };
+  const selected = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, uploadProps));
+  assert(selected.includes('Upload Waybill CSV') && selected.includes('Fardar-waybill-selection.csv'));
+  assert(selected.includes('Facebook CSV Reporting Date Range') && selected.includes('01/10/2026 — 08/10/2026'));
+  assert(!selected.includes('aria-label="Profit system date from"'), 'CSV reporting dates are displayed instead of filtering the waybills by system dates.');
+  assert(selected.includes('Rs. -1,584.00') && selected.includes('PO-LATEST-R0003'));
+  const selectedTable = selected.match(/aria-label="Paid waybill profit details"[\s\S]*?<tbody[^>]*>([\s\S]*?)<\/tbody>/)![1];
+  assert(selectedTable.includes('AD-QA-0') && selectedTable.includes('AD-QA-1'));
+  assert(!selectedTable.includes('AD-QA-2'), 'Other paid orders are excluded from the uploaded report.');
+  const beforeUpload = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, { ...uploadProps, initialDraft: { ...uploadProps.initialDraft, waybills: [], waybillFileName: '' } }));
+  assert(!beforeUpload.includes('aria-label="Paid waybill profit details"'), 'Do not show all saved paid orders before the waybill upload.');
+  assert(beforeUpload.includes('Upload Waybill CSV') && beforeUpload.includes('Upload Facebook Cost CSV'));
 } finally { fs.unlinkSync(panelPath); }
 
 const pdf = createPaidWaybillProfitPdf(report, { facebook: '99999', tiktok: '', sourceName: 'Synthetic Facebook allocation QA', paymentBasis: 'auto', facebookAllocation: allocated });
 assert(pdf.getNumberOfPages() >= 3);
 if (process.argv[3]) { fs.mkdirSync(path.dirname(process.argv[3]), { recursive: true }); fs.writeFileSync(process.argv[3], Buffer.from(pdf.output('arraybuffer'))); }
-console.log('PASS: Actual CSV parsing, exact CB codes, original lead dates, unique leads, paid/pending/lost/unmatched allocation, cents reconciliation, later payments, immutable orders, replacement imports, overlap rejection, stale versions, native encrypted R2 persistence, private API permissions, concurrent catalog edits, existing report UI and matching PDF totals.');
+const waybillPdf = createPaidWaybillProfitPdf(waybillReport, { facebook: '99999', tiktok: '', sourceName: 'Uploaded waybills: Fardar-waybill-selection.csv', paymentBasis: 'auto', facebookAllocation: waybillAllocation, facebookReportingPeriods: waybillPeriods });
+if (process.argv[4]) { fs.mkdirSync(path.dirname(process.argv[4]), { recursive: true }); fs.writeFileSync(process.argv[4], Buffer.from(waybillPdf.output('arraybuffer'))); }
+console.log('PASS: Actual CSV parsing, exact CB codes, original lead dates, uploaded-waybill selection, latest Purchasing prices, CSV reporting dates, separate costs for other leads, cents reconciliation, later payments, immutable records, replacement imports, overlap rejection, native encrypted R2 permissions and matching report / PDF totals.');

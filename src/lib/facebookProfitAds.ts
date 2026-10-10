@@ -158,6 +158,20 @@ export interface FacebookAdAllocation {
   cohorts: FacebookAdCohort[]; orderCosts: Map<string, { cost: number; state: 'paid' | 'pending' | 'lost'; from: string; to: string; code: string }>;
   paidCost: number; lostCost: number; commercialCost: number; pendingCost: number; unmatchedCost: number;
   missingOrderIds: string[]; issues: string[]; totalSpend: number;
+  waybillScoped?: boolean;
+}
+export interface FacebookWaybillScope {
+  orderIds: readonly string[];
+  reportingPeriods: Array<{ from: string; to: string }>;
+}
+/** These are CSV reporting dates, not order arrival or payment dates. */
+export function facebookReportingPeriods(ledger: FacebookAdLedger, keys?: string[]) {
+  const latestImport = ledger.rows.reduce((last, row) => row.importedAt > last ? row.importedAt : last, '');
+  const selected = keys ? new Set(keys) : undefined;
+  const periods = new Map<string, { from: string; to: string }>();
+  for (const row of ledger.rows) if (selected ? selected.has(`${row.from}|${row.to}`) : row.importedAt === latestImport)
+    periods.set(`${row.from}|${row.to}`, { from: row.from, to: row.to });
+  return [...periods.values()].sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
 }
 const facebookOrder = (order: Order) => order.order_source === 'Facebook Ads' || /^FB-/i.test(order.order_number);
 const lostOrder = (order: Order & { return_tracking_waybill?: string }) => order.order_status === 'Cancelled' || order.call_center_status === 'Cancelled'
@@ -172,12 +186,15 @@ const inSelection = (order: Order, selection: PaidProfitSelection) => {
 
 /** Read-only management allocation. The full incurred spend is retained in the ledger. */
 export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[], report: PaidWaybillProfitReport,
-  selection: PaidProfitSelection = {}): FacebookAdAllocation {
+  selection: PaidProfitSelection = {}, scope?: FacebookWaybillScope): FacebookAdAllocation {
+  const selectedOrderIds = scope ? new Set(scope.orderIds) : undefined;
+  const selectedPeriod = (row: { from: string; to: string }) => scope?.reportingPeriods.some(period => period.from === row.from && period.to === row.to);
   const groups = new Map<string, FacebookAdCohort>();
   const issues: string[] = [];
   let commercialCost = 0;
   for (const row of ledger.rows) {
     if (!row.code) {
+      if (scope) { if (selectedPeriod(row)) commercialCost += row.spend; continue; }
       if ((!selection.fromDate || row.to >= selection.fromDate) && (!selection.toDate || row.from <= selection.toDate)) {
         if ((selection.fromDate && row.from < selection.fromDate) || (selection.toDate && row.to > selection.toDate))
           issues.push(`Commercial cost covers ${row.from} to ${row.to}. Select its full period or upload daily costs for a narrower report.`);
@@ -237,18 +254,19 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
       cohort[state]++; cohort[`${state}Cost`] = round(cohort[`${state}Cost`] + cost);
       orderCosts.set(order.id, { cost, state, from: cohort.from, to: cohort.to, code: cohort.code });
       if (state === 'paid' && selectedReady.has(order.id)) paidCost += cost;
-      if (state === 'lost' && inSelection(order, selection)) lostCost += cost;
+      if (state === 'lost' && (selectedOrderIds ? selectedOrderIds.has(order.id) : inSelection(order, selection))) lostCost += cost;
     });
     cohort.unmatchedCost = (cents(cohort.spend) - allocated) / 100;
   }
   const selectedCohorts = new Set(report.rows.flatMap(row => { const saved = row.orderId ? orderCosts.get(row.orderId) : undefined;
     return saved ? [`${saved.code}|${saved.from}|${saved.to}`] : []; }));
-  const visible = cohorts.filter(row => (!selection.fromDate || row.to >= selection.fromDate) && (!selection.toDate || row.from <= selection.toDate)
+  const visible = cohorts.filter(row => (scope ? selectedPeriod(row) : (!selection.fromDate || row.to >= selection.fromDate) && (!selection.toDate || row.from <= selection.toDate))
     || selectedCohorts.has(`${row.code}|${row.from}|${row.to}`));
   for (const cohort of visible) {
-    issues.push(...cohort.issues.map(issue => `${cohort.code}: ${issue}`));
+    if (!scope || selectedCohorts.has(`${cohort.code}|${cohort.from}|${cohort.to}`)) issues.push(...cohort.issues.map(issue => `${cohort.code}: ${issue}`));
     if (!cohort.leads && cohort.spend > 0) {
-      if ((selection.fromDate && cohort.from < selection.fromDate) || (selection.toDate && cohort.to > selection.toDate))
+      if (scope) continue; // No selected waybill can own a zero-lead item-ad expense.
+      else if ((selection.fromDate && cohort.from < selection.fromDate) || (selection.toDate && cohort.to > selection.toDate))
         issues.push(`${cohort.code}: zero-lead spend covers a wider period. Select ${cohort.from} to ${cohort.to}.`);
       else lostCost += cohort.spend;
     }
@@ -257,10 +275,10 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
     && orderCosts.get(row.orderId)?.state !== 'paid').map(row => row.orderId!);
   return { cohorts: visible, orderCosts, paidCost: round(paidCost), lostCost: round(lostCost), commercialCost: round(commercialCost),
     pendingCost: round(visible.reduce((sum, row) => sum + row.pendingCost, 0)), unmatchedCost: round(visible.reduce((sum, row) => sum + row.unmatchedCost, 0)),
-    missingOrderIds, issues: [...new Set(issues)], totalSpend: round(ledger.rows.reduce((sum, row) => sum + row.spend, 0)) };
+    missingOrderIds, issues: [...new Set(issues)], totalSpend: round(ledger.rows.reduce((sum, row) => sum + row.spend, 0)), waybillScoped: Boolean(scope) };
 }
 
 export function facebookAllocatedAdvertisingSummary(report: PaidWaybillProfitReport, allocation: FacebookAdAllocation, tiktok: string) {
   const result = profitAdvertisingSummary(report, String(round(allocation.paidCost + allocation.lostCost + allocation.commercialCost)), tiktok);
-  return { ...result, netProfit: allocation.issues.length || allocation.missingOrderIds.length || allocation.unmatchedCost > 0 ? null : result.netProfit };
+  return { ...result, netProfit: allocation.issues.length || allocation.missingOrderIds.length || !allocation.waybillScoped && allocation.unmatchedCost > 0 ? null : result.netProfit };
 }

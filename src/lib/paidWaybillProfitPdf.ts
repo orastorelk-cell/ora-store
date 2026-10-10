@@ -10,6 +10,7 @@ export interface ProfitPdfOptions {
   generatedAt?: Date;
   facebookAllocation?: FacebookAdAllocation;
   advertisingError?: string;
+  facebookReportingPeriods?: Array<{ from: string; to: string }>;
 }
 
 export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, options: ProfitPdfOptions) {
@@ -33,7 +34,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
   const fileLines = doc.splitTextToSize(`Report source: ${text(options.sourceName || 'Saved COD Received and paid online orders')}`, width);
   doc.text(fileLines, left, 35);
   let y = 35 + fileLines.length * 4 + 2;
-  doc.text(`Selected: ${report.rows.length} paid orders | Complete: ${report.totals.ready} | Needs review: ${report.totals.review}`, left, y);
+  doc.text(`Selected: ${report.rows.length} ${allocation?.waybillScoped ? 'uploaded waybills' : 'paid orders'} | Complete: ${report.totals.ready} | Needs review: ${report.totals.review}`, left, y);
   y += 9;
   const summaryStart = y;
   const rows: Array<[string, number | null]> = [
@@ -55,13 +56,17 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
   const cardX = 181;
   doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.text('ADVERTISING DATE RANGES', cardX, summaryStart);
   doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
-  doc.text('Order arrival dates in the system (Sri Lanka).', cardX, summaryStart + 6);
+  doc.text(options.facebookReportingPeriods ? 'Facebook dates: cost CSV reporting period.' : 'Order arrival dates in the system (Sri Lanka).', cardX, summaryStart + 6);
   let rangeY = summaryStart + 16;
   for (const source of ['Facebook', 'TikTok'] as const) {
     const range = report.ranges[source];
     doc.setFont('helvetica', 'bold'); doc.text(source, cardX, rangeY);
-    doc.setFont('helvetica', 'normal'); doc.text(range ? `${range.from} to ${range.to} (${range.count} orders)` : 'No paid orders from this source', cardX, rangeY + 5);
-    rangeY += 16;
+    const csvPeriods = source === 'Facebook' ? options.facebookReportingPeriods : undefined;
+    const dateText = csvPeriods ? csvPeriods.length ? csvPeriods.length <= 2 ? csvPeriods.map(period => `${period.from} to ${period.to}`).join(' / ')
+      : `${csvPeriods[0].from} to ${csvPeriods.at(-1)!.to} (${csvPeriods.length} CSV periods)` : 'No Facebook cost CSV selected'
+      : range ? `${range.from} to ${range.to} (${range.count} orders)` : 'No paid orders from this source';
+    doc.setFont('helvetica', 'normal'); const lines = doc.splitTextToSize(dateText, 103); doc.text(lines, cardX, rangeY + 5);
+    rangeY += Math.max(16, lines.length * 4 + 8);
   }
   doc.text(`COD amount basis: ${options.paymentBasis}`, cardX, rangeY);
   doc.text(`Packing: Rs. ${PROFIT_PACKING_COST} per order`, cardX, rangeY + 6);
@@ -71,14 +76,14 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
   doc.setFillColor(complete ? positive ? 236 : 254 : 255, complete ? positive ? 253 : 242 : 251, complete ? positive ? 245 : 242 : 235);
   doc.roundedRect(left, y - 4, width, 24, 2, 2, 'F');
   doc.setTextColor(complete ? positive ? 6 : 185 : 146, complete ? positive ? 95 : 28 : 64, complete ? positive ? 70 : 28 : 14);
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.text(allocation ? complete ? 'PAID-ORDER PROFIT AFTER ADVERTISING' : 'PAID-ORDER PROFIT - PENDING REVIEW' : complete ? 'FINAL NET PROFIT' : 'FINAL NET PROFIT - PENDING REVIEW', left + 4, y + 4);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.text(allocation ? complete ? allocation.waybillScoped ? 'UPLOADED-WAYBILL PROFIT AFTER ADVERTISING' : 'PAID-ORDER PROFIT AFTER ADVERTISING' : 'PROFIT - PENDING REVIEW' : complete ? 'FINAL NET PROFIT' : 'FINAL NET PROFIT - PENDING REVIEW', left + 4, y + 4);
   doc.setFontSize(19); doc.text(money(advertising.netProfit), left + width - 4, y + 6, { align: 'right' });
   doc.setFontSize(8); doc.setFont('helvetica', 'normal');
   doc.text(complete ? 'Gross revenue - Purchasing - Fardar - Packing - Facebook - TikTok' : options.advertisingError ? text(options.advertisingError).slice(0, 140) : allocation ? 'Review missing costs, lead matching or delivery confirmation. Pending / unmatched ad spend is shown separately.' : `${report.totals.review} paid order(s) need review. ${advertising.missing.length ? `Enter ${advertising.missing.join(' / ')} cost (0 if none).` : 'Review missing amounts before treating this as a final profit.'}`, left + 4, y + 14);
   doc.setTextColor(55, 65, 81); y += 31;
   const notes = [
     'Summary totals include complete orders only. Every selected paid order is listed in the detail pages.',
-    'Purchasing prices use purchased quantities in date order (FIFO), including other allocated orders and verified good returns. Product-form Buy Price is not used.',
+    'Purchasing uses FIFO history. Items with incomplete history use their full quantity at the latest matching Purchasing price. Product-form Buy Price is not used.',
     'Sale lines show the saved selling prices. Profit uses recorded gross receipts, so order discounts, customer delivery and bank advances are accounted for.',
     'An identified net Fardar remittance is reconciled to gross receipts before subtracting the courier charge once.',
   ];
@@ -92,6 +97,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
       `Pending lead cost: ${money(allocation.pendingCost)} | Unmatched lead cost: ${money(allocation.unmatchedCost)} | Total recorded spend (all saved reports): ${money(allocation.totalSpend)}`,
       'Original Facebook lead dates link each order to its saved cost period. Older records without a lead date use their system date.',
       'Pending costs remain separate until delivered and paid. Full incurred spend remains recorded; this is a management allocation for paid orders.',
+      ...(allocation.waybillScoped ? ['The summary selects uploaded waybills. This table shows all leads in the cost periods; costs for other leads remain separate.'] : []),
     ];
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
     intro.forEach(note => { const lines = doc.splitTextToSize(note, width); doc.text(lines, left, y); y += lines.length * 4 + 2; }); y += 3;
@@ -144,7 +150,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
   report.rows.forEach((row, rowIndex) => {
     const savedCost = row.orderId ? allocation?.orderCosts.get(row.orderId) : undefined;
     const afterFacebook = savedCost?.state === 'paid' && row.profit !== null ? row.profit - savedCost.cost : null;
-    const purchaseLines = row.items.flatMap(item => [money(item.purchasing), ...item.allocations.map(allocation => `${text(allocation.reference)}: ${allocation.quantity} x ${money(allocation.unitCost)}`)]);
+    const purchaseLines = row.items.flatMap(item => [money(item.purchasing), ...item.allocations.map(allocation => `${allocation.costBasis === 'latest-purchase' ? 'Latest price / ' : ''}${text(allocation.reference)}: ${allocation.quantity} x ${money(allocation.unitCost)}`)]);
     const saleLines = row.items.map(item => `${item.quantity} x ${money(item.unitSale)} = ${money(item.sales)}`);
     const cellValues = [
       [text(row.waybill || 'Not assigned'), text(row.orderNumber || 'Not found'), text(row.source || ''), row.issues.length ? 'NEEDS REVIEW' : 'COMPLETE'],
