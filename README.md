@@ -118,6 +118,10 @@ start new imports without pressing the button. Sheet acknowledgments affect only
 matching, successfully saved rows. Edited rows are rechecked before stock
 allocation, and rows changed after invoicing remain unmarked for review.
 
+The Sheet's existing `ORDER ACTION` labels (`CONFIRM ORDER`, `PENDING`,
+`CANCEL ENTIRE ORDER`) stay unchanged. Successful Confirm rows use `#ffd966`;
+Cancel rows use `#cccccc`. Pending and already invoiced rows are left untouched.
+
 `src/lib/confirmSheetPlan.ts` is generated from the production Confirm CSV rules.
 After changing those rules, run `node --import tsx tools/generate-confirm-sheet-plan.ts`.
 The build checks this module for drift.

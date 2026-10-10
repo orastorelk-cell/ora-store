@@ -83,7 +83,8 @@ export const sheetAcknowledgmentRequests = (decisions:SheetDecision[],at:string)
     for(let i=0;i<decision.row_indices.length;i++){
       const row=decision.row_indices[i],isCancel=decision.status==='Cancelled'||(item>=0&&['cancel','cancelled','canceled','cancel item'].includes(normalized(decision.rows[i][item])));
       const range={sheetId:decision.sheetId,startRowIndex:row,endRowIndex:row+1,startColumnIndex:0,endColumnIndex:decision.headers.length};
-      requests.push({repeatCell:{range,cell:{userEnteredFormat:{backgroundColor:isCancel?{red:252/255,green:232/255,blue:230/255}:{red:230/255,green:244/255,blue:234/255}}},fields:'userEnteredFormat.backgroundColor'}});
+      // Keep the existing call-center colours: Confirm #ffd966, Cancel #cccccc.
+      requests.push({repeatCell:{range,cell:{userEnteredFormat:{backgroundColor:isCancel?{red:204/255,green:204/255,blue:204/255}:{red:1,green:217/255,blue:102/255}}},fields:'userEnteredFormat.backgroundColor'}});
       for(const [column,value] of [[status,decision.status],[sync,at]] as const)if(column>=0)requests.push({repeatCell:{range:{...range,startColumnIndex:column,endColumnIndex:column+1},cell:{userEnteredValue:{stringValue:value}},fields:'userEnteredValue'}});
     }
   }

@@ -106,6 +106,7 @@ try{
   assert(!JSON.stringify(connection).includes(f.account.private_key));assert(!JSON.stringify(await f.request('/connection')).includes('BEGIN PRIVATE KEY'));
   assert((await f.admin()).every(row=>!JSON.stringify(row.payload).includes('BEGIN PRIVATE KEY')));
   const before=await f.currentOrders(),oldLocked=canonicalJson(before.find(order=>order.order_number==='FB-000005')),oldPending=canonicalJson(before.find(order=>order.order_number==='FB-000004'));
+  const originalActions=f.tabs.get('CALL CENTER ORDERS')!.map(row=>row[12]);
   const id=crypto.randomUUID();await f.request('/jobs',{operation_id:id});
   const same=await Promise.all([f.request('/jobs',{operation_id:crypto.randomUUID()}),f.request('/jobs',{operation_id:id})]);
   assert(same.every(result=>result.job.operation_id===id),'Double press / another tab must join the same active job');
@@ -128,7 +129,11 @@ try{
   assert.equal(after.find(order=>order.order_number==='TK-000003').order_status,'Cancelled');
   assert.equal(after.find(order=>order.order_number==='FB-000006').stock_allocated,false);
   assert(after.every(order=>!order.sheet_confirm_hold));
-  assert(f.colors.has('1')&&f.colors.has('2'));assert(!f.colors.has('5'),'Pending rows must not get success colours');
+  const colourHex=(colour:any)=>'#'+['red','green','blue'].map(channel=>Math.round(Number(colour?.[channel]||0)*255).toString(16).padStart(2,'0')).join('');
+  for(const row of ['1','2','3','7','8'])assert.equal(colourHex(f.colors.get(row)),'#ffd966','Successfully imported CONFIRM ORDER rows use the existing yellow, including new variant rows and waiting-for-stock orders');
+  assert.equal(colourHex(f.colors.get('4')),'#cccccc','CANCEL ENTIRE ORDER uses the existing grey');
+  assert(!f.colors.has('5'),'PENDING rows must not get success colours');assert(!f.colors.has('6'),'Already invoiced rows must be left unchanged');
+  assert.deepEqual(f.tabs.get('CALL CENTER ORDERS')!.map(row=>row[12]),originalActions,'ORDER ACTION labels and blank continuation rows must stay unchanged');
   const files=await f.request('/jobs/'+id+'/files');assert.equal(files.orders.length,3);assert.equal(parseCsv(returnPackingCsv(files.orders,files.settings)).rows.length,3);
   const csv=returnPackingCsv(files.orders,files.settings);assert.equal(csv.charCodeAt(0),0xfeff);assert(csv.includes('2390'));
   await f.request('/jobs/'+id+'/downloaded',{});await f.request('/jobs/'+id+'/downloaded',{});
