@@ -65,6 +65,7 @@ import {
   CalendarDays,
 } from 'lucide-react';
 import { useStore } from '../../context/StoreContext';
+import PackingBatchMergePanel from './PackingBatchMergePanel';
 import {
   Product,
   Category,
@@ -4830,6 +4831,7 @@ Suitable For:
 
         return (
           <div className="space-y-4">
+            <PackingBatchMergePanel />
             <div data-ora-view-allowed="true" className="rounded-2xl border border-neutral-800 bg-neutral-900 p-5">
               <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4">
                 <div>

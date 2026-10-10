@@ -19,6 +19,9 @@ export const sharedWaybillPoolPatch=()=>({
     text=text.replace(marker,marker+String.raw`
   const [sharedWaybillPoolReady,setSharedWaybillPoolReady]=useState(false);
   const [waybillPoolRetry,setWaybillPoolRetry]=useState(0);
+  const automaticWaybillRunRef=useRef(false);
+  const automaticWaybillRetryTimerRef=useRef<number|null>(null);
+  useEffect(()=>()=>{if(automaticWaybillRetryTimerRef.current!==null)window.clearTimeout(automaticWaybillRetryTimerRef.current);},[]);
   useEffect(()=>{
     if(!adminUser||!getStaffSessionToken())return;
     let stopped=false,busy=false,migrated=false;
@@ -74,6 +77,19 @@ export const sharedWaybillPoolPatch=()=>({
     text=text.replace('  }, [orders, products, waybillRecords]);','  }, [orders, products, waybillRecords, sharedWaybillPoolReady, sharedStoreReady, sharedOrdersReady, waybillPoolRetry]);');
     text=text.replace('importWaybillCsv: (csvText: string, courierName?: string) => { importedCount: number; duplicateCount: number };','importWaybillCsv: (csvText: string, courierName?: string) => Promise<{ importedCount: number; duplicateCount: number }>;');
     text=text.replace('  const importWaybillCsv = (csvText: string,','  const importWaybillCsv = async (csvText: string,');
+    const automaticStart='    if(readyWithoutWaybill.length){\n      void (async()=>{\n        for(const ready of readyWithoutWaybill){';
+    if(!text.includes(automaticStart))throw new Error('Automatic waybill queue marker missing.');
+    text=text.replace(automaticStart,'    if(readyWithoutWaybill.length&&!automaticWaybillRunRef.current){\n      automaticWaybillRunRef.current=true;\n      void (async()=>{\n        for(const ready of readyWithoutWaybill){');
+    const automaticEnd='      })();\n    }\n  }, [orders, products, waybillRecords, sharedWaybillPoolReady, sharedStoreReady, sharedOrdersReady, waybillPoolRetry]);';
+    if(!text.includes(automaticEnd))throw new Error('Automatic waybill completion marker missing.');
+    text=text.replace(automaticEnd,String.raw`      })().finally(()=>{
+        automaticWaybillRunRef.current=false;
+        if(automaticWaybillRetryTimerRef.current===null)automaticWaybillRetryTimerRef.current=window.setTimeout(()=>{
+          automaticWaybillRetryTimerRef.current=null;setWaybillPoolRetry(n=>n+1);
+        },5000);
+      });
+    }
+  }, [orders, products, waybillRecords, sharedWaybillPoolReady, sharedStoreReady, sharedOrdersReady, waybillPoolRetry]);`);
     const importMarker='    if (additions.length) setWaybillRecords((prev) => [...prev, ...additions]);';
     if(!text.includes(importMarker))throw new Error('Durable waybill import marker missing.');
     text=text.replace(importMarker,String.raw`    for(let offset=0;offset<additions.length;offset+=50)await confirmCsvRequestWithRetry(sharedStaffRequest,'/api/courier/waybills/import',{method:'POST',body:JSON.stringify({records:additions.slice(offset,offset+50)})});

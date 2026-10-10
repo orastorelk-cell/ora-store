@@ -15,16 +15,18 @@ export const invoiceDurabilityPatch = () => ({
         '  markInvoicesGenerated: (orderIds: string[], generatedBy?: string) => Promise<Order[]>;','async interface');
       text=replace(text,'  const autoInvoiceReadyRef = useRef<Set<string>>(new Set());',String.raw`  const autoInvoiceReadyRef = useRef<Set<string>>(new Set());
   const [invoiceQueueRetry,setInvoiceQueueRetry] = useState(0);
+  const invoiceQueueBusyRef = useRef(false);
   const invoiceQueueRetryTimerRef = useRef<number|null>(null);
   useEffect(()=>()=>{if(invoiceQueueRetryTimerRef.current!==null)window.clearTimeout(invoiceQueueRetryTimerRef.current);},[]);`,'retry state');
       const start=text.indexOf('  // AUTO INVOICE QUEUE:'),end=text.indexOf('  const updateOrderStatus',start);
       if(start<0||end<0)throw new Error('[O-RA durable invoices] auto queue not found');
       text=text.slice(0,start)+String.raw`  // AUTO INVOICE QUEUE: publish only invoices acknowledged by durable R2.
   useEffect(()=>{
-    if(!adminUser||!sharedStoreReady||!getStaffSessionToken()||returnPackingPending)return;
+    if(!adminUser||!sharedStoreReady||!getStaffSessionToken()||returnPackingPending||invoiceQueueBusyRef.current)return;
     const ready=orders.filter(o=>invoiceReady(o)&&!invoiceComplete(o)&&!autoInvoiceReadyRef.current.has(o.id))
       .sort((a,b)=>new Date(a.created_at).getTime()-new Date(b.created_at).getTime()).slice(0,50);
     if(!ready.length)return;
+    invoiceQueueBusyRef.current=true;
     ready.forEach(o=>autoInvoiceReadyRef.current.add(o.id));
     const batchId='PACK-AUTO-'+new Date().toISOString().replace(/[^0-9]/g,'');
     const retry=()=>{if(getStaffSessionToken()&&invoiceQueueRetryTimerRef.current===null){
@@ -38,7 +40,11 @@ export const invoiceDurabilityPatch = () => ({
       }
       if(result.errors.length){console.warn('Invoice queue:',result.errors.join(' | '));void refreshOrdersFromServer().catch(()=>{});retry();}
     }).catch(error=>{console.warn('Invoice save did not finish; no invoice was marked Generated:',error?.message||error);retry();})
-      .finally(()=>ready.forEach(o=>autoInvoiceReadyRef.current.delete(o.id)));
+      .finally(()=>{
+        ready.forEach(o=>autoInvoiceReadyRef.current.delete(o.id));
+        invoiceQueueBusyRef.current=false;
+        if(invoiceQueueRetryTimerRef.current===null)setInvoiceQueueRetry(n=>n+1);
+      });
   },[orders,adminUser?.id,sharedStoreReady,invoiceQueueRetry,returnPackingPending]);
 
 

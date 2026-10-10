@@ -1,6 +1,7 @@
 import { creditReturnStock } from '../lib/returnSheets';
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { staffJsonRequest } from '../lib/staffRequest';
+import { createStaffMutationQueue } from '../lib/staffMutationQueue';
 import {
   Language,
   Product,
@@ -141,7 +142,7 @@ interface StoreContextType {
   resetSystemData: () => void;
   clearOperationalTestData: () => Promise<void>;
   fullLiveStartReset: () => Promise<void>;
-  refreshOrdersFromServer: () => Promise<void>;
+  refreshOrdersFromServer: (afterMutation?: boolean) => Promise<void>;
   refreshReturnInventory: () => Promise<void>;
   returnPackingPending: boolean;
   returnPackingBatches: {operation_id:string;batch_id:string;created_at:string;count:number}[];
@@ -350,12 +351,17 @@ const localStorefrontRequest = async (body: any) => {
   if(!response.ok) throw new Error(data?.error || `Local shared storefront save failed (${response.status})`);
   return data;
 };
+const staffMutationQueue = createStaffMutationQueue();
 const sharedStaffRequest = async (url: string, options: RequestInit = {}) => {
-  const token = getStaffSessionToken();
-  const headers = new Headers(options.headers || {});
-  headers.set('Content-Type', 'application/json');
-  if (token) headers.set('Authorization', `Bearer ${token}`);
-  return staffJsonRequest(url,{...options,headers});
+  const send = () => {
+    const token = getStaffSessionToken();
+    const headers = new Headers(options.headers || {});
+    headers.set('Content-Type', 'application/json');
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    return staffJsonRequest(url,{...options,headers});
+  };
+  return ['GET', 'HEAD'].includes(String(options.method || 'GET').toUpperCase())
+    ? send() : staffMutationQueue.run(send);
 };
 
 const refreshStaffSessionToken = async () => {
@@ -1026,6 +1032,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const refreshOrdersFromServer = async (afterMutation=false) => {
     if (!adminUser || !getStaffSessionToken()) return;
+    await staffMutationQueue.drain();
     const user=adminUser.id;
     if(orderRefreshRef.current?.user===user){
       const previous=orderRefreshRef.current.promise;

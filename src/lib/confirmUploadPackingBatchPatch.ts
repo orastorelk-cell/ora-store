@@ -54,6 +54,10 @@ export const confirmUploadPackingBatchPatch = () => ({
   };`;
         text = text.replace(oldMirror, queuedMirror);
       }
+      // A poll must not replace locally allocated orders while their queued
+      // durable mirrors (including transient retries) are still finishing.
+      text = text.replace('    await staffMutationQueue.drain();',
+        '    await orderMirrorChainRef.current.catch(()=>undefined);\n    await staffMutationQueue.drain();');
 
       const oldType = "  importConfirmedOrdersCsv: (csvText: string, source?: OrderSource) => { confirmedCount: number; notFoundCount: number; ignoredCount: number; orderNumbers: string[]; errors: string[] };";
       const oldAsyncType = "  importConfirmedOrdersCsv: (csvText: string, source?: OrderSource) => Promise<{ confirmedCount: number; notFoundCount: number; ignoredCount: number; orderNumbers: string[]; errors: string[] }>;";

@@ -371,7 +371,7 @@ try {
   let localInvoiceOrders:any[]=JSON.parse(JSON.stringify(invoiceOrders)),rejectQueue=true,scheduledRetry=0;
   const effects:Array<()=>void>=[],inFlight={current:new Set()},retryTimer={current:null};
   const queueScope:any={invoiceReady,invoiceComplete,adminUser:{id:adminId,name:'Admin'},sharedStoreReady:true,orders:localInvoiceOrders,
-    autoInvoiceReadyRef:inFlight,invoiceQueueRetryTimerRef:retryTimer,invoiceQueueRetry:0,returnPackingPending:false,getStaffSessionToken:()=>token,
+    autoInvoiceReadyRef:inFlight,invoiceQueueBusyRef:{current:false},invoiceQueueRetryTimerRef:retryTimer,invoiceQueueRetry:0,returnPackingPending:false,getStaffSessionToken:()=>token,
     useEffect:(callback:any)=>effects.push(callback),window:{setTimeout:()=>{scheduledRetry++;return 10;}},setInvoiceQueueRetry:()=>{},
     sharedStaffRequest:async(path:string,options?:RequestInit)=>{if(rejectQueue){const error:any=new Error('503');error.status=503;throw error;}const response=await fast(path,options?.method||'GET',options?.body?JSON.parse(String(options.body)):undefined);return response.json();},
     saveInvoiceQueue:(a:any,b:any,c:any,d?:any)=>saveInvoiceQueue(a,b,c,d,async()=>{}),
@@ -380,7 +380,10 @@ try {
   vm.runInNewContext(transformSync(contextCode.slice(autoStart,autoEnd).replace('void saveInvoiceQueue','globalThis.autoQueuePromise=saveInvoiceQueue')+
     contextCode.slice(manualStart,manualEnd)+'\nglobalThis.runManualInvoice=markInvoicesGenerated;',{loader:'ts',target:'es2022'}).code,queueScope);
   await assert.rejects(queueScope.runManualInvoice(ids));assert.deepEqual(localInvoiceOrders,invoiceOrders);
-  effects[0]();await queueScope.autoQueuePromise;assert.deepEqual(localInvoiceOrders,invoiceOrders);assert.equal(inFlight.current.size,0);assert.equal(scheduledRetry,1);
+  effects[0]();const firstQueueRun=queueScope.autoQueuePromise;effects[0]();
+  assert.equal(queueScope.autoQueuePromise,firstQueueRun,'A rerender cannot start another invoice save while the first is pending');
+  await firstQueueRun;assert.deepEqual(localInvoiceOrders,invoiceOrders);assert.equal(inFlight.current.size,0);assert.equal(scheduledRetry,1);
+  assert.equal(queueScope.invoiceQueueBusyRef.current,false,'A failed queue releases its global guard for retry');
   rejectQueue=false;effects[0]();await queueScope.autoQueuePromise;assert(localInvoiceOrders.every(invoiceComplete));
   assert.deepEqual(localInvoiceOrders.slice(0,7).map(canonicalJson),lockedBefore);
   const malformed=(await saveInvoiceQueue([ids[0]],'PACK-NEW',async()=>({ok:true,results:[{id:ids[0],order_number:invoiceOrders[0].order_number,status:'saved',order:{id:ids[0],order_number:invoiceOrders[0].order_number}}]}),false,async()=>{}).then(()=>false,()=>true));

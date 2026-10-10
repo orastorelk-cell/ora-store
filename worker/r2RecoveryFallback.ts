@@ -8,6 +8,7 @@ import { Buffer } from 'node:buffer';
 import { auditConfirmCsvOrders, validConfirmAuditOrders } from '../src/lib/confirmCsvAudit';
 import { r2InvoiceQueueHandler } from './r2InvoiceQueue';
 import { r2InvoiceDownloadsHandler } from './r2InvoiceDownloads';
+import { r2PackingBatchMergeHandler } from './r2PackingBatchMerge';
 import { r2OrderUpdateHandler } from './r2OrderUpdate';
 import { r2OrderCancellationHandler } from './r2OrderCancellation';
 import { r2WaybillPoolHandler, r2WaybillAssignmentHandler, r2FulfilmentStatusHandler } from './r2Waybills';
@@ -47,6 +48,7 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   const refresh=request.method==='POST'&&path==='/api/staff/session/refresh';
   const audit=request.method==='POST'&&path==='/api/orders/confirm-csv/check';
   const invoices=request.method==='POST'&&path==='/api/orders/invoices/ensure';
+  const mergeBatches=request.method==='POST'&&path==='/api/orders/invoices/merge-batches';
   const invoiceRecovery=['GET','POST'].includes(request.method)&&/^\/api\/orders\/invoices\/recovery(?:\/[A-Za-z0-9_-]{16,100}(?:\/downloaded)?)?$/.test(path);
   const downloads=request.method==='POST'&&path==='/api/orders/invoice-download-status';
   const cancellation=['GET','POST'].includes(request.method)&&path==='/api/orders/cancel-before-dispatch';
@@ -56,7 +58,7 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   const orderPut=['PUT','DELETE'].includes(request.method)&&/^\/api\/orders\/[^/]+$/.test(path);
   const returns=path.startsWith('/api/returns/');
   const redispatch=request.method==='POST'&&path==='/api/orders/redispatch-waybill';
-  if(!read&&!delivered&&!confirmed&&!refresh&&!audit&&!invoices&&!invoiceRecovery&&!downloads&&!cancellation&&!orderPut&&!pool&&!assignment&&!fulfilment&&!returns&&!redispatch)return null;
+  if(!read&&!delivered&&!confirmed&&!refresh&&!audit&&!invoices&&!mergeBatches&&!invoiceRecovery&&!downloads&&!cancellation&&!orderPut&&!pool&&!assignment&&!fulfilment&&!returns&&!redispatch)return null;
   const user=await verifyActiveStaff(request,env);
   if(!user)return json({error:'Login session required.'},401);
   if((confirmed||delivered||downloads||redispatch||(orderPut&&request.method==='DELETE'))&&returnPackingInProgress(await readDataTable(env,'admin_data_store')))return json({error:'A packing batch is finishing. Retry its saved operation first.'},409);
@@ -88,6 +90,7 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
     return returnPackingHandler(request,r2ReturnStorage(env),user,true);
   }
   if(invoices)return r2InvoiceQueueHandler(request,env,user);
+  if(mergeBatches)return r2PackingBatchMergeHandler(request,env,user);
   if(downloads)return r2InvoiceDownloadsHandler(request,env);
   if(audit){
     const body:any=await request.json().catch(()=>null);

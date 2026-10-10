@@ -48,7 +48,7 @@ export const prepareOrderSnapshotUpdate = (existing: Row | undefined, incoming: 
     if (existing.invoice_locked === true) {
       for (const field of ['invoice_locked', 'invoice_number', 'invoice_generated_at', 'invoice_generated_by', 'invoice_pack_batch_id',
         'invoice_pack_downloaded_at', 'invoice_pack_downloaded_by', 'invoice_pack_download_set_date', 'invoice_pack_download_set_number',
-        'invoice_payment_label_snapshot', 'invoice_advance_percentage_snapshot']) if (existing[field] !== undefined) order[field] = existing[field];
+        'invoice_payment_label_snapshot', 'invoice_advance_percentage_snapshot', 'invoice_pack_merge']) if (existing[field] !== undefined) order[field] = existing[field];
       order.invoice_locked = true;
     }
   }
