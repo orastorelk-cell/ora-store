@@ -13,7 +13,7 @@ export const adminDashboardOutOfStockVariantPatch = (): Plugin => ({
     const id = rawId.split('?')[0].replace(/\\/g, '/');
     if (!id.endsWith('/src/components/admin/AdminDashboard.tsx')) return null;
 
-    let next = "import { OutOfStockPdfDownload } from './OutOfStockPdfDownload';\n" + code;
+    let next = "import { OutOfStockPdfDownload } from './OutOfStockPdfDownload';\nimport { OutOfStockOrderDetails } from './OutOfStockOrderDetails';\n" + code;
     const startMarker = '  // ONLY zero-stock products that are currently blocking at least one Confirmed waiting order.\n  const outOfStockNeeds = (() => {';
     const endMarker = '\n  })();';
     const start = next.indexOf(startMarker);
@@ -62,6 +62,8 @@ export const adminDashboardOutOfStockVariantPatch = (): Plugin => ({
               <OutOfStockPdfDownload rows={outOfStockNeeds} />
             </div>
           </div>
+
+          <OutOfStockOrderDetails rows={outOfStockNeeds} orders={orders} />
 
 `;
     next = next.slice(0, headerStart) + header + next.slice(headerEnd);
