@@ -38,7 +38,7 @@ export const readSheetDecisions = async(tabs:SheetTab[],ignoreOrders:ReadonlySet
     for(let i=headerAt+1;i<tab.values.length;i++){
       const row=tab.values[i].map(value=>String(value ?? '').trim()),number=String(row[id]||'').toUpperCase();
       if(!number || number.startsWith('DATE:'))continue;
-      if(!/^(WEB|FB|TK)-\d{6}$/.test(number)){
+      if(!/^(WEB|FB|TK|MAN)-\d{6}$/.test(number)){
         if(!pending.has(normalized(row[action])))errors.push(tab.title+' row '+(i+1)+': Invalid Order ID '+number+'.');
         continue;
       }

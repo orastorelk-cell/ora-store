@@ -182,6 +182,16 @@ try{
   const multi=await fixture({orders:[initial('WEB-000001'),initial('FB-000002'),initial('TK-000003')],tabs:[['CALL CENTER ORDERS',[headers,line('WEB-000001')]],['FACEBOOK ORDERS',[headers,line('FB-000002')]],['TIKTOK ORDERS',[headers,line('TK-000003','MAT','','CANCEL ENTIRE ORDER')]]]});globalThis.fetch=multi.network;await multi.connect();
   const multiId=crypto.randomUUID();await multi.request('/jobs',{operation_id:multiId});const multiDone=await multi.finish(multiId);assert.equal(multiDone.counts.invoices,2);assert.equal(multiDone.counts.cancelled,1);assert.equal(multi.colors.size,3);
 
+  // Manual Admin IDs are emitted by the system and shared with the call centre.
+  // A rejected run must resume the same batch after the parser is corrected.
+  const manual=await fixture({orders:[initial('MAN-000001',{order_source:'Manual Admin'}),initial('WEB-000002'),initial('MAN-000003',{order_source:'Manual Admin'})],rows:[headers,line('MAN-000001'),line('WEB-000002'),line('MAN-000003','MAT','','CANCEL ENTIRE ORDER')]});
+  globalThis.fetch=manual.network;await manual.connect();const manualId=crypto.randomUUID();await manual.request('/jobs',{operation_id:manualId});
+  const manualDone=await manual.finish(manualId);assert.equal(manualDone.phase,'complete');assert.equal(manualDone.counts.invoices,2);assert.equal(manualDone.counts.cancelled,1);
+  const manualFiles=await manual.request('/jobs/'+manualId+'/files');assert.equal(manualFiles.orders.length,2);assert.equal(new Set(manualFiles.orders.map((order:any)=>order.invoice_pack_batch_id)).size,1);assert.equal(parseCsv(returnPackingCsv(manualFiles.orders,manualFiles.settings)).rows.length,2);
+  await manual.request('/jobs/'+manualId+'/retry',{});await manual.finish(manualId);assert.equal((await manual.currentOrders()).filter(invoiceComplete).length,2);
+  assert.equal((await manual.admin()).find(row=>row.key==='storefront-state-v1')!.payload.products[1].stock_quantity,8);
+  const unknownManual=await fixture({orders:[initial('WEB-000009')],rows:[headers,line('MAN-000004')]});globalThis.fetch=unknownManual.network;await unknownManual.connect();const unknownManualId=crypto.randomUUID();await unknownManual.request('/jobs',{operation_id:unknownManualId});assert.equal((await unknownManual.finish(unknownManualId)).phase,'blocked');assert(!(await unknownManual.currentOrders()).some(invoiceComplete));assert.equal(unknownManual.writeCount(),0);
+
   const wrongVariant=await fixture({orders:[initial('WEB-000001')],rows:[headers,line('WEB-000001','WATCH-BLUE','Unknown Color')]});globalThis.fetch=wrongVariant.network;await wrongVariant.connect();const wrongId=crypto.randomUUID();await wrongVariant.request('/jobs',{operation_id:wrongId});assert.equal((await wrongVariant.finish(wrongId)).phase,'blocked');assert(!(await wrongVariant.currentOrders()).some(invoiceComplete));
 
   const conflicting=await readSheetDecisions([{sheetId:1,title:'Fixture',columnCount:headers.length,values:[headers,line('WEB-000001'),line('WEB-000001','MAT','','CANCEL ENTIRE ORDER')]}]);assert(conflicting.errors.length);assert.equal(conflicting.decisions.length,0);

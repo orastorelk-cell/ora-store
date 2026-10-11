@@ -2476,7 +2476,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const wantedPrefix=source==='Facebook Ads'?'FB':source==='TikTok Ads'?'TK':source==='Website'?'WEB':'';
     const groups=new Map<string,string[][]>();
-    lines.slice(1).forEach((line,rowNo)=>{const c=parse(line),id=String(c[idI]||'').trim().toUpperCase();if(!id||id.startsWith('DATE:')){ignoredCount++;return;}if(wantedPrefix&&!id.startsWith(`${wantedPrefix}-`)){ignoredCount++;errors.push(`Row ${rowNo+2}: ${id} is not a ${wantedPrefix} order.`);return;}if(!/^(WEB|FB|TK)-\d{6}$/.test(id)&&!/^WEB-TEST-\d{3}$/.test(id)){ignoredCount++;return;}groups.set(id,[...(groups.get(id)||[]),c]);});
+    lines.slice(1).forEach((line,rowNo)=>{const c=parse(line),id=String(c[idI]||'').trim().toUpperCase();if(!id||id.startsWith('DATE:')){ignoredCount++;return;}if(wantedPrefix&&!id.startsWith(`${wantedPrefix}-`)){ignoredCount++;errors.push(`Row ${rowNo+2}: ${id} is not a ${wantedPrefix} order.`);return;}if(!/^(WEB|FB|TK|MAN)-\d{6}$/.test(id)&&!/^WEB-TEST-\d{3}$/.test(id)){ignoredCount++;return;}groups.set(id,[...(groups.get(id)||[]),c]);});
 
     let persisted:Order[]=[];try{persisted=JSON.parse(localStorage.getItem('ora_orders')||'[]');}catch{}
     const merged=[...orders,...persisted.filter(saved=>!orders.some(cur=>cur.id===saved.id))];

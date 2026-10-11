@@ -41,8 +41,8 @@ export const confirmUploadIgnoredDetailsPatch = (): Plugin => ({
         recordIgnored('Row '+(rowNo+2)+' • '+id+' • Wrong channel for this upload. FIX: use the ALL CHANNELS Confirm Upload or upload it under '+wantedPrefix+'.');
         return;
       }
-      if(!/^(WEB|FB|TK)-\d{6}$/.test(id) && !/^WEB-TEST-\d{3}$/.test(id)){
-        recordIgnored('Row '+(rowNo+2)+' • '+id+' • Invalid Order ID format. FIX: use the exact WEB-000000 / FB-000000 / TK-000000 Order ID from the Sheet.');
+      if(!/^(WEB|FB|TK|MAN)-\d{6}$/.test(id) && !/^WEB-TEST-\d{3}$/.test(id)){
+        recordIgnored('Row '+(rowNo+2)+' • '+id+' • Invalid Order ID format. FIX: use the exact WEB-000000 / FB-000000 / TK-000000 / MAN-000000 Order ID from the Sheet.');
         return;
       }
       groups.set(id,[...(groups.get(id)||[]),c]);
