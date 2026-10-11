@@ -38,6 +38,7 @@ import { canonicalJson, confirmCsvRequestWithRetry, saveConfirmCsvDecisions } fr
 import { saveInvoiceDownloadStatus } from '../lib/invoiceDownloadStatus';
 import { storefrontSaveBody } from '../lib/storefrontProductSave';
 import { publicStorefrontRequest } from '../lib/publicStorefrontRequest';
+import { prepareCodPaymentUpdate, type CodPaymentEntry } from '../lib/codPaymentImport';
 
 export interface BulkOrderItemInput {
   order_id?: string;
@@ -215,7 +216,7 @@ interface StoreContextType {
   markInvoiceBatchDownloaded: (orderIds: string[], downloadedBy?: string, downloadSet?: { date: string; number: number }) => Promise<void>;
   markFardarCsvExported: (orderIds: string[], exportedBy?: string) => Promise<void>;
   scanDispatchBarcode: (barcode: string, scannedBy?: string) => Promise<{ success: boolean; message: string; order?: Order }>;
-  recordCodPayments: (entries: { waybill: string; amount?: number; delivery_fee?: number; received_at?: string; reference?: string; source?: 'Fardar CSV' | 'Manual' | 'System' }[], recordedBy?: string) => Promise<{ updatedCount: number; notFound: string[] }>;
+  recordCodPayments: (entries: CodPaymentEntry[], recordedBy?: string) => Promise<{ updatedCount: number; notFound: string[] }>;
   syncOrderToSheet: (orderId: string) => Promise<boolean>;
   syncAllUnsyncedOrders: () => Promise<number>;
   createWebsiteTestOrder: (itemCount?: 1 | 5) => Promise<Order | null>;
@@ -2943,7 +2944,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
 
   const recordCodPayments = async (
-    entries: { waybill: string; amount?: number; delivery_fee?: number; received_at?: string; reference?: string; source?: 'Fardar CSV' | 'Manual' | 'System' }[],
+    entries: CodPaymentEntry[],
     recordedBy = adminUser?.name || 'Admin'
   ): Promise<{ updatedCount: number; notFound: string[] }> => {
     const normalize = (value: string) => String(value || '').replace(/\s+/g, '').toLowerCase();
@@ -2956,39 +2957,35 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const updates: Order[] = [];
     const notFound: string[] = [];
     for (const [key, entry] of unique.entries()) {
-      const order = orders.find((candidate) => normalize(candidate.waybill_number || '') === key);
+      const matches = orders.filter((candidate) => normalize(candidate.waybill_number || '') === key);
+      if (matches.length > 1) throw new Error(`Waybill ${entry.waybill} belongs to multiple orders. Resolve the duplicate before importing payments.`);
+      const order = matches[0];
       if (!order) {
         notFound.push(entry.waybill);
         continue;
       }
-      const parsedDate = entry.received_at && !Number.isNaN(new Date(entry.received_at).getTime())
-        ? new Date(entry.received_at).toISOString()
-        : new Date().toISOString();
-      const updated: Order = {
-        ...order,
-        payment_status: 'Paid',
-        payment_paid_type: 'COD',
-        cod_payment_received: true,
-        cod_payment_amount: Number.isFinite(Number(entry.amount)) && Number(entry.amount) > 0 ? Number(entry.amount) : Number(order.total_amount || 0),
-        ...(Number.isFinite(Number(entry.delivery_fee)) && Number(entry.delivery_fee) >= 0 ? { fardar_delivery_fee: Number(entry.delivery_fee) } : {}),
-        cod_payment_received_at: parsedDate,
-        cod_payment_source: entry.source || 'Manual',
-        cod_payment_reference: String(entry.reference || '').trim() || undefined,
-      };
-      await sharedStaffRequest(`/api/orders/${encodeURIComponent(updated.id)}`, {
+      const updated = prepareCodPaymentUpdate(order, entry);
+      if (JSON.stringify(updated) === JSON.stringify(order)) continue;
+      const result = await sharedStaffRequest(`/api/orders/${encodeURIComponent(updated.id)}`, {
         method: 'PUT',
         body: JSON.stringify({ order: updated }),
       });
-      updates.push(updated);
+      const saved = result?.order as Order | undefined;
+      if (!saved || saved.fardar_delivery_fee !== updated.fardar_delivery_fee || saved.cod_payment_amount !== updated.cod_payment_amount
+        || saved.cod_payment_amount_basis !== updated.cod_payment_amount_basis || saved.cod_payment_received !== updated.cod_payment_received
+        || saved.payment_status !== updated.payment_status || saved.payment_paid_type !== updated.payment_paid_type
+        || saved.payment_received_amount !== updated.payment_received_amount) throw new Error(`${order.order_number}: payment / courier fee save was not confirmed. Retry the CSV.`);
+      updates.push(saved);
+      setOrders(prev => prev.map(candidate => candidate.id === saved.id ? saved : candidate));
     }
 
     if (updates.length) {
       const map = new Map(updates.map((order) => [order.id, order]));
       setOrders((prev) => prev.map((order) => map.get(order.id) || order));
       logActivity({
-        action: 'COD Payments Recorded',
+        action: 'Courier Payments / Fees Recorded',
         module: 'Payments',
-        details: `${updates.length} COD payment(s) recorded • ${recordedBy}`,
+        details: `${updates.length} payment / courier fee record(s) saved • ${recordedBy}`,
       });
     }
     return { updatedCount: updates.length, notFound };

@@ -312,6 +312,7 @@ function latestPurchasePrices(purchases: PurchaseOrder[], productFor: ReturnType
 }
 
 function receivedPayment(order: Order, courier: number | null, basis: PaymentAmountBasis) {
+  if (basis === 'auto' && order.cod_payment_amount_basis) basis = order.cod_payment_amount_basis;
   if (order.cod_payment_received) {
     const cod = amount(order.cod_payment_amount);
     const advance = order.payment_paid_type === 'Advance' || order.advance_confirmed

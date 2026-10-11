@@ -269,6 +269,8 @@ export interface Order {
   customer_email?: string;
   cod_payment_received?: boolean;
   cod_payment_amount?: number;
+  /** Explicit amount basis supplied by the payment import, used by Auto profit reporting. */
+  cod_payment_amount_basis?: 'gross' | 'net';
   cod_payment_received_at?: string;
   cod_payment_source?: 'Fardar CSV' | 'Manual' | 'System';
   cod_payment_reference?: string;

@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import { profitAdvertisingSummary, profitMoney, PROFIT_PACKING_COST, type PaidWaybillProfitReport, type PaymentAmountBasis } from './paidWaybillProfit';
-import { facebookAllocatedAdvertisingSummary, type FacebookAdAllocation } from './facebookProfitAds';
+import { facebookAllocatedAdvertisingSummary, facebookOrderAdvertisingCost, type FacebookAdAllocation } from './facebookProfitAds';
 
 export interface ProfitPdfOptions {
   facebook: string;
@@ -44,7 +44,11 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     ['Actual Fardar delivery cost', -report.totals.courier],
     [`Packing (${report.totals.ready} orders x Rs. ${PROFIT_PACKING_COST})`, -report.totals.packing],
     ['PROFIT BEFORE ADVERTISING', report.totals.beforeAds],
-    [allocation ? 'Facebook (item ads + ad losses + promotion share)' : 'Facebook advertising cost', advertising.facebook === null && report.ranges.Facebook ? null : -(advertising.facebook ?? 0)],
+    ...(allocation ? [
+      ['Facebook item-ad cost', -allocation.paidCost],
+      ['FB loss deducted (cancelled / returned / zero leads)', -allocation.lostCost],
+      ['Commercial / promotion share deducted', -allocation.commercialCost],
+    ] as Array<[string, number]> : [['Facebook advertising cost', advertising.facebook === null && report.ranges.Facebook ? null : -(advertising.facebook ?? 0)]] as Array<[string, number | null]>),
     ['TikTok advertising cost', advertising.tiktok === null && report.ranges.TikTok ? null : -(advertising.tiktok ?? 0)],
   ];
   rows.forEach(([label, value], index) => {
@@ -98,6 +102,8 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
       'Original Facebook lead dates link each order to its saved cost period. Older records without a lead date use their system date.',
       'Pending costs remain separate until delivered and paid. Full incurred spend remains recorded; this is a management allocation for paid orders.',
       'Code-free promotion share = period spend / CSV form leads x selected paid orders. Messages and views are not form leads.',
+      ...(allocation.waybillScoped ? [`Known FB loss: ${money(allocation.lossSpend)} | Loss deducted: ${money(allocation.lostCost)} | Other / pending loss share: ${money(allocation.lossRemainingCost)}`,
+        'Known loss share = period cancelled / returned / zero-lead spend / remaining form leads x selected paid orders.'] : []),
       ...(allocation.waybillScoped ? ['The summary selects uploaded waybills. This table shows all leads in the cost periods; costs for other leads remain separate.'] : []),
     ];
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
@@ -164,7 +170,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     { label: 'PACKING', width: 24 }, { label: 'PROFIT*', width: 34 },
   ];
   const header = () => {
-    title(allocation ? 'Order details | Profit before ads, FB cost and After FB. Shared ad losses / Commercial are in the summary.' : 'Order details | * Order profit is before advertising costs. All amounts are LKR.');
+    title(allocation ? allocation.waybillScoped ? 'Order details | After FB deducts item ads, FB loss share and Commercial share.' : 'Order details | After FB deducts item ads and Commercial; ad losses are in the summary.' : 'Order details | * Order profit is before advertising costs. All amounts are LKR.');
     y = 35; doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5); doc.setFillColor(243, 244, 246); doc.rect(left, y - 4, width, 9, 'F');
     let x = left;
     columns.forEach(column => { doc.text(column.label, x + 2, y + 1); x += column.width; }); y += 9;
@@ -172,7 +178,8 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
   doc.addPage(); header();
   report.rows.forEach((row, rowIndex) => {
     const savedCost = row.orderId ? allocation?.orderCosts.get(row.orderId) : undefined;
-    const afterFacebook = savedCost?.state === 'paid' && row.profit !== null ? row.profit - savedCost.cost : null;
+    const fullFacebookCost = allocation ? facebookOrderAdvertisingCost(allocation, row.orderId) : null;
+    const afterFacebook = fullFacebookCost !== null && row.profit !== null ? Math.round((row.profit - fullFacebookCost) * 100) / 100 : null;
     const purchaseLines = row.items.flatMap(item => [money(item.purchasing), ...item.allocations.map(allocation => `${allocation.costBasis === 'latest-purchase' ? 'Latest price / ' : ''}${text(allocation.reference)}: ${allocation.quantity} x ${money(allocation.unitCost)}`)]);
     const saleLines = row.items.map(item => `${item.quantity} x ${money(item.unitSale)} = ${money(item.sales)}`);
     const cellValues = [
@@ -182,7 +189,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
       [...saleLines, `Received: ${money(row.received)}`],
       [...purchaseLines, row.items.length > 1 ? `Total: ${money(row.purchasing)}` : ''],
       [money(row.courier)], [money(row.packing)], [money(row.profit), ...(allocation && row.source === 'Facebook'
-        ? savedCost?.state === 'paid' ? [`FB ad: ${money(savedCost.cost)}`, `After FB: ${money(afterFacebook)}`] : ['FB ad: Pending match'] : [])],
+        ? savedCost?.state === 'paid' ? [`FB item: ${money(savedCost.cost)}`, `FB loss: ${money(savedCost.lossCost)}`, `Commercial: ${money(savedCost.promotionCost)}`, `After FB: ${money(afterFacebook)}`] : ['FB ad: Pending match'] : [])],
     ];
     doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5);
     const cells = cellValues.map((values, index) => values.filter(Boolean).flatMap(value => doc.splitTextToSize(value, columns[index].width - 4)));

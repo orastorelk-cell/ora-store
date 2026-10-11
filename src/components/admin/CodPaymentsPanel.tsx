@@ -1,11 +1,11 @@
 import React, { useMemo, useState } from 'react';
 import { CheckCircle2, FileUp, WalletCards } from 'lucide-react';
 import { useStore } from '../../context/StoreContext';
-import { autoMapHeader, parseCsv, parseFlexibleDate, toNumber } from '../../lib/csv';
+import { parseCsv } from '../../lib/csv';
+import { codPaymentEntries, mapCodPaymentHeaders, type CodPaymentMapping } from '../../lib/codPaymentImport';
 
-interface Mapping { waybill: string; status: string; amount: string; deliveryFee: string; date: string; reference: string; }
+type Mapping = CodPaymentMapping;
 const blankMapping: Mapping = { waybill: '', status: '', amount: '', deliveryFee: '', date: '', reference: '' };
-const paidWords = /paid|received|collected|settled|success|remit|complete/i;
 
 export const CodPaymentsPanel: React.FC = () => {
   const { orders, recordCodPayments, adminUser } = useStore();
@@ -30,14 +30,7 @@ export const CodPaymentsPanel: React.FC = () => {
     const parsed = parseCsv(text);
     setHeaders(parsed.headers);
     setRows(parsed.rows);
-    setMapping({
-      waybill: autoMapHeader(parsed.headers, ['waybill','way bill','tracking','awb','barcode','consignment']),
-      status: autoMapHeader(parsed.headers, ['payment status','cod status','status','payment']),
-      amount: autoMapHeader(parsed.headers, ['cod amount','amount','collected amount','payment amount','net amount']),
-      deliveryFee: autoMapHeader(parsed.headers, ['delivery fee','courier fee','shipping fee']),
-      date: autoMapHeader(parsed.headers, ['payment date','received date','settlement date','date']),
-      reference: autoMapHeader(parsed.headers, ['reference','ref','transaction','settlement id']),
-    });
+    setMapping(mapCodPaymentHeaders(parsed.headers));
     setMessage(`Loaded ${parsed.rows.length} CSV row(s). Check the column mapping, then import.`);
   };
 
@@ -45,19 +38,10 @@ export const CodPaymentsPanel: React.FC = () => {
     if (!mapping.waybill) { setMessage('Select the Waybill column first.'); return; }
     setWorking(true); setMessage('');
     try {
-      const entries = rows
-        .filter((row) => String(row[mapping.waybill] || '').trim())
-        .filter((row) => !mapping.status || paidWords.test(String(row[mapping.status] || '')))
-        .map((row) => ({
-          waybill: String(row[mapping.waybill] || '').trim(),
-          amount: mapping.amount ? toNumber(row[mapping.amount]) : undefined,
-          delivery_fee: mapping.deliveryFee ? toNumber(row[mapping.deliveryFee]) : undefined,
-          received_at: mapping.date ? parseFlexibleDate(row[mapping.date]) : undefined,
-          reference: mapping.reference ? String(row[mapping.reference] || '').trim() : undefined,
-          source: 'Fardar CSV' as const,
-        }));
+      const entries = codPaymentEntries(rows, mapping, headers);
+      if (!entries.length) throw new Error('No delivered or paid waybill rows match these columns.');
       const result = await recordCodPayments(entries, adminUser?.name || 'Admin');
-      setMessage(`Updated ${result.updatedCount} COD payment(s).${result.notFound.length ? ` ${result.notFound.length} waybill(s) were not found.` : ''}`);
+      setMessage(`Updated ${result.updatedCount} payment / courier fee record(s).${result.notFound.length ? ` ${result.notFound.length} waybill(s) were not found.` : ''}`);
     } catch (error: any) { setMessage(error?.message || 'COD payment import failed.'); }
     finally { setWorking(false); }
   };
@@ -74,8 +58,8 @@ export const CodPaymentsPanel: React.FC = () => {
         reference: manual.reference.trim() || undefined,
         source: 'Manual',
       }], adminUser?.name || 'Admin');
-      setMessage(result.updatedCount ? 'COD payment recorded successfully.' : `Waybill not found: ${result.notFound.join(', ')}`);
-      if (result.updatedCount) setManual({ waybill: '', amount: '', date: new Date().toISOString().slice(0,10), reference: '' });
+      setMessage(result.updatedCount ? 'COD payment recorded successfully.' : result.notFound.length ? `Waybill not found: ${result.notFound.join(', ')}` : 'This payment is already recorded; no change was needed.');
+      if (!result.notFound.length) setManual({ waybill: '', amount: '', date: new Date().toISOString().slice(0,10), reference: '' });
     } catch (error: any) { setMessage(error?.message || 'Could not record payment.'); }
     finally { setWorking(false); }
   };
@@ -92,7 +76,7 @@ export const CodPaymentsPanel: React.FC = () => {
       </div>
 
       <div className="rounded-2xl bg-white border border-gray-100 p-5 space-y-4">
-        <div className="flex items-center gap-2"><FileUp className="w-5 h-5 text-orange-600"/><div><h3 className="font-black">Fardar COD Payment CSV Import</h3><p className="text-xs text-gray-500">No fixed Fardar template is required. Upload the file and map its columns.</p></div></div>
+        <div className="flex items-center gap-2"><FileUp className="w-5 h-5 text-orange-600"/><div><h3 className="font-black">Fardar Payment / Delivery Fee CSV Import</h3><p className="text-xs text-gray-500">Fardar invoice Amount is gross COD collection. Online-paid orders receive their courier fee while keeping their bank payment.</p></div></div>
         <input type="file" accept=".csv,text/csv" onChange={(e)=>loadCsv(e.target.files?.[0])} className="block w-full text-xs" />
         {headers.length > 0 && (
           <>
@@ -107,7 +91,7 @@ export const CodPaymentsPanel: React.FC = () => {
                 </label>
               ))}
             </div>
-            <p className="text-[11px] text-gray-400">If Payment Status is mapped, only rows containing Paid/Received/Collected/Settled/Success-type statuses are imported. Leave it unmapped to import every row.</p>
+            <p className="text-[11px] text-gray-400">Delivered and paid rows are imported. Pending, cancelled, returned and unpaid rows are excluded when status is mapped.</p>
             <button onClick={importCsv} disabled={working} className="rounded-xl bg-black text-white px-4 py-2.5 text-xs font-bold disabled:opacity-50">{working?'Importing…':`Import & Match ${rows.length} Row(s)`}</button>
           </>
         )}

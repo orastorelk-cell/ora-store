@@ -3,7 +3,8 @@ import { AlertTriangle, BarChart3, CalendarDays, CheckCircle2, ChevronLeft, Chev
 import { useStore } from '../../context/StoreContext';
 import type { Order, PurchaseOrder, ReturnRecord } from '../../types';
 import { staffJsonRequest } from '../../lib/staffRequest';
-import { allocateFacebookAdCosts, emptyFacebookAdLedger, facebookAllocatedAdvertisingSummary, facebookReportingPeriods, facebookRequiredCostDates, parseFacebookAdCostCsv, readFacebookAdLedger, type FacebookAdLedger } from '../../lib/facebookProfitAds';
+import { allocateFacebookAdCosts, emptyFacebookAdLedger, facebookAllocatedAdvertisingSummary, facebookOrderAdvertisingCost, facebookReportingPeriods, facebookRequiredCostDates, parseFacebookAdCostCsv, readFacebookAdLedger, type FacebookAdLedger } from '../../lib/facebookProfitAds';
+import { parseFardarInvoicePayments, type CodPaymentEntry } from '../../lib/codPaymentImport';
 import { FacebookProfitAdsPanel } from './FacebookProfitAdsPanel';
 import {
   buildPaidWaybillProfitReport, mergeProfitPurchaseHistory, selectSavedPaidProfitOrders, parseProfitWaybillUpload, profitAdvertisingPeriodKey, profitAdvertisingSummary, profitMoney, PROFIT_PAGE_SIZE,
@@ -59,15 +60,17 @@ export interface ProfitReportWorkspaceProps {
   knownAdCodes?: string[];
   onImportAds?: (csv: string, fileName: string) => Promise<FacebookAdLedger>;
   onReloadAds?: () => Promise<void>;
+  onImportFardar?: (entries: CodPaymentEntry[]) => Promise<{ updatedCount: number; notFound: string[] }>;
   useUploadedWaybills?: boolean;
 }
 
 export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ orders, purchases, products = [], returns, ready, loadError, storageKey, onRefresh, initialDraft,
-  advertisingLedger, advertisingReady = true, advertisingError, canImportAds = false, knownAdCodes = [], onImportAds, onReloadAds, useUploadedWaybills = false }) => {
+  advertisingLedger, advertisingReady = true, advertisingError, canImportAds = false, knownAdCodes = [], onImportAds, onReloadAds, onImportFardar, useUploadedWaybills = false }) => {
   const [draft, setDraft] = useState<ProfitReportDraft>(() => initialDraft || readDraft(storageKey));
   const [message, setMessage] = useState('');
-  const [busy, setBusy] = useState<'refresh' | 'pdf' | 'upload' | ''>('');
+  const [busy, setBusy] = useState<'refresh' | 'pdf' | 'upload' | 'fardar' | ''>('');
   const waybillInput = useRef<HTMLInputElement>(null);
+  const fardarInput = useRef<HTMLInputElement>(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'complete' | 'review'>('all');
   const [page, setPage] = useState(1);
@@ -136,6 +139,19 @@ export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ or
     if (useUploadedWaybills) setDraft(current => ({ ...current, facebookPeriods: periods }));
     return saved;
   };
+  const importFardar = async (file?: File) => {
+    if (!file || !onImportFardar) return;
+    setBusy('fardar'); setMessage('');
+    try {
+      if (file.size > 2_000_000) throw new Error('Choose a Fardar invoice CSV smaller than 2 MB.');
+      const selected = new Set(report.rows.filter(row => row.eligible).map(row => row.waybill.toLowerCase()));
+      const entries = parseFardarInvoicePayments(await file.text()).filter(entry => selected.has(entry.waybill.replace(/\s+/g, '').toLowerCase()));
+      if (!entries.length) throw new Error('No delivered invoice rows match the selected paid waybills. Upload your waybill selection first.');
+      const result = await onImportFardar(entries);
+      setMessage(`${file.name}: ${result.updatedCount} payment / Fardar fee records updated. Profit recalculated for the current waybill selection.${result.notFound.length ? ` ${result.notFound.length} waybills were not found.` : ''}`);
+    } catch (error: any) { setMessage(error.message || 'Fardar invoice save was not confirmed. Retry the CSV.'); }
+    finally { setBusy(''); }
+  };
   const changeSelection = (changes: Partial<Pick<ProfitReportDraft, 'paymentFilter' | 'fromDate' | 'toDate'>>) => {
     setDraft(current => ({ ...current, ...changes, facebook: '', tiktok: '', advertisingPeriod: undefined }));
     setMessage(''); setPage(1);
@@ -165,7 +181,7 @@ export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ or
     ['Profit Before Advertising', report.totals.beforeAds, true],
     ...(csvMode ? [
       ['Facebook Cost — selected delivered / paid orders', facebookAllocation.paidCost],
-      ['Facebook Ad Loss — cancelled / returned / zero leads', facebookAllocation.lostCost],
+      ['Facebook Ad Loss deducted — cancelled / returned / zero leads', facebookAllocation.lostCost],
       ['Commercial / promotion share — selected paid orders', facebookAllocation.commercialCost],
     ] as Array<[string, number]> : [['Facebook Cost', ads.facebook ?? (report.ranges.Facebook ? null : 0)]] as Array<[string, number | null]>),
     ['TikTok Cost', ads.tiktok ?? (report.ranges.TikTok ? null : 0)],
@@ -190,6 +206,12 @@ export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ or
         {draft.waybillFileName && <p className="mt-3 break-all text-sm font-semibold">{draft.waybillFileName}</p>}
         <p className="mt-3 text-sm text-gray-700">{report.rows.length} uploaded waybills · {report.totals.ready} complete · {report.totals.review} need review{report.duplicates ? ` · ${report.duplicates} repeated entries ignored` : ''}</p>
         <p className="mt-2 text-xs text-gray-500">Saved payment, Purchasing and Fardar records are used for these waybills. {purchases.length} Purchasing records available. Uploading replaces this report's waybill selection.</p>
+        {onImportFardar && canImportAds && <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-4">
+          <p className="text-sm font-bold text-blue-900">Fardar invoice එකෙන් missing courier / COD විස්තර දාන්න</p>
+          <p className="mt-2 text-xs text-blue-900">Selected paid waybills වල actual delivery charge සහ gross COD Amount save කරනවා. Online-paid orders වල bank payment එක එහෙමම තියාගන්නවා. Invoice CSV දෙකක් නම් එකින් එක upload කරන්න.</p>
+          <button type="button" disabled={!available || Boolean(busy) || !report.rows.length} onClick={() => fardarInput.current?.click()} className="mt-3 inline-flex items-center gap-2 rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-40"><Upload className="h-4 w-4" />{busy === 'fardar' ? 'Saving Fardar invoice...' : 'Import Fardar Invoice CSV'}</button>
+          <input ref={fardarInput} type="file" accept=".csv,text/csv" aria-label="Fardar invoice CSV file" className="hidden" onChange={event => { void importFardar(event.target.files?.[0]); event.target.value = ''; }} />
+        </div>}
       </> : <>
       <h3 className="flex items-center gap-2 font-black"><WalletCards className="h-5 w-5 text-orange-600" />1. Saved Paid Orders</h3>
       <p className="mt-1 text-sm text-gray-500">COD Received සහ සම්පූර්ණ online payment ලැබුණු orders මෙතැනට ස්වයංක්‍රීයව එනවා.</p>
@@ -257,15 +279,15 @@ export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ or
           <td className="p-4 text-right">{row.items.map((item, index) => <div key={index} className={`${index ? 'mt-3 border-t border-gray-100 pt-3' : ''}`}><p className="whitespace-nowrap font-semibold">{money(item.purchasing)}</p><p className="mt-1 text-[10px] text-gray-500">{item.allocations.some(allocation => allocation.costBasis === 'latest-purchase') ? 'Includes latest Purchasing price' : 'From Purchasing'}</p></div>)}{row.items.length > 1 && <p className="mt-3 whitespace-nowrap border-t border-gray-200 pt-2 font-black">Total {money(row.purchasing)}</p>}{row.items.some(item => item.allocations.length > 0) && <details className="mt-3 text-[10px] text-gray-500"><summary className="cursor-pointer text-orange-700">Purchase details</summary>{row.items.flatMap((item, index) => item.allocations.map((allocation, part) => <p key={`${index}-${part}`} className="mt-2 max-w-44">{allocation.costBasis === 'latest-purchase' ? 'Latest price · ' : ''}{allocation.sku} · {allocation.reference}<br />{allocation.quantity} × {money(allocation.unitCost)}</p>))}</details>}</td>
           <td className="whitespace-nowrap p-4 text-right font-semibold">{money(row.courier)}</td><td className="whitespace-nowrap p-4 text-right font-semibold">{money(row.packing)}</td><td className={`whitespace-nowrap p-4 text-right font-black ${row.profit === null ? 'text-amber-700' : row.profit >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>{money(row.profit)}<p className="mt-1 text-[10px] font-normal text-gray-400">Before ads</p></td>
           {csvMode && <>
-            <td className="whitespace-nowrap p-4 text-right font-semibold">{row.source !== 'Facebook' ? '—' : money(row.orderId && facebookAllocation.orderCosts.get(row.orderId)?.state === 'paid' ? facebookAllocation.orderCosts.get(row.orderId)!.cost : null)}</td>
-            <td className="whitespace-nowrap p-4 text-right font-bold">{row.source !== 'Facebook' ? '—' : money(row.profit !== null && row.orderId && facebookAllocation.orderCosts.get(row.orderId)?.state === 'paid' ? row.profit - facebookAllocation.orderCosts.get(row.orderId)!.cost : null)}<p className="mt-1 text-[10px] font-normal text-gray-400">Shared ad losses / Commercial in summary</p></td>
+            <td className="whitespace-nowrap p-4 text-right font-semibold">{row.source !== 'Facebook' ? '—' : money(facebookOrderAdvertisingCost(facebookAllocation, row.orderId))}{row.source === 'Facebook' && row.orderId && facebookAllocation.orderCosts.get(row.orderId)?.state === 'paid' && <div className="mt-2 space-y-1 text-[10px] font-normal text-gray-500"><p>Item ad: {money(facebookAllocation.orderCosts.get(row.orderId)!.cost)}</p><p className="text-red-700">FB loss deducted: {money(facebookAllocation.orderCosts.get(row.orderId)!.lossCost)}</p><p>Commercial share: {money(facebookAllocation.orderCosts.get(row.orderId)!.promotionCost)}</p></div>}</td>
+            <td className="whitespace-nowrap p-4 text-right font-bold">{row.source !== 'Facebook' ? '—' : money(row.profit !== null && facebookOrderAdvertisingCost(facebookAllocation, row.orderId) !== null ? Math.round((row.profit - facebookOrderAdvertisingCost(facebookAllocation, row.orderId)!) * 100) / 100 : null)}<p className="mt-1 text-[10px] font-normal text-gray-400">{useUploadedWaybills ? 'After item ad + FB loss + Commercial' : 'After item ad + Commercial; losses in summary'}</p></td>
           </>}
         </tr>)}{pageRows.length === 0 && <tr><td colSpan={csvMode ? 10 : 8} className="p-8 text-center text-gray-500">No selected orders match this search.</td></tr>}</tbody></table></div>
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-4 py-3 text-xs"><p className="text-gray-500">{visible.length ? `${(currentPage - 1) * PROFIT_PAGE_SIZE + 1}-${Math.min(currentPage * PROFIT_PAGE_SIZE, visible.length)}` : '0'} of {visible.length} {useUploadedWaybills ? 'uploaded waybills · Summary and PDF include all uploaded waybills.' : 'paid orders · Summary and PDF include all selected paid orders.'}</p><div className="flex items-center gap-3"><button type="button" aria-label="Previous profit page" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)} className="rounded-lg border border-gray-200 p-2 disabled:opacity-30"><ChevronLeft className="h-4 w-4" /></button><span className="font-bold">Page {currentPage} / {pages}</span><button type="button" aria-label="Next profit page" disabled={currentPage >= pages} onClick={() => setPage(currentPage + 1)} className="rounded-lg border border-gray-200 p-2 disabled:opacity-30"><ChevronRight className="h-4 w-4" /></button></div></div>
       </section>
 
       <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-black">4. Profit Summary</h3><p className="mt-1 text-xs text-gray-500">{report.totals.review ? `Totals below cover ${report.totals.ready} complete orders. Resolve ${report.totals.review} paid orders to show the final profit.` : `Totals for all ${report.totals.ready} selected paid orders.`}</p></div><button type="button" onClick={downloadPdf} disabled={!available || Boolean(busy)} className="inline-flex items-center gap-2 rounded-xl bg-gray-900 px-4 py-3 text-xs font-bold text-white disabled:opacity-40"><Download className="h-4 w-4" />{busy === 'pdf' ? 'Preparing PDF...' : 'Download Summary PDF'}</button></div>
-        <dl className="mt-4 divide-y divide-gray-100">{summaryRows.map(([label, value, bold]) => <div key={label} className={`flex items-center justify-between gap-4 py-3 text-sm ${bold ? 'font-black' : ''}`}><dt className="text-gray-600">{label}</dt><dd className="whitespace-nowrap font-bold">{money(value)}</dd></div>)}</dl>
+        <dl className="mt-4 divide-y divide-gray-100">{summaryRows.map(([label, value, bold], index) => <div key={label} className={`flex items-center justify-between gap-4 py-3 text-sm ${bold ? 'font-black' : ''}`}><dt className="text-gray-600">{label}</dt><dd className={`whitespace-nowrap font-bold ${index > 0 && !bold ? 'text-red-700' : ''}`}>{money(value === null || index === 0 || bold ? value : -value)}</dd></div>)}</dl>
         <div className={`mt-4 rounded-xl p-5 ${ads.netProfit === null ? 'bg-amber-50 text-amber-900' : ads.netProfit >= 0 ? 'bg-emerald-50 text-emerald-900' : 'bg-red-50 text-red-900'}`}><p className="text-sm font-black">{useUploadedWaybills ? 'Uploaded-waybill Profit After Advertising / Upload කළ waybills වල ලාභය' : csvMode ? 'Paid-order Profit After Advertising / මුදල් ලැබුණු orders වල ලාභය' : 'Final Net Profit / ඉතිරි මුළු ලාභය'}</p><p className="mt-2 text-3xl font-black">{ads.netProfit === null ? 'Pending' : profitMoney(ads.netProfit)}</p>{ads.netProfit === null && <p className="mt-2 text-sm">{report.totals.review > 0 ? `${report.totals.review} paid order(s) need review. ` : ''}{ads.missing.length ? `Enter ${ads.missing.join(' / ')} cost, or 0 if none. ` : ''}{ads.invalid ? 'Advertising costs must be valid amounts of 0 or more. ' : ''}{csvMode && (!advertisingReady || advertisingError) ? 'Saved advertising costs have not loaded. ' : ''}{csvMode && (facebookAllocation.missingOrderIds.length || facebookAllocation.unmatchedCost > 0 || facebookAllocation.issues.length) ? 'Review the Facebook cost matching above before treating this profit as complete.' : ''}</p>}<p className="mt-3 text-xs">{csvMode ? 'Recorded revenue − Purchasing − Fardar − Packing − Allocated Facebook cost − Known ad losses − Commercial − TikTok' : 'Recorded revenue − Purchasing − Fardar − Packing − Facebook − TikTok'}</p></div>
         <p className="mt-4 text-[11px] leading-relaxed text-gray-500">Purchasing uses FIFO history. Items with incomplete history use the latest exact item / variant price, or the latest Purchasing price for the same item type, multiplied by the full item quantity. Packing is Rs.100 per order; courier cost uses actual Fardar charges.</p>
       </section>
@@ -274,7 +296,7 @@ export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ or
 };
 
 export const ProfitReportPanel: React.FC = () => {
-  const { orders, products, purchaseOrders, returnRecords, sharedStoreReady, sharedOrdersReady, orderLoadError, refreshOrdersFromServer, adminUser } = useStore();
+  const { orders, products, purchaseOrders, returnRecords, sharedStoreReady, sharedOrdersReady, orderLoadError, refreshOrdersFromServer, recordCodPayments, adminUser } = useStore();
   const [ledger, setLedger] = useState<FacebookAdLedger>(emptyFacebookAdLedger);
   const [advertisingReady, setAdvertisingReady] = useState(false);
   const [advertisingError, setAdvertisingError] = useState('');
@@ -312,5 +334,5 @@ export const ProfitReportPanel: React.FC = () => {
     loadError={orderLoadError || advertisingError} storageKey={`ora_paid_waybill_profit_v2:${adminUser?.id || 'staff'}`} onRefresh={refresh}
     advertisingLedger={ledger} advertisingReady={advertisingReady} advertisingError={advertisingError} canImportAds={canImport}
     knownAdCodes={products.flatMap(product => [product.sku, ...(product.variants || []).map(variant => variant.sku)])}
-    onImportAds={importAdvertising} onReloadAds={loadAdvertising} useUploadedWaybills />;
+    onImportAds={importAdvertising} onReloadAds={loadAdvertising} onImportFardar={entries => recordCodPayments(entries, adminUser?.name || 'Admin')} useUploadedWaybills />;
 };
