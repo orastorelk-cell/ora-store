@@ -5,6 +5,7 @@ import { scheduleFacebookLeadRecoveryLive } from './facebookLeadRecoveryLive';
 import { scheduleFacebookLeadSheetCatchup } from './facebookLeadSheetCatchup';
 import { compactR2StorageOnce } from './r2StorageCompression';
 import { scheduleSheetConfirm } from './r2SheetConfirm';
+import { scheduleSheetDropdownRepair } from './sheetDropdownRepair';
 
 export default {
   async fetch(request: Request, env: unknown, ctx: any) {
@@ -22,6 +23,7 @@ export default {
   async scheduled(_controller: unknown, env: unknown, ctx: any) {
     configureCloudflareData(env);
     scheduleSheetConfirm(env,ctx);
+    scheduleSheetDropdownRepair(env,ctx);
     scheduleFacebookLeadRecoveryLive(baseWorker, env, ctx);
     scheduleFacebookLeadSheetCatchup(env, ctx);
     ctx.waitUntil(compactR2StorageOnce(env).catch(()=>console.warn('R2 storage compression will retry on the next cron run.')));
