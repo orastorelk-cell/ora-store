@@ -86,7 +86,8 @@ const prepareJob = async(env:unknown,job:Job,connection:SheetConnection) => {
       if(parcelHistory.has(decision.order_number)){counts.already_processed++;warnings.push(decision.order_number+': Missing order has existing courier / packing history; skipped to preserve the original parcel.');continue;}
       try{
         order=recoverSheetLead(decision,catalog.products,catalog.settings||{},job.created_at,job.operation_id);
-        if([...orders,...recoveredOrders].some(other=>recoveredLeadIdentityConflict(order,other)))throw new Error(decision.order_number+': Its lead identity or matching customer/items already belong to another system order. Review before retrying.');
+        const conflict=[...orders,...recoveredOrders].find(other=>recoveredLeadIdentityConflict(order,other));
+        if(conflict)throw new Error(decision.order_number+': Its Order ID or Lead ID already belongs to '+conflict.order_number+'. Review the original order before retrying.');
         recoveredOrders.push(order);counts.recovered++;
       }catch(error:any){errors.push(error.message);continue;}
     }

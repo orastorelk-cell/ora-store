@@ -6,10 +6,9 @@ export const recoveredLeadIdentityConflict = (seed:Row,other:Row) => {
   if(String(other.id)===seed.id||String(other.order_number)===seed.order_number)return true;
   if(other.order_source!==seed.order_source)return false;
   if(seed.platform_lead_id)return String(other.platform_lead_id||'')===seed.platform_lead_id;
-  const phone=(value:unknown)=>String(value||'').replace(/\D/g,'').replace(/^94/,'0');
-  const address=(value:unknown)=>String(value||'').trim().toLowerCase().replace(/\s+/g,' ');
-  const items=(order:Row)=>(order.items||[]).map((item:Row)=>String(item.sku||item.product_id)+':'+Number(item.quantity)).sort().join('|');
-  return phone(other.phone)===phone(seed.phone)&&address(other.address)===address(seed.address)&&items(other)===items(seed);
+  // Repeat customers may legitimately buy identical items. Only an original
+  // Order ID or an actual platform Lead ID proves a shared order identity.
+  return false;
 };
 // A missing snapshot may still have a parcel in durable courier/packing history.
 // Never manufacture a second parcel from that Sheet row.
