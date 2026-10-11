@@ -2,6 +2,15 @@ import { sheetHeader, type SheetDecision } from '../src/lib/sheetConfirmRows';
 import { buildOrderItemSnapshot, findProductSelection } from '../src/lib/productVariants';
 
 type Row=Record<string,any>;
+export const recoveredLeadIdentityConflict = (seed:Row,other:Row) => {
+  if(String(other.id)===seed.id||String(other.order_number)===seed.order_number)return true;
+  if(other.order_source!==seed.order_source)return false;
+  if(seed.platform_lead_id)return String(other.platform_lead_id||'')===seed.platform_lead_id;
+  const phone=(value:unknown)=>String(value||'').replace(/\D/g,'').replace(/^94/,'0');
+  const address=(value:unknown)=>String(value||'').trim().toLowerCase().replace(/\s+/g,' ');
+  const items=(order:Row)=>(order.items||[]).map((item:Row)=>String(item.sku||item.product_id)+':'+Number(item.quantity)).sort().join('|');
+  return phone(other.phone)===phone(seed.phone)&&address(other.address)===address(seed.address)&&items(other)===items(seed);
+};
 // A missing snapshot may still have a parcel in durable courier/packing history.
 // Never manufacture a second parcel from that Sheet row.
 export const sheetParcelHistory = (waybills:readonly Row[],admin:readonly Row[]) => {
@@ -31,7 +40,7 @@ export const recoverSheetLead = (decision:SheetDecision,products:any[],settings:
     return Number(clean);
   };
   const lead=value(['lead_id','platform_lead_id','leadid']);
-  if(!lead||lead.length>100)fail('a valid Lead ID is required to prevent duplicate lead imports.');
+  if(lead.length>100)fail('Lead ID is too long.');
   const customer=value(['customer_name','customer','name']),address=value(['address','customer_address','delivery_address']);
   const city=value(['city','town','delivery_city']),district=value(['district','delivery_district']);
   let phone=value(['phone_number','phone','mobile_number','mobile']).replace(/^p:/i,'').replace(/\D/g,'');
@@ -64,12 +73,12 @@ export const recoverSheetLead = (decision:SheetDecision,products:any[],settings:
   if(decision.status==='Confirmed'&&Math.abs(Math.round(Math.max(0,subtotal-discount+delivery+wrapFee))-final)>.01)fail('historical item prices, Discount, Delivery and Wrapping Cost do not match Final Total.');
   const time=value(['order_time','created_at']),created=Number.isFinite(Date.parse(time))?new Date(time).toISOString():at;
   const source=decision.order_number.startsWith('FB-')?'Facebook Ads':'TikTok Ads';
-  return {id:(source==='Facebook Ads'?'fb-lead-':'tk-lead-')+lead.replace(/[^a-zA-Z0-9_-]/g,'_'),order_number:decision.order_number,
+  return {id:lead?(source==='Facebook Ads'?'fb-lead-':'tk-lead-')+lead.replace(/[^a-zA-Z0-9_-]/g,'_'):'sheet-lead-'+decision.order_number,order_number:decision.order_number,
     customer_name:customer,phone,whatsapp:value(['whatsapp_number','whatsapp_phone','whatsapp'])||phone,address,city,district,
-    order_source:source,platform_lead_id:lead,lead_import_key:(source+'::lead::'+lead).toLowerCase(),
+    order_source:source,...(lead?{platform_lead_id:lead}:{}),lead_import_key:(source+(lead?'::lead::'+lead:'::sheet-order::'+decision.order_number)).toLowerCase(),
     created_at:created,lead_imported_at:at,payment_method:'COD',payment_status:'Pending',call_center_status:'Pending',order_status:'New Orders',
     stock_allocated:false,stock_status:'Waiting for Stock',items,subtotal,delivery_fee:delivery,special_offer_discount:discount,
     gift_wrap_selected:wrap,gift_wrap_fee:wrapFee,total_amount:final,is_advance_required:false,advance_confirmed:false,
     is_synced_google_sheets:true,dispatch_status:'Not Scanned',notes:'Recovered missing system lead from connected Sheet; original Order ID preserved',
-    sheet_lead_recovery:{operation_id:operationId,recovered_at:at,original_order_time:time}};
+    sheet_lead_recovery:{operation_id:operationId,recovered_at:at,original_order_time:time,identity:lead?'platform_lead_id':'original_order_number'}};
 };

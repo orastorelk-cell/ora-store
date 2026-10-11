@@ -102,7 +102,9 @@ and saves all decisions in one guarded R2 write before allocating stock. Ready
 orders receive one `PACK-SHEET-…` invoice batch. The download contains one A6 PDF
 and one UTF-8 Fardar CSV. Existing invoices and courier numbers are preserved.
 Missing FB/TK COD lead snapshots can be recovered from complete Sheet rows with
-their original Order ID, Lead ID, contact details and historical prices. Recovery
+their original Order ID, contact details and historical prices. Lead ID is used
+when present; missing Lead IDs use a stable original-Order-ID identity with
+additional matching customer/item checks. Recovery
 and all decisions commit atomically; Pending rows are never created. Existing
 lead identities and courier/packing history prevent a second parcel. Incomplete
 rows and missing bank-payment records require review before any invoice starts.

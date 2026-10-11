@@ -11,7 +11,7 @@ import { returnPackingHandler } from './r2ReturnPacking';
 import { cancellationInProgress } from './r2OrderCancellation';
 import { readGoogleSheetTabs, sheetMetadata, spreadsheetId, validateServiceAccount, googleSheetRequest, SheetApiError, type SheetConnection } from './googleSheetsApi';
 import { pauseR2Conflict } from './r2Retry';
-import { recoverSheetLead, sheetParcelHistory } from './sheetLeadRecovery';
+import { recoverSheetLead, recoveredLeadIdentityConflict, sheetParcelHistory } from './sheetLeadRecovery';
 
 type Row=Record<string,any>;
 type Phase='reading'|'saving'|'verifying'|'packing'|'colouring'|'complete'|'blocked'|'sheet_update_failed';
@@ -86,7 +86,7 @@ const prepareJob = async(env:unknown,job:Job,connection:SheetConnection) => {
       if(parcelHistory.has(decision.order_number)){counts.already_processed++;warnings.push(decision.order_number+': Missing order has existing courier / packing history; skipped to preserve the original parcel.');continue;}
       try{
         order=recoverSheetLead(decision,catalog.products,catalog.settings||{},job.created_at,job.operation_id);
-        if([...orders,...recoveredOrders].some(other=>String(other.id)===order.id||(other.order_source===order.order_source&&String(other.platform_lead_id||'')===order.platform_lead_id)))throw new Error(decision.order_number+': Its Lead ID already belongs to another system order. Review before retrying.');
+        if([...orders,...recoveredOrders].some(other=>recoveredLeadIdentityConflict(order,other)))throw new Error(decision.order_number+': Its lead identity or matching customer/items already belong to another system order. Review before retrying.');
         recoveredOrders.push(order);counts.recovered++;
       }catch(error:any){errors.push(error.message);continue;}
     }
@@ -143,7 +143,7 @@ const commitDecisions = async(env:unknown,job:Job) => {
   return replaceDataTable(env,'order_snapshots',rows=>{
     let base=rows;
     for(const seed of recovered){
-      const matches=base.filter(row=>String(row.order_id)===seed.id||String(row.order_number)===seed.order_number||(row.payload?.order_source===seed.order_source&&String(row.payload?.platform_lead_id||'')===seed.platform_lead_id));
+      const matches=base.filter(row=>recoveredLeadIdentityConflict(seed,{...row.payload,id:row.order_id,order_number:row.order_number}));
       if(matches.length){
         if(matches.length!==1||matches[0].order_id!==seed.id||matches[0].order_number!==seed.order_number||matches[0].payload?.sheet_lead_recovery?.operation_id!==job.operation_id)throw new Blocked([seed.order_number+': The original lead arrived or its identity changed during recovery. Retry the latest system data.']);
         continue;
