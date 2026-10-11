@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { build } from 'esbuild';
-import { buildPaidWaybillProfitReport as buildReport, selectSavedPaidProfitOrders, profitAdvertisingPeriodKey, parseProfitWaybillFile, parseProfitWaybillUpload, profitAdvertisingSummary, profitSystemDay, PROFIT_PACKING_COST } from '../src/lib/paidWaybillProfit';
+import { buildPaidWaybillProfitReport as buildReport, mergeProfitPurchaseHistory, selectSavedPaidProfitOrders, profitAdvertisingPeriodKey, parseProfitWaybillFile, parseProfitWaybillUpload, profitAdvertisingSummary, profitSystemDay, PROFIT_PACKING_COST } from '../src/lib/paidWaybillProfit';
 import { createPaidWaybillProfitPdf } from '../src/lib/paidWaybillProfitPdf';
 import { profitBatchFixture, profitOrderFixture as order, profitPurchaseFixture as purchase } from './profit-report-fixtures';
 import type { Order, ReturnRecord } from '../src/types';
@@ -68,6 +68,16 @@ const partial = order({ items: [{ ...earlier.items[0], quantity: 3, subtotal: 30
 assert.equal(buildReport({ orders: [partial], purchases: [purchase(), latest] }).rows[0].purchasing, 1800, 'A Pending item uses its full quantity at the latest unit price.');
 assert.equal(buildReport({ orders: sixMissing, purchases: [latest, purchase({ unit_buying_price: 0, created_at: '2026-10-10T12:00:00Z' })] }).rows[0].purchasing, 0, 'A recorded free purchase is a valid zero cost.');
 assert.equal(buildReport({ orders: [earlier], purchases: [purchase({ sku: 'R0053-GREEN', variant_sku: 'R0053-GREEN', variant_id: 'green' })], waybills: ['18160001'] }).rows[0].purchasing, null, 'Variants must match exactly.');
+const oldSkuOrder = immutable(order({ stock_allocated: false, items: [{ ...earlier.items[0], sku: 'R0053' }] }));
+const sameVariant = immutable(purchase({ sku: 'R0053-BLACK-NEW', variant_sku: 'R0053-BLACK-NEW', unit_buying_price: 725 }));
+assert.equal(buildReport({ orders: [oldSkuOrder], purchases: [sameVariant] }).rows[0].purchasing, 725, 'A legacy/main SKU can use the latest PO for its exact saved product and variant IDs.');
+assert.equal(buildReport({ orders: [oldSkuOrder], purchases: [purchase({ variant_id: 'green', sku: 'R0053-GREEN', variant_sku: 'R0053-GREEN' })] }).rows[0].purchasing, null, 'A main SKU must never borrow another variant price.');
+const renamedNormal = order({ stock_allocated: false, items: [{ ...earlier.items[0], sku: 'R0041', product_id: 'holder', product_type: 'normal', variant_id: undefined, variant_name: undefined }] });
+assert.equal(buildReport({ orders: [renamedNormal], purchases: [purchase({ sku: 'OLDER-HOLDER', product_id: 'holder', variant_id: undefined, variant_name: undefined, variant_sku: undefined, unit_buying_price: 300 })] }).rows[0].purchasing, 300);
+const combinedPurchases = mergeProfitPurchaseHistory([latest], [purchase(), { ...latest, unit_buying_price: 800 }]);
+assert.equal(combinedPurchases.length, 2);
+assert.equal(combinedPurchases.find(row => row.id === latest.id)?.unit_buying_price, 600, 'A newer browser correction is not overwritten by the restored archive.');
+assert.equal(buildReport({ orders: sixMissing, purchases: mergeProfitPurchaseHistory([], [latest]) }).totals.ready, 6, 'Server Purchasing records work even when this browser has no local purchase history.');
 
 const bank = order({ payment_method: 'Bank Payment', payment_paid_type: 'Full', cod_payment_received: false, payment_received_amount: 1250 });
 assert.equal(buildReport({ orders: [bank], purchases, waybills: ['18160001'] }).rows[0].profit, 300);

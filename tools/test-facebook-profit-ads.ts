@@ -150,7 +150,7 @@ class MemoryBucket {
 }
 const raw = new MemoryBucket(), secret = 'synthetic-profit-test-secret', env = { ORA_MEDIA_R2: raw, STAFF_SESSION_SECRET: secret, ORA_R2_COMPRESSION_ENABLED: '1' };
 const catalog = { key: 'storefront-state-v1', payload: { version: 1, products: [{ id: 'watch', sku: 'R0003', stock: 100 }], categories: [], settings: { website_name: 'Synthetic Store' } } };
-await importRecovery(dataBucket(env)!, { format: 'ora-r2-recovery-v1', orders, admin_data_store: [catalog, { key: 'unrelated-finance', payload: ['preserve-me'] }],
+await importRecovery(dataBucket(env)!, { format: 'ora-r2-recovery-v1', orders, tables: { purchase_orders: purchases }, admin_data_store: [catalog, { key: 'unrelated-finance', payload: ['preserve-me'] }],
   admin_users: [{ id: 'admin', role: 'admin', is_active: true }, { id: 'view', role: 'staff', is_active: true, permissions: ['profit_report', 'level:profit_report:view'] },
     { id: 'staff', role: 'staff', is_active: true, permissions: ['orders'] }], courier_waybills: [] });
 const token = (id: string) => { const payload = Buffer.from(JSON.stringify({ sub: id, role: id === 'admin' ? 'admin' : 'staff', exp: Date.now() + 60000 })).toString('base64url'); return payload + '.' + crypto.createHmac('sha256', secret).update(payload).digest('base64url'); };
@@ -160,6 +160,14 @@ assert.equal((await request('GET', undefined, 'invalid')).status, 401);
 assert.equal((await request('GET', undefined, token('staff'))).status, 403);
 assert.equal((await request('GET', undefined, token('view'))).status, 200);
 assert.equal((await request('POST', { csv, fileName: 'QA.csv', expectedVersion: 0 }, token('view'))).status, 403);
+raw.writes = [];
+const purchaseHistory: any = await (await request('GET', undefined, token('view'), '/api/admin/profit-ad-costs?includePurchases=1')).json();
+assert.equal(purchaseHistory.purchases.length, purchases.length);
+assert.equal(purchaseHistory.purchases[0].unit_buying_price, purchases[0].unit_buying_price);
+assert.equal(purchaseHistory.purchases[0].id, purchases[0].id);
+assert(!('bill_image_url' in purchaseHistory.purchases[0]) && !('notes' in purchaseHistory.purchases[0]), 'Report reads expose cost provenance, not bill images or supplier notes.');
+assert.equal(raw.writes.length, 0, 'Reading archived Purchasing history never allocates stock or saves orders.');
+assert.equal((await request('GET', undefined, token('staff'), '/api/admin/profit-ad-costs?includePurchases=1')).status, 403);
 const protectedOrders = JSON.stringify(await readDataTable(env, 'order_snapshots'));
 const upload = { csv, fileName: 'QA.csv', expectedVersion: 0 };
 assert.equal((await request('POST', upload)).status, 200);
@@ -208,6 +216,10 @@ try {
   const selected = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, uploadProps));
   assert(selected.includes('Upload Waybill CSV') && selected.includes('Fardar-waybill-selection.csv'));
   assert(selected.includes('Facebook CSV Reporting Date Range') && selected.includes('01/10/2026 — 08/10/2026'));
+  const beforeCostCsv = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, { ...uploadProps, purchases: [], advertisingLedger: emptyFacebookAdLedger() }));
+  const datesBeforeUpload = beforeCostCsv.match(/aria-label="Required Facebook CSV export dates"([\s\S]*?)<\/div>/)![1];
+  assert(datesBeforeUpload.includes('01/10/2026 - 01/10/2026'), 'Required export dates are shown BEFORE any cost CSV, even when Purchasing still needs review.');
+  assert(!datesBeforeUpload.includes('09/10/2026'), 'The needed CSV uses original lead dates rather than the later system arrival date.');
   assert(!selected.includes('aria-label="Profit system date from"'), 'CSV reporting dates are displayed instead of filtering the waybills by system dates.');
   assert(selected.includes('Rs. -1,584.00') && selected.includes('PO-LATEST-R0003'));
   const selectedTable = selected.match(/aria-label="Paid waybill profit details"[\s\S]*?<tbody[^>]*>([\s\S]*?)<\/tbody>/)![1];

@@ -9,12 +9,17 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
   headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 
 /** Private finance history, stored separately from public settings and order snapshots. */
-export async function profitAdCostHandler(request: Request, storage: ProfitAdsStorage, user: Row): Promise<Response> {
+export async function profitAdCostHandler(request: Request, storage: ProfitAdsStorage, user: Row,
+  readPurchases?: () => Promise<readonly Row[]>): Promise<Response> {
   try {
     if (user.role !== 'admin' && !(user.permissions || []).includes('profit_report')) return json({ error: 'Profit Report permission required.' }, 403);
     if (request.method === 'GET') {
       const rows = await storage.readAdmin();
-      return json({ ledger: readFacebookAdLedger(rows.find(row => row.key === FACEBOOK_AD_LEDGER_KEY)?.payload) });
+      const purchases = new URL(request.url).searchParams.get('includePurchases') === '1' ? await readPurchases?.() || [] : undefined;
+      return json({ ledger: readFacebookAdLedger(rows.find(row => row.key === FACEBOOK_AD_LEDGER_KEY)?.payload),
+        ...(purchases ? { purchases: purchases.map(({ id, po_number, product_id, product_name, sku, variant_id, variant_name, variant_sku,
+          quantity_added, unit_buying_price, total_cost, created_at }) => ({ id, po_number, product_id, product_name, sku, variant_id,
+          variant_name, variant_sku, quantity_added, unit_buying_price, total_cost, created_at, supplier_name: '', performed_by: '' })) } : {}) });
     }
     if (request.method !== 'POST') return json({ error: 'Use GET to read history or POST to import a CSV.' }, 405);
     if (user.role !== 'admin' && (user.permissions || []).includes('level:profit_report:view')) return json({ error: 'Profit Report edit permission required.' }, 403);

@@ -174,6 +174,21 @@ export function facebookReportingPeriods(ledger: FacebookAdLedger, keys?: string
   return [...periods.values()].sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
 }
 const facebookOrder = (order: Order) => order.order_source === 'Facebook Ads' || /^FB-/i.test(order.order_number);
+/** Available before any cost CSV is uploaded, including when Purchasing needs review. */
+export function facebookRequiredCostDates(orders: Order[], report: PaidWaybillProfitReport) {
+  const selected = new Set(report.rows.filter(row => row.source === 'Facebook' && row.eligible && row.orderId).map(row => row.orderId));
+  const dates: string[] = [];
+  let fallbackCount = 0, missingCount = 0;
+  for (const order of orders) {
+    if (!selected.has(order.id) || !facebookOrder(order)) continue;
+    const day = profitSystemDay(order.platform_lead_created_at || order.created_at);
+    if (!day) { missingCount++; continue; }
+    dates.push(day);
+    if (!order.platform_lead_created_at) fallbackCount++;
+  }
+  dates.sort();
+  return { range: dates.length ? { from: dates[0], to: dates.at(-1)!, count: dates.length } : null, fallbackCount, missingCount };
+}
 const lostOrder = (order: Order & { return_tracking_waybill?: string }) => order.order_status === 'Cancelled' || order.call_center_status === 'Cancelled'
   || order.payment_status === 'Refunded' || Boolean(order.return_tracking_waybill || order.return_sheet_id)
   || /return/i.test(order.delivery_status || '');

@@ -3,10 +3,10 @@ import { AlertTriangle, BarChart3, CalendarDays, CheckCircle2, ChevronLeft, Chev
 import { useStore } from '../../context/StoreContext';
 import type { Order, PurchaseOrder, ReturnRecord } from '../../types';
 import { staffJsonRequest } from '../../lib/staffRequest';
-import { allocateFacebookAdCosts, emptyFacebookAdLedger, facebookAllocatedAdvertisingSummary, facebookReportingPeriods, parseFacebookAdCostCsv, readFacebookAdLedger, type FacebookAdLedger } from '../../lib/facebookProfitAds';
+import { allocateFacebookAdCosts, emptyFacebookAdLedger, facebookAllocatedAdvertisingSummary, facebookReportingPeriods, facebookRequiredCostDates, parseFacebookAdCostCsv, readFacebookAdLedger, type FacebookAdLedger } from '../../lib/facebookProfitAds';
 import { FacebookProfitAdsPanel } from './FacebookProfitAdsPanel';
 import {
-  buildPaidWaybillProfitReport, selectSavedPaidProfitOrders, parseProfitWaybillUpload, profitAdvertisingPeriodKey, profitAdvertisingSummary, profitMoney, PROFIT_PAGE_SIZE,
+  buildPaidWaybillProfitReport, mergeProfitPurchaseHistory, selectSavedPaidProfitOrders, parseProfitWaybillUpload, profitAdvertisingPeriodKey, profitAdvertisingSummary, profitMoney, PROFIT_PAGE_SIZE,
   type PaymentAmountBasis, type ProfitDateRange, type ProfitPaymentFilter,
 } from '../../lib/paidWaybillProfit';
 
@@ -82,6 +82,7 @@ export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ or
       count: built.rows.filter(row => row.source === 'Facebook' && row.eligible).length } : null;
     return built;
   }, [orders, purchases, returns, draft.paymentBasis, draft.waybills, selection, useUploadedWaybills, reportingPeriods]);
+  const requiredFacebookDates = useMemo(() => facebookRequiredCostDates(orders, report), [orders, report]);
   const periodDescription = reportingPeriods.length > 3 ? `${reportingPeriods[0].from} to ${reportingPeriods.at(-1)!.to} (${reportingPeriods.length} CSV periods)` : reportingPeriods.map(period => `${period.from} to ${period.to}`).join(' / ') || 'Not uploaded';
   const sourceName = useUploadedWaybills ? `Uploaded waybills: ${draft.waybillFileName || 'Waybill list'} | Facebook CSV reporting: ${periodDescription}`
     : `${draft.paymentFilter === 'cod' ? 'Saved COD Received orders' : draft.paymentFilter === 'online' ? 'Saved paid online orders' : 'Saved COD Received and paid online orders'} | System dates: ${draft.fromDate || 'All'} to ${draft.toDate || 'All'}`;
@@ -186,7 +187,7 @@ export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ or
         </div>
         {draft.waybillFileName && <p className="mt-3 break-all text-sm font-semibold">{draft.waybillFileName}</p>}
         <p className="mt-3 text-sm text-gray-700">{report.rows.length} uploaded waybills · {report.totals.ready} complete · {report.totals.review} need review{report.duplicates ? ` · ${report.duplicates} repeated entries ignored` : ''}</p>
-        <p className="mt-2 text-xs text-gray-500">Saved payment, Purchasing and Fardar records are used for these waybills. Uploading replaces this report's waybill selection.</p>
+        <p className="mt-2 text-xs text-gray-500">Saved payment, Purchasing and Fardar records are used for these waybills. {purchases.length} Purchasing records available. Uploading replaces this report's waybill selection.</p>
       </> : <>
       <h3 className="flex items-center gap-2 font-black"><WalletCards className="h-5 w-5 text-orange-600" />1. Saved Paid Orders</h3>
       <p className="mt-1 text-sm text-gray-500">COD Received සහ සම්පූර්ණ online payment ලැබුණු orders මෙතැනට ස්වයංක්‍රීයව එනවා.</p>
@@ -211,6 +212,16 @@ export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ or
     {available && !invalidDates &&
       <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
         <h3 className="flex items-center gap-2 font-black"><CalendarDays className="h-5 w-5 text-orange-600" />2. Advertising Costs</h3>
+        <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-4" aria-label="Required Facebook CSV export dates">
+          <p className="text-sm font-bold text-blue-900">FB CSV එක export කරන්න ඕන Date Range</p>
+          <p className="mt-2 text-xl font-black text-blue-900">{requiredFacebookDates.range ? rangeLabel(requiredFacebookDates.range) : report.rows.length ? 'No Facebook orders in this waybill selection' : 'Upload Waybill CSV to show the required dates'}</p>
+          {requiredFacebookDates.range && <>
+            <p className="mt-2 text-sm text-blue-900">{requiredFacebookDates.range.count} Facebook orders · Original lead dates</p>
+            <p className="mt-2 text-xs text-blue-900">Ads Manager එකේ මේ dates තෝරලා Facebook cost CSV එක export කරන්න. Delivery / payment dates භාවිතා කරන්නේ නැහැ. Daily breakdown එකක් ගත්තොත් කලින් save කළ dates එක්ක overlap නොවන reports දාන්න පුළුවන්.</p>
+          </>}
+          {requiredFacebookDates.fallbackCount > 0 && <p className="mt-2 text-xs text-amber-800">{requiredFacebookDates.fallbackCount} older order(s) have no original lead date; their saved system dates are shown.</p>}
+          {requiredFacebookDates.missingCount > 0 && <p className="mt-2 text-xs font-bold text-red-700">{requiredFacebookDates.missingCount} Facebook order(s) have no valid lead date. Check their dates before exporting the CSV.</p>}
+        </div>
         {useUploadedWaybills && <div className="mt-4 rounded-xl border border-orange-100 bg-orange-50 p-4">
           <p className="text-sm font-bold text-orange-900">Facebook CSV Reporting Date Range</p>
           {reportingPeriods.length ? <>
@@ -265,18 +276,22 @@ export const ProfitReportPanel: React.FC = () => {
   const [ledger, setLedger] = useState<FacebookAdLedger>(emptyFacebookAdLedger);
   const [advertisingReady, setAdvertisingReady] = useState(false);
   const [advertisingError, setAdvertisingError] = useState('');
+  const [savedPurchases, setSavedPurchases] = useState<PurchaseOrder[]>([]);
+  const reportPurchases = useMemo(() => mergeProfitPurchaseHistory(purchaseOrders, savedPurchases), [purchaseOrders, savedPurchases]);
   const loadAdvertising = useCallback(async () => {
     setAdvertisingReady(false); setAdvertisingError('');
     try {
-      const data = await staffJsonRequest('/api/admin/profit-ad-costs', { headers: { Authorization: `Bearer ${localStorage.getItem('ora_staff_session_token') || ''}` } });
+      const data = await staffJsonRequest('/api/admin/profit-ad-costs?includePurchases=1', { headers: { Authorization: `Bearer ${localStorage.getItem('ora_staff_session_token') || ''}` } });
       if (!data.ledger) throw new Error('Advertising history response was incomplete. Refresh Ad Costs to retry.');
       const saved = readFacebookAdLedger(data.ledger);
+      if (!Array.isArray(data.purchases)) throw new Error('Saved Purchasing history was not returned. Refresh Orders to retry.');
+      setSavedPurchases(data.purchases);
       setLedger(current => saved.version >= current.version ? saved : current);
       setAdvertisingReady(true);
     } catch (error: any) { setAdvertisingError(error.message || 'Saved ad costs could not load. Refresh Ad Costs to retry.'); throw error; }
   }, [adminUser?.id]);
   useEffect(() => {
-    setLedger(emptyFacebookAdLedger()); setAdvertisingReady(false); setAdvertisingError('');
+    setLedger(emptyFacebookAdLedger()); setSavedPurchases([]); setAdvertisingReady(false); setAdvertisingError('');
     if (adminUser && sharedStoreReady) void loadAdvertising().catch(() => {});
   }, [adminUser?.id, sharedStoreReady, loadAdvertising]);
   const importAdvertising = async (csv: string, fileName: string) => {
@@ -291,8 +306,8 @@ export const ProfitReportPanel: React.FC = () => {
   };
   const refresh = async () => { await Promise.all([refreshOrdersFromServer(), loadAdvertising()]); };
   const canImport = adminUser?.role === 'admin' || Boolean(adminUser?.permissions?.includes('profit_report') && !adminUser?.permissions?.includes('level:profit_report:view'));
-  return <ProfitReportWorkspace key={adminUser?.id} orders={orders} purchases={purchaseOrders} returns={returnRecords} ready={sharedStoreReady && sharedOrdersReady}
-    loadError={orderLoadError} storageKey={`ora_paid_waybill_profit_v2:${adminUser?.id || 'staff'}`} onRefresh={refresh}
+  return <ProfitReportWorkspace key={adminUser?.id} orders={orders} purchases={reportPurchases} returns={returnRecords} ready={sharedStoreReady && sharedOrdersReady && advertisingReady}
+    loadError={orderLoadError || advertisingError} storageKey={`ora_paid_waybill_profit_v2:${adminUser?.id || 'staff'}`} onRefresh={refresh}
     advertisingLedger={ledger} advertisingReady={advertisingReady} advertisingError={advertisingError} canImportAds={canImport}
     knownAdCodes={products.flatMap(product => [product.sku, ...(product.variants || []).map(variant => variant.sku)])}
     onImportAds={importAdvertising} onReloadAds={loadAdvertising} useUploadedWaybills />;

@@ -220,7 +220,7 @@ export const withR2DataFallback=async(request:Request,env:unknown,_ctx:any,next:
     if(new URL(request.url).pathname==='/api/admin/profit-ad-costs'){
       const user=await verifyActiveStaff(request,env);
       if(!user)return json({error:'Login session required.'},401);
-      return profitAdCostHandler(request,r2ReturnStorage(env),user);
+      return profitAdCostHandler(request,r2ReturnStorage(env),user,()=>readDataTable(env,'purchase_orders'));
     }
     const operational=await operationalHandler(request,env);
     if(operational)return operational;
