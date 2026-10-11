@@ -38,7 +38,7 @@ import { canonicalJson, confirmCsvRequestWithRetry, saveConfirmCsvDecisions } fr
 import { saveInvoiceDownloadStatus } from '../lib/invoiceDownloadStatus';
 import { storefrontSaveBody } from '../lib/storefrontProductSave';
 import { publicStorefrontRequest } from '../lib/publicStorefrontRequest';
-import { prepareCodPaymentUpdate, type CodPaymentEntry } from '../lib/codPaymentImport';
+import { validCodPaymentEntries, type CodPaymentEntry } from '../lib/codPaymentImport';
 
 export interface BulkOrderItemInput {
   order_id?: string;
@@ -216,7 +216,7 @@ interface StoreContextType {
   markInvoiceBatchDownloaded: (orderIds: string[], downloadedBy?: string, downloadSet?: { date: string; number: number }) => Promise<void>;
   markFardarCsvExported: (orderIds: string[], exportedBy?: string) => Promise<void>;
   scanDispatchBarcode: (barcode: string, scannedBy?: string) => Promise<{ success: boolean; message: string; order?: Order }>;
-  recordCodPayments: (entries: CodPaymentEntry[], recordedBy?: string) => Promise<{ updatedCount: number; notFound: string[] }>;
+  recordCodPayments: (entries: CodPaymentEntry[], recordedBy?: string) => Promise<{ updatedCount: number; unchangedCount: number; payments: number; returns: number; notFound: string[] }>;
   syncOrderToSheet: (orderId: string) => Promise<boolean>;
   syncAllUnsyncedOrders: () => Promise<number>;
   createWebsiteTestOrder: (itemCount?: 1 | 5) => Promise<Order | null>;
@@ -2946,49 +2946,41 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const recordCodPayments = async (
     entries: CodPaymentEntry[],
     recordedBy = adminUser?.name || 'Admin'
-  ): Promise<{ updatedCount: number; notFound: string[] }> => {
+  ): Promise<{ updatedCount: number; unchangedCount: number; payments: number; returns: number; notFound: string[] }> => {
     const normalize = (value: string) => String(value || '').replace(/\s+/g, '').toLowerCase();
     const unique = new Map<string, typeof entries[number]>();
     entries.forEach((entry) => {
       const key = normalize(entry.waybill);
-      if (key) unique.set(key, entry);
+      if (key) {
+        const previous = unique.get(key);
+        if (previous && JSON.stringify(previous) !== JSON.stringify(entry)) throw new Error(`Waybill ${entry.waybill} has conflicting CSV rows.`);
+        unique.set(key, entry);
+      }
     });
 
-    const updates: Order[] = [];
-    const notFound: string[] = [];
-    for (const [key, entry] of unique.entries()) {
-      const matches = orders.filter((candidate) => normalize(candidate.waybill_number || '') === key);
-      if (matches.length > 1) throw new Error(`Waybill ${entry.waybill} belongs to multiple orders. Resolve the duplicate before importing payments.`);
-      const order = matches[0];
-      if (!order) {
-        notFound.push(entry.waybill);
-        continue;
-      }
-      const updated = prepareCodPaymentUpdate(order, entry);
-      if (JSON.stringify(updated) === JSON.stringify(order)) continue;
-      const result = await sharedStaffRequest(`/api/orders/${encodeURIComponent(updated.id)}`, {
-        method: 'PUT',
-        body: JSON.stringify({ order: updated }),
-      });
-      const saved = result?.order as Order | undefined;
-      if (!saved || saved.fardar_delivery_fee !== updated.fardar_delivery_fee || saved.cod_payment_amount !== updated.cod_payment_amount
-        || saved.cod_payment_amount_basis !== updated.cod_payment_amount_basis || saved.cod_payment_received !== updated.cod_payment_received
-        || saved.payment_status !== updated.payment_status || saved.payment_paid_type !== updated.payment_paid_type
-        || saved.payment_received_amount !== updated.payment_received_amount) throw new Error(`${order.order_number}: payment / courier fee save was not confirmed. Retry the CSV.`);
-      updates.push(saved);
-      setOrders(prev => prev.map(candidate => candidate.id === saved.id ? saved : candidate));
+    const all = [...unique.values()];
+    const chunks = Array.from({ length: Math.ceil(all.length / 20) }, (_, index) => all.slice(index * 20, index * 20 + 20));
+    if (!chunks.length || chunks.some(chunk => !validCodPaymentEntries(chunk))) throw new Error('The CSV contains missing or invalid payment / return amounts.');
+    const summary = { updatedCount: 0, unchangedCount: 0, payments: 0, returns: 0, notFound: [] as string[] };
+    for (const chunk of chunks) {
+      const result = await sharedStaffRequest('/api/orders/courier-payments', { method: 'POST', body: JSON.stringify({ entries: chunk }) });
+      if (!result.ok || !Array.isArray(result.orders) || !Array.isArray(result.notFound)
+        || !['updatedCount', 'unchangedCount', 'payments', 'returns'].every(field => Number.isInteger(result[field]) && result[field] >= 0)
+        || result.orders.length + result.notFound.length !== chunk.length) throw new Error('Payment / return fee save was not confirmed. Retry this CSV.');
+      const saved = new Map<string, Order>(result.orders.map((order: Order) => [String(order.id), order]));
+      setOrders(prev => prev.map(order => saved.get(String(order.id)) || order));
+      summary.updatedCount += result.updatedCount; summary.unchangedCount += result.unchangedCount;
+      summary.payments += result.payments; summary.returns += result.returns; summary.notFound.push(...result.notFound);
     }
 
-    if (updates.length) {
-      const map = new Map(updates.map((order) => [order.id, order]));
-      setOrders((prev) => prev.map((order) => map.get(order.id) || order));
+    if (summary.updatedCount) {
       logActivity({
         action: 'Courier Payments / Fees Recorded',
         module: 'Payments',
-        details: `${updates.length} payment / courier fee record(s) saved • ${recordedBy}`,
+        details: `${summary.updatedCount} records saved (${summary.payments} delivered, ${summary.returns} returns) • ${recordedBy}`,
       });
     }
-    return { updatedCount: updates.length, notFound };
+    return summary;
   };
 
   const scanDispatchBarcode = async (barcode: string, scannedBy = adminUser?.name || 'Admin'): Promise<{ success: boolean; message: string; order?: Order }> => {

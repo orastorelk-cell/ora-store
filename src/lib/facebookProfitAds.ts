@@ -1,6 +1,6 @@
 import type { Order } from '../types';
 import { parseCsv } from './csv';
-import { profitAdvertisingSummary, profitSystemDay, savedProfitPaymentKind, type PaidProfitSelection, type PaidWaybillProfitReport } from './paidWaybillProfit';
+import { isReturnedProfitOrder, profitAdvertisingSummary, profitSystemDay, savedProfitPaymentKind, type PaidProfitSelection, type PaidWaybillProfitReport } from './paidWaybillProfit';
 
 export const FACEBOOK_AD_LEDGER_KEY = 'profit-facebook-ads-v1';
 export interface FacebookAdCost {
@@ -163,11 +163,11 @@ export interface FacebookAdCohort {
 }
 export interface FacebookAdAllocation {
   cohorts: FacebookAdCohort[]; orderCosts: Map<string, { cost: number; lossCost: number; promotionCost: number; state: 'paid' | 'pending' | 'lost'; from: string; to: string; code: string }>;
-  paidCost: number; lostCost: number; commercialCost: number; pendingCost: number; unmatchedCost: number;
+  paidCost: number; returnedCost: number; selectedReturnOrderIds: Set<string>; lostCost: number; commercialCost: number; pendingCost: number; unmatchedCost: number;
   commercialSpend: number; commercialRemainingCost: number;
   lossSpend: number; lossRemainingCost: number;
   lossCohorts: Array<{ from: string; to: string; spend: number; leads: number; lostLeads: number; selectedPaid: number; selectedCost: number; remainingCost: number }>;
-  commercialCohorts: Array<{ from: string; to: string; spend: number; leads: number; selectedPaid: number; selectedCost: number; remainingCost: number }>;
+  commercialCohorts: Array<{ from: string; to: string; spend: number; leads: number; selectedPaid: number; selectedReturned: number; selectedCost: number; remainingCost: number }>;
   missingOrderIds: string[]; issues: string[]; totalSpend: number;
   waybillScoped?: boolean;
 }
@@ -201,10 +201,9 @@ export function facebookRequiredCostDates(orders: Order[], report: PaidWaybillPr
   return { range: dates.length ? { from: dates[0], to: dates.at(-1)!, count: dates.length } : null, fallbackCount, missingCount };
 }
 const lostOrder = (order: Order & { return_tracking_waybill?: string }) => order.order_status === 'Cancelled' || order.call_center_status === 'Cancelled'
-  || order.payment_status === 'Refunded' || Boolean(order.return_tracking_waybill || order.return_sheet_id)
-  || /return/i.test(order.delivery_status || '');
+  || order.payment_status === 'Refunded' || isReturnedProfitOrder(order);
 const orderState = (order: Order): 'paid' | 'pending' | 'lost' => lostOrder(order) ? 'lost'
-  : savedProfitPaymentKind(order) && (order.cod_payment_received || order.order_status === 'Delivered') ? 'paid' : 'pending';
+  : savedProfitPaymentKind(order) && (order.cod_payment_received || order.order_status === 'Delivered' || order.fardar_invoice_status === 'Delivered') ? 'paid' : 'pending';
 const inSelection = (order: Order, selection: PaidProfitSelection) => {
   const date = profitSystemDay(order.created_at);
   return Boolean(date && (!selection.fromDate || date >= selection.fromDate) && (!selection.toDate || date <= selection.toDate));
@@ -258,8 +257,9 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
     assignments.set(cohort, [...(assignments.get(cohort) || []), order]);
   }
   const orderCosts: FacebookAdAllocation['orderCosts'] = new Map();
-  let paidCost = 0, lostCost = 0;
+  let paidCost = 0, returnedCost = 0, lostCost = 0;
   const selectedReady = new Set(report.rows.filter(row => row.profit !== null && (!scopedIds || row.orderId && scopedIds.has(row.orderId))).map(row => row.orderId));
+  const selectedReturnOrderIds = new Set(report.rows.filter(row => row.outcome === 'returned' && row.orderId && selectedReady.has(row.orderId)).map(row => row.orderId!));
   for (const cohort of cohorts) {
     const matched = (assignments.get(cohort) || []).sort((a, b) => (a.platform_lead_id || a.id).localeCompare(b.platform_lead_id || b.id));
     cohort.matched = matched.length;
@@ -276,7 +276,8 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
       cohort[state]++; cohort[`${state}Cost`] = round(cohort[`${state}Cost`] + cost);
       orderCosts.set(order.id, { cost, lossCost: 0, promotionCost: 0, state, from: cohort.from, to: cohort.to, code: cohort.code });
       if (state === 'paid' && selectedReady.has(order.id)) paidCost += cost;
-      if (!scope && state === 'lost' && inSelection(order, selection)) lostCost += cost;
+      if (state === 'lost' && selectedReturnOrderIds.has(order.id)) returnedCost += cost;
+      if (!scope && state === 'lost' && !selectedReturnOrderIds.has(order.id) && inSelection(order, selection)) lostCost += cost;
     });
     cohort.unmatchedCost = (cents(cohort.spend) - allocated) / 100;
   }
@@ -294,7 +295,7 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
     }
   }
   const missingOrderIds = report.rows.filter(row => row.source === 'Facebook' && row.orderId
-    && orderCosts.get(row.orderId)?.state !== 'paid').map(row => row.orderId!);
+    && orderCosts.get(row.orderId)?.state !== (row.outcome === 'returned' ? 'lost' : 'paid')).map(row => row.orderId!);
   const orderById = new Map(orders.map(order => [order.id, order]));
   const selectedFacebook = report.rows.filter(row => row.source === 'Facebook' && row.eligible && row.orderId);
   const paidForPeriod = (period: { from: string; to: string }) => selectedFacebook.filter(row => {
@@ -302,6 +303,10 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
     const order = orderById.get(row.orderId!);
     return selectedReady.has(row.orderId) && saved?.state === 'paid' && saved.from === period.from && saved.to === period.to
       && Boolean(order && (scope || inSelection(order, selection)));
+  }).map(row => row.orderId!).sort();
+  const returnedForPeriod = (period: { from: string; to: string }) => selectedFacebook.filter(row => {
+    const saved = orderCosts.get(row.orderId!);
+    return selectedReturnOrderIds.has(row.orderId!) && saved?.state === 'lost' && saved.from === period.from && saved.to === period.to;
   }).map(row => row.orderId!).sort();
   // Split the selected total in cents so every row reconciles to the summary.
   const splitSharedCost = (ids: string[], value: number, field: 'lossCost' | 'promotionCost') => {
@@ -312,7 +317,11 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
   const lossPeriods = new Map<string, { from: string; to: string; spend: number; leads: number; lostLeads: number }>();
   if (scope) for (const cohort of visible) {
     const id = `${cohort.from}|${cohort.to}`, pool = lossPeriods.get(id) || { from: cohort.from, to: cohort.to, spend: 0, leads: 0, lostLeads: 0 };
-    pool.spend = round(pool.spend + cohort.lostCost); pool.leads += cohort.leads; pool.lostLeads += cohort.lost;
+    const directlySelectedReturns = (assignments.get(cohort) || []).filter(order => selectedReturnOrderIds.has(order.id))
+      .reduce((sum, order) => sum + (orderCosts.get(order.id)?.cost || 0), 0);
+    // A selected returned waybill pays its own ad cost once. Remove that same
+    // cost from the shared loss pool before allocating other losses to sales.
+    pool.spend = round(pool.spend + cohort.lostCost - directlySelectedReturns); pool.leads += cohort.leads; pool.lostLeads += cohort.lost;
     lossPeriods.set(id, pool);
   }
   const lossCohorts = [...lossPeriods.values()].filter(period => period.spend > 0).map(period => {
@@ -331,7 +340,8 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
     // Use the CSV's form-lead total for this exact period. Views and messages
     // from promotion rows never increase the denominator or become item leads.
     const leads = period.formLeads + cohorts.filter(row => row.from === period.from && row.to === period.to).reduce((sum, row) => sum + row.leads, 0);
-    const selectedIds = paidForPeriod(period), selectedPaid = selectedIds.length;
+    const paidIds = paidForPeriod(period), returnedIds = returnedForPeriod(period);
+    const selectedIds = [...paidIds, ...returnedIds].sort(), selectedPaid = paidIds.length, selectedReturned = returnedIds.length;
     const hasSelectedLead = selectedFacebook.some(row => {
       const order = orderById.get(row.orderId!);
       if (!order) return false;
@@ -340,12 +350,12 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
     });
     if (!leads && period.spend > 0 && hasSelectedLead)
       issues.push(`Commercial / promotion cost for ${period.from} to ${period.to} has no matching CSV form-lead count. Upload item-ad lead results for the same dates before allocating it.`);
-    const selectedCost = leads ? Math.round(cents(period.spend) * selectedPaid / leads) / 100 : 0;
+    const selectedCost = leads ? Math.round(cents(period.spend) * selectedIds.length / leads) / 100 : 0;
     splitSharedCost(selectedIds, selectedCost, 'promotionCost');
-    return { ...period, leads, selectedPaid, selectedCost, remainingCost: (cents(period.spend) - cents(selectedCost)) / 100 };
+    return { ...period, leads, selectedPaid, selectedReturned, selectedCost, remainingCost: (cents(period.spend) - cents(selectedCost)) / 100 };
   }).sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
   const commercialCost = round(commercialCohorts.reduce((sum, row) => sum + row.selectedCost, 0));
-  return { cohorts: visible, orderCosts, paidCost: round(paidCost), lostCost: round(lostCost), commercialCost,
+  return { cohorts: visible, orderCosts, paidCost: round(paidCost), returnedCost: round(returnedCost), selectedReturnOrderIds, lostCost: round(lostCost), commercialCost,
     lossSpend: scope ? round(lossCohorts.reduce((sum, row) => sum + row.spend, 0)) : round(lostCost),
     lossRemainingCost: round(lossCohorts.reduce((sum, row) => sum + row.remainingCost, 0)), lossCohorts,
     commercialSpend: round(commercialCohorts.reduce((sum, row) => sum + row.spend, 0)),
@@ -356,10 +366,10 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
 
 export function facebookOrderAdvertisingCost(allocation: FacebookAdAllocation, orderId?: string) {
   const saved = orderId ? allocation.orderCosts.get(orderId) : undefined;
-  return saved?.state === 'paid' ? round(saved.cost + saved.lossCost + saved.promotionCost) : null;
+  return saved && (saved.state === 'paid' || orderId && allocation.selectedReturnOrderIds.has(orderId)) ? round(saved.cost + saved.lossCost + saved.promotionCost) : null;
 }
 
 export function facebookAllocatedAdvertisingSummary(report: PaidWaybillProfitReport, allocation: FacebookAdAllocation, tiktok: string) {
-  const result = profitAdvertisingSummary(report, String(round(allocation.paidCost + allocation.lostCost + allocation.commercialCost)), tiktok);
+  const result = profitAdvertisingSummary(report, String(round(allocation.paidCost + allocation.returnedCost + allocation.lostCost + allocation.commercialCost)), tiktok);
   return { ...result, netProfit: allocation.issues.length || allocation.missingOrderIds.length || !allocation.waybillScoped && allocation.unmatchedCost > 0 ? null : result.netProfit };
 }

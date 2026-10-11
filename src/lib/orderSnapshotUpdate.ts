@@ -12,6 +12,15 @@ export const prepareOrderSnapshotUpdate = (existing: Row | undefined, incoming: 
       String(lock.assigned_order_number) !== String(order.order_number || ''))
     throw new OrderUpdateConflict('Waybill ' + requestedWaybill + ' is already locked/used by ' + String(lock.assigned_order_number) + '.');
   if (existing) {
+    // Courier imports own these amounts. A stale order editor or browser mirror
+    // cannot erase a confirmed invoice fee or turn a return back into a delivery.
+    for (const field of ['fardar_delivery_fee','fardar_return_fee','fardar_return_fee_recorded_at','fardar_invoice_status','fardar_invoice_waybill'])
+      if (existing[field] !== undefined) order[field] = existing[field];
+    if (existing.cod_payment_source === 'Fardar CSV' && existing.cod_payment_received_at !== incoming.cod_payment_received_at) {
+      for (const field of ['cod_payment_received','cod_payment_amount','cod_payment_amount_basis','cod_payment_received_at','cod_payment_source','cod_payment_reference','payment_status','payment_paid_type']) {
+        if (existing[field] !== undefined) order[field] = existing[field]; else delete order[field];
+      }
+    }
     // A browser mirror cannot acknowledge, remove or replace a server Sheet
     // import receipt. Hold imported orders until the complete batch is saved.
     if(existing.sheet_confirm_hold)return {order:existing,waybillPreserved:true};

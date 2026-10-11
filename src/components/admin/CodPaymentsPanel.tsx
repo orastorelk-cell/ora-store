@@ -2,10 +2,10 @@ import React, { useMemo, useState } from 'react';
 import { CheckCircle2, FileUp, WalletCards } from 'lucide-react';
 import { useStore } from '../../context/StoreContext';
 import { parseCsv } from '../../lib/csv';
-import { codPaymentEntries, mapCodPaymentHeaders, type CodPaymentMapping } from '../../lib/codPaymentImport';
+import { codPaymentEntries, isFardarInvoiceHeaders, isReturnedCourierInvoice, mapCodPaymentHeaders, parseFardarInvoicePayments, type CodPaymentMapping } from '../../lib/codPaymentImport';
 
 type Mapping = CodPaymentMapping;
-const blankMapping: Mapping = { waybill: '', status: '', amount: '', deliveryFee: '', date: '', reference: '' };
+const blankMapping: Mapping = { waybill: '', status: '', amount: '', deliveryFee: '', returnFee: '', date: '', reference: '' };
 
 export const CodPaymentsPanel: React.FC = () => {
   const { orders, recordCodPayments, adminUser } = useStore();
@@ -17,7 +17,8 @@ export const CodPaymentsPanel: React.FC = () => {
   const [manual, setManual] = useState({ waybill: '', amount: '', date: new Date().toISOString().slice(0,10), reference: '' });
 
   const codOrders = useMemo(() => orders.filter((o) => o.payment_method === 'COD' && o.waybill_number), [orders]);
-  const received = codOrders.filter((o) => o.cod_payment_received);
+  const received = codOrders.filter((o) => o.cod_payment_received && !isReturnedCourierInvoice(o));
+  const returned = orders.filter(isReturnedCourierInvoice);
   const deliveryCompared = received.filter((o) => o.fardar_delivery_fee != null);
   // delivery_fee = what O-RA charged the customer; fardar_delivery_fee = actual courier cost.
   const systemDeliveryTotal = deliveryCompared.reduce((sum,o)=>sum + Math.max(0, Number(o.delivery_fee || 0)), 0);
@@ -25,13 +26,20 @@ export const CodPaymentsPanel: React.FC = () => {
   const deliveryProfit = systemDeliveryTotal - fardarDeliveryTotal;
 
   const loadCsv = async (file: File | undefined) => {
-    if (!file) return;
-    const text = await file.text();
-    const parsed = parseCsv(text);
-    setHeaders(parsed.headers);
-    setRows(parsed.rows);
-    setMapping(mapCodPaymentHeaders(parsed.headers));
-    setMessage(`Loaded ${parsed.rows.length} CSV row(s). Check the column mapping, then import.`);
+    if (!file || working) return;
+    setWorking(true); setMessage('Reading invoice…');
+    try {
+      if (file.size > 2_000_000) throw new Error('Choose a Fardar CSV smaller than 2 MB.');
+      const text = await file.text(), parsed = parseCsv(text);
+      setHeaders(parsed.headers); setRows(parsed.rows); setMapping(mapCodPaymentHeaders(parsed.headers));
+      if (isFardarInvoiceHeaders(parsed.headers)) {
+        const entries = parseFardarInvoicePayments(text);
+        setMessage(`Saving ${entries.length} delivered payment / return fee rows…`);
+        const result = await recordCodPayments(entries, adminUser?.name || 'Admin');
+        setMessage(`${file.name}: ${result.payments} delivered records and ${result.returns} return fees confirmed. ${result.updatedCount} updated; ${result.unchangedCount} already recorded.${result.notFound.length ? ` Not found (${result.notFound.length}): ${result.notFound.join(', ')}.` : ''}`);
+      } else setMessage(`Loaded ${parsed.rows.length} CSV row(s). Check the column mapping, then import.`);
+    } catch (error: any) { setMessage(error?.message || 'Invoice save was not confirmed. Retry this CSV.'); }
+    finally { setWorking(false); }
   };
 
   const importCsv = async () => {
@@ -39,9 +47,9 @@ export const CodPaymentsPanel: React.FC = () => {
     setWorking(true); setMessage('');
     try {
       const entries = codPaymentEntries(rows, mapping, headers);
-      if (!entries.length) throw new Error('No delivered or paid waybill rows match these columns.');
+      if (!entries.length) throw new Error('No delivered payments or completed-return fees match these columns.');
       const result = await recordCodPayments(entries, adminUser?.name || 'Admin');
-      setMessage(`Updated ${result.updatedCount} payment / courier fee record(s).${result.notFound.length ? ` ${result.notFound.length} waybill(s) were not found.` : ''}`);
+      setMessage(`${result.payments} delivered records and ${result.returns} return fees confirmed. ${result.updatedCount} updated; ${result.unchangedCount} already recorded.${result.notFound.length ? ` Not found: ${result.notFound.join(', ')}.` : ''}`);
     } catch (error: any) { setMessage(error?.message || 'COD payment import failed.'); }
     finally { setWorking(false); }
   };
@@ -73,16 +81,18 @@ export const CodPaymentsPanel: React.FC = () => {
         <div className="rounded-2xl bg-white border border-gray-100 p-4"><p className="text-[11px] font-bold text-gray-400 uppercase">Our System Delivery Total</p><p className="text-2xl font-black mt-1">Rs. {systemDeliveryTotal.toLocaleString()}</p></div>
         <div className="rounded-2xl bg-white border border-gray-100 p-4"><p className="text-[11px] font-bold text-gray-400 uppercase">Fardar Delivery Total</p><p className="text-2xl font-black mt-1">Rs. {fardarDeliveryTotal.toLocaleString()}</p></div>
         <div className="rounded-2xl bg-white border border-gray-100 p-4"><p className="text-[11px] font-bold text-gray-400 uppercase">Delivery Profit</p><p className={`text-2xl font-black mt-1 ${deliveryProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>Rs. {deliveryProfit.toLocaleString()}</p></div>
+        <div className="rounded-2xl bg-white border border-gray-100 p-4"><p className="text-[11px] font-bold text-gray-400 uppercase">Completed Returns</p><p className="text-2xl font-black mt-1">{returned.length}</p></div>
+        <div className="rounded-2xl bg-white border border-gray-100 p-4"><p className="text-[11px] font-bold text-gray-400 uppercase">Return Fees Recorded</p><p className="text-2xl font-black mt-1 text-red-600">Rs. {returned.reduce((sum,order)=>sum+Number(order.fardar_return_fee||0),0).toLocaleString()}</p></div>
       </div>
 
       <div className="rounded-2xl bg-white border border-gray-100 p-5 space-y-4">
-        <div className="flex items-center gap-2"><FileUp className="w-5 h-5 text-orange-600"/><div><h3 className="font-black">Fardar Payment / Delivery Fee CSV Import</h3><p className="text-xs text-gray-500">Fardar invoice Amount is gross COD collection. Online-paid orders receive their courier fee while keeping their bank payment.</p></div></div>
-        <input type="file" accept=".csv,text/csv" onChange={(e)=>loadCsv(e.target.files?.[0])} className="block w-full text-xs" />
+        <div className="flex items-center gap-2"><FileUp className="w-5 h-5 text-orange-600"/><div><h3 className="font-black">Upload Fardar Payment CSV</h3><p className="text-xs text-gray-500">Fardar invoice එක තෝරාගත් ගමන් payments සහ return fees save වෙනවා. නැවත upload කළත් ගණන් එකතු වෙන්නේ නැහැ.</p><p className="mt-1 text-xs text-gray-500">Delivered Amount is gross COD collection. Online-paid orders keep their bank payment. Return Complete rows save their Return Fee separately.</p></div></div>
+        <input type="file" accept=".csv,text/csv" aria-label="Fardar COD payment CSV" disabled={working} onChange={(e)=>{void loadCsv(e.target.files?.[0]); e.target.value='';}} className="block w-full text-xs disabled:opacity-50" />
         {headers.length > 0 && (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
               {([
-                ['waybill','Waybill *'],['status','Payment Status'],['amount','Amount'],['deliveryFee','Fardar Delivery Fee'],['date','Payment Date'],['reference','Reference']
+                ['waybill','Waybill *'],['status','Payment Status'],['amount','Amount'],['deliveryFee','Fardar Delivery Fee'],['returnFee','Return Fee'],['date','Payment Date'],['reference','Reference']
               ] as [keyof Mapping,string][]).map(([key,label]) => (
                 <label key={key} className="text-xs font-bold text-gray-600">{label}
                   <select value={mapping[key]} onChange={(e)=>setMapping({...mapping,[key]:e.target.value})} className="mt-1 w-full rounded-xl border border-gray-200 px-2 py-2 text-xs font-normal">
@@ -91,8 +101,8 @@ export const CodPaymentsPanel: React.FC = () => {
                 </label>
               ))}
             </div>
-            <p className="text-[11px] text-gray-400">Delivered and paid rows are imported. Pending, cancelled, returned and unpaid rows are excluded when status is mapped.</p>
-            <button onClick={importCsv} disabled={working} className="rounded-xl bg-black text-white px-4 py-2.5 text-xs font-bold disabled:opacity-50">{working?'Importing…':`Import & Match ${rows.length} Row(s)`}</button>
+            <p className="text-[11px] text-gray-400">Delivered payments and completed-return fees are saved. Pending and unpaid rows are skipped. Returned rows are not marked paid.</p>
+            <button onClick={importCsv} disabled={working} className="rounded-xl bg-black text-white px-4 py-2.5 text-xs font-bold disabled:opacity-50">{working?'Saving…':isFardarInvoiceHeaders(headers)?'Retry Invoice Import':`Import & Match ${rows.length} Row(s)`}</button>
           </>
         )}
       </div>
@@ -108,7 +118,12 @@ export const CodPaymentsPanel: React.FC = () => {
         <button disabled={working} className="rounded-xl bg-emerald-600 text-white px-4 py-2.5 text-xs font-bold inline-flex items-center gap-2"><CheckCircle2 className="w-4 h-4"/>Mark Payment Received</button>
       </form>
 
-      {message && <div className="rounded-xl bg-orange-50 border border-orange-100 p-3 text-xs font-semibold text-orange-800">{message}</div>}
+      {message && <div role="status" className="rounded-xl bg-orange-50 border border-orange-100 p-3 text-xs font-semibold text-orange-800">{message}</div>}
+
+      {returned.length > 0 && <div className="rounded-2xl bg-white border border-gray-100 overflow-hidden">
+        <div className="p-4 border-b border-gray-100"><h3 className="font-black text-sm">Recorded Return Fees</h3><p className="mt-1 text-xs text-gray-500">Profit deducts the return fee and FB cost. Purchasing and packing are Rs.0 for these returns.</p></div>
+        <div className="overflow-x-auto"><table className="w-full text-xs"><thead className="bg-gray-50 text-gray-500"><tr><th className="text-left p-3">Waybill</th><th className="text-left p-3">Order</th><th className="text-left p-3">Status</th><th className="text-right p-3">Return Fee</th></tr></thead><tbody>{returned.map(order=><tr key={order.id} className="border-t border-gray-50"><td className="p-3 font-mono font-bold">{order.waybill_number}</td><td className="p-3">{order.order_number}</td><td className="p-3">Return Complete</td><td className="p-3 text-right font-bold text-red-600">Rs. {Number(order.fardar_return_fee||0).toLocaleString()}</td></tr>)}</tbody></table></div>
+      </div>}
 
       <div className="rounded-2xl bg-white border border-gray-100 overflow-hidden">
         <div className="p-4 border-b border-gray-100"><h3 className="font-black text-sm">Recorded COD Payments</h3></div>

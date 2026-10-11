@@ -1,4 +1,5 @@
 import { profitAdCostHandler } from './src/lib/profitAdCostHandler';
+import { applyCodPaymentEntries, canRecordCourierPayments, validCodPaymentEntries } from './src/lib/codPaymentImport';
 
 const sheetQtyOfferRulesServer = (settings: Record<string, any>, order?: any) => JSON.stringify({
   enabled: settings?.multi_buy_discount_enabled !== false,
@@ -2257,6 +2258,17 @@ app.post('/api/orders/invoices/ensure', requireAdminSession, async (req,res)=>{
     await saveOrderSnapshotsBatch(applied.updatedOrders);
     return res.json({ok:true,results:applied.results});
   }catch(error:any){return res.status(503).json({error:error?.message||'Invoices could not be saved.'});}
+});
+
+app.post('/api/orders/courier-payments', requireAdminSession, async (req,res) => {
+  if(!canRecordCourierPayments((req as any).staffSessionUser))return res.status(403).json({error:'COD Payments or Profit Report edit permission required.'});
+  if(!validCodPaymentEntries(req.body?.entries))return res.status(400).json({error:'Send 1 to 20 valid payment or completed-return entries.'});
+  try {
+    const applied=applyCodPaymentEntries(await getOrderSnapshots(),req.body.entries);
+    await saveOrderSnapshotsBatch(applied.updatedOrders);
+    const {updatedOrders,...summary}=applied;
+    return res.json({ok:true,...summary});
+  }catch(error:any){return res.status(503).json({error:error?.message||'Courier payments could not be saved.'});}
 });
 
 app.post('/api/orders/delivered-csv', requireStaffAnyPermission(['delivery','delivered_csv_upload']), async (req,res)=>{

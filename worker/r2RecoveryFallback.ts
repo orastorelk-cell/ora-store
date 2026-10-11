@@ -17,6 +17,7 @@ import { r2StaffLoginHandler, r2StaffAccountsHandler } from './r2StaffLogin';
 import { profitAdCostHandler } from '../src/lib/profitAdCostHandler';
 import { r2SheetConfirmHandler } from './r2SheetConfirm';
 import { SHEET_CONFIRM_API } from '../src/lib/sheetConfirmState';
+import { r2CourierPaymentsHandler } from './r2CourierPayments';
 
 type Env = Record<string, any>;
 type StaffSession = { sub:string; role:'admin'|'staff'; exp:number };
@@ -46,6 +47,7 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   const path=new URL(request.url).pathname;
   const read=request.method==='GET'&&['/api/orders','/api/orders/version'].includes(path);
   const delivered=request.method==='POST'&&path==='/api/orders/delivered-csv';
+  const courierPayments=request.method==='POST'&&path==='/api/orders/courier-payments';
   const confirmed=request.method==='POST'&&path==='/api/orders/confirm-csv';
   const refresh=request.method==='POST'&&path==='/api/staff/session/refresh';
   const audit=request.method==='POST'&&path==='/api/orders/confirm-csv/check';
@@ -60,9 +62,10 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   const orderPut=['PUT','DELETE'].includes(request.method)&&/^\/api\/orders\/[^/]+$/.test(path);
   const returns=path.startsWith('/api/returns/');
   const redispatch=request.method==='POST'&&path==='/api/orders/redispatch-waybill';
-  if(!read&&!delivered&&!confirmed&&!refresh&&!audit&&!invoices&&!mergeBatches&&!invoiceRecovery&&!downloads&&!cancellation&&!orderPut&&!pool&&!assignment&&!fulfilment&&!returns&&!redispatch)return null;
+  if(!read&&!delivered&&!courierPayments&&!confirmed&&!refresh&&!audit&&!invoices&&!mergeBatches&&!invoiceRecovery&&!downloads&&!cancellation&&!orderPut&&!pool&&!assignment&&!fulfilment&&!returns&&!redispatch)return null;
   const user=await verifyActiveStaff(request,env);
   if(!user)return json({error:'Login session required.'},401);
+  if(courierPayments)return r2CourierPaymentsHandler(request,env,user);
   if((confirmed||delivered||downloads||redispatch||(orderPut&&request.method==='DELETE'))&&returnPackingInProgress(await readDataTable(env,'admin_data_store')))return json({error:'A packing batch is finishing. Retry its saved operation first.'},409);
   if(returns)return returnSheetsHandler(request,r2ReturnStorage(env),user);
   if(redispatch){

@@ -1,4 +1,5 @@
 import type { Order, Product, ProductVariant, PurchaseOrder, ReturnRecord } from '../types';
+import { isReturnedCourierInvoice } from './codPaymentImport';
 
 export const PROFIT_PACKING_COST = 100;
 export const PROFIT_PAGE_SIZE = 10;
@@ -29,6 +30,7 @@ export interface ProfitItem {
 }
 export interface ProfitRow {
   waybill: string;
+  outcome?: 'sale' | 'returned';
   orderId?: string;
   paymentKind?: 'cod' | 'online';
   orderNumber?: string;
@@ -39,6 +41,7 @@ export interface ProfitRow {
   received: number | null;
   purchasing: number | null;
   courier: number | null;
+  returnFee?: number | null;
   packing: number | null;
   profit: number | null;
   paymentNote?: string;
@@ -50,7 +53,7 @@ export interface PaidWaybillProfitReport {
   rows: ProfitRow[];
   duplicates: number;
   ranges: Record<'Facebook' | 'TikTok', ProfitDateRange | null>;
-  totals: { ready: number; review: number; sales: number; received: number; purchasing: number; courier: number; packing: number; beforeAds: number };
+  totals: { ready: number; review: number; sales: number; received: number; purchasing: number; courier: number; returnFees: number; packing: number; beforeAds: number };
 }
 
 const amount = (value: unknown): number | null => {
@@ -137,11 +140,14 @@ const excluded = (order: Order) => Boolean(order.is_test_order || order.is_dupli
 const sourceFor = (order: Order): ProfitSource => order.order_source === 'Facebook Ads' ? 'Facebook'
   : order.order_source === 'TikTok Ads' ? 'TikTok' : /^FB-/i.test(order.order_number) ? 'Facebook' : /^TK-/i.test(order.order_number) ? 'TikTok' : 'Other';
 
+export const isReturnedProfitOrder = (order: Order & { return_tracking_waybill?: string }) => isReturnedCourierInvoice(order)
+  || Boolean(order.return_sheet_id || order.return_tracking_waybill) || /return/i.test(order.delivery_status || '');
+
 /** Use the same saved payment records as COD Received and paid online orders.
  * A receipt awaiting approval or an advance alone is not a completed sale.
  */
 export function savedProfitPaymentKind(order: Order): 'cod' | 'online' | null {
-  if (excluded(order) || order.order_status === 'Cancelled' || order.payment_status === 'Refunded') return null;
+  if (excluded(order) || isReturnedProfitOrder(order) || order.order_status === 'Cancelled' || order.payment_status === 'Refunded') return null;
   if (order.cod_payment_received === true) return 'cod';
   if (order.payment_method === 'Bank Payment' && order.payment_status === 'Paid'
     && order.payment_paid_type !== 'Advance' && order.payment_verification_status !== 'Rejected') return 'online';
@@ -353,7 +359,7 @@ export function buildPaidWaybillProfitReport(input: {
     : selectSavedPaidProfitOrders(input.orders, input.selection).map(savedOrder => ({ waybill: normalizeProfitWaybill(savedOrder.waybill_number), savedOrder }));
   const rows: ProfitRow[] = entries.map(({ waybill, savedOrder }) => {
     const matches = savedOrder ? [savedOrder] : byWaybill.get(waybill) || [];
-    const row: ProfitRow = { waybill, items: [], sales: null, received: null, purchasing: null, courier: null, packing: null, profit: null, issues: [], eligible: false };
+    const row: ProfitRow = { waybill, outcome: 'sale', items: [], sales: null, received: null, purchasing: null, courier: null, returnFee: 0, packing: null, profit: null, issues: [], eligible: false };
     if (matches.length !== 1) { row.issues.push(matches.length ? 'Waybill belongs to multiple orders. Resolve the duplicate.' : 'Waybill was not found in the system.'); return row; }
     const order = matches[0];
     row.orderId = order.id; row.paymentKind = savedProfitPaymentKind(order) || undefined;
@@ -361,6 +367,17 @@ export function buildPaidWaybillProfitReport(input: {
     if (!waybill) row.issues.push('Waybill has not been assigned to this paid order.');
     else if (savedOrder && (byWaybill.get(waybill)?.length || 0) > 1) row.issues.push('Waybill belongs to multiple orders. Resolve the duplicate.');
     if (!row.systemDate) row.issues.push('System arrival date is missing.');
+    if (isReturnedProfitOrder(order) && !excluded(order)) {
+      row.outcome = 'returned'; row.eligible = true;
+      row.returnFee = amount(order.fardar_return_fee);
+      if (row.returnFee === null) row.issues.push('Actual Fardar Return Fee is missing. Upload the payment invoice CSV in COD Payments.');
+      row.received = 0; row.sales = 0; row.purchasing = 0; row.courier = 0; row.packing = 0;
+      row.paymentNote = 'Returned parcel: no sale revenue, Purchasing or packing deduction. Return Fee is deducted once.';
+      row.items = (order.items || []).map(item => ({ name: `${item.product_name}${item.variant_name ? ` - ${item.variant_name}` : ''}`,
+        sku: item.sku, quantity: Number(item.quantity), unitSale: amount(item.unit_price), sales: 0, purchasing: 0, allocations: [] }));
+      if (!row.issues.length && row.returnFee !== null) row.profit = round(-row.returnFee);
+      return row;
+    }
     if (order.order_status === 'Cancelled' || order.payment_status === 'Refunded' || excluded(order)) row.issues.push('Cancelled, refunded, duplicate or test order: excluded.');
     else {
       row.eligible = Boolean(savedProfitPaymentKind(order));
@@ -423,7 +440,8 @@ export function buildPaidWaybillProfitReport(input: {
   const totals = { ready: ready.length, review: rows.length - ready.length,
     sales: round(ready.reduce((sum, row) => sum + row.sales!, 0)), received: round(ready.reduce((sum, row) => sum + row.received!, 0)),
     purchasing: round(ready.reduce((sum, row) => sum + row.purchasing!, 0)), courier: round(ready.reduce((sum, row) => sum + row.courier!, 0)),
-    packing: ready.length * PROFIT_PACKING_COST, beforeAds: round(ready.reduce((sum, row) => sum + row.profit!, 0)) };
+    returnFees: round(ready.reduce((sum, row) => sum + (row.returnFee || 0), 0)),
+    packing: round(ready.reduce((sum, row) => sum + row.packing!, 0)), beforeAds: round(ready.reduce((sum, row) => sum + row.profit!, 0)) };
   return { rows, duplicates: normalized.length - waybills.length, ranges, totals };
 }
 

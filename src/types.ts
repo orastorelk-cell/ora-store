@@ -209,6 +209,11 @@ export interface Order {
   internal_delivery_fee?: number;
   /** Actual courier delivery fee reported by Fardar COD/payment CSV. */
   fardar_delivery_fee?: number;
+  /** Actual completed-return fee from the courier settlement, stored once per waybill. */
+  fardar_return_fee?: number;
+  fardar_return_fee_recorded_at?: string;
+  fardar_invoice_status?: 'Delivered' | 'Return Complete';
+  fardar_invoice_waybill?: string;
   delivery_included_in_item_price?: boolean;
   special_offer_discount?: number;
   /** Hidden system adjustment that keeps the old order total unchanged after the Rs.500 -> Rs.250 delivery rebalance. It is NOT a Qty Offer. */
