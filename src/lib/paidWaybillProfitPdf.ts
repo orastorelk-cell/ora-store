@@ -83,7 +83,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
   doc.setTextColor(55, 65, 81); y += 31;
   const notes = [
     'Summary totals include complete orders only. Every selected paid order is listed in the detail pages.',
-    'Purchasing uses FIFO history. Items with incomplete history use their full quantity at the latest matching Purchasing price. Product-form Buy Price is not used.',
+    'Purchasing uses FIFO history. Missing history uses the latest exact item price, or the latest Purchasing price for the same item type, multiplied by the full quantity.',
     'Sale lines show the saved selling prices. Profit uses recorded gross receipts, so order discounts, customer delivery and bank advances are accounted for.',
     'An identified net Fardar remittance is reconciled to gross receipts before subtracting the courier charge once.',
   ];

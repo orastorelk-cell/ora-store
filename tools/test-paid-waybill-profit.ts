@@ -67,11 +67,27 @@ assert.equal(JSON.stringify(sixMissing), missingBefore, 'Latest-price reporting 
 const partial = order({ items: [{ ...earlier.items[0], quantity: 3, subtotal: 3000 }], total_amount: 3250, cod_payment_amount: 3250 });
 assert.equal(buildReport({ orders: [partial], purchases: [purchase(), latest] }).rows[0].purchasing, 1800, 'A Pending item uses its full quantity at the latest unit price.');
 assert.equal(buildReport({ orders: sixMissing, purchases: [latest, purchase({ unit_buying_price: 0, created_at: '2026-10-10T12:00:00Z' })] }).rows[0].purchasing, 0, 'A recorded free purchase is a valid zero cost.');
-assert.equal(buildReport({ orders: [earlier], purchases: [purchase({ sku: 'R0053-GREEN', variant_sku: 'R0053-GREEN', variant_id: 'green' })], waybills: ['18160001'] }).rows[0].purchasing, null, 'Variants must match exactly.');
+assert.equal(buildReport({ orders: [earlier], purchases: [purchase({ sku: 'R0053-GREEN', variant_sku: 'R0053-GREEN', variant_id: 'green' })], waybills: ['18160001'] }).rows[0].purchasing, 450, 'Missing variant history falls back to a Purchasing price for the same item type.');
 const oldSkuOrder = immutable(order({ stock_allocated: false, items: [{ ...earlier.items[0], sku: 'R0053' }] }));
 const sameVariant = immutable(purchase({ sku: 'R0053-BLACK-NEW', variant_sku: 'R0053-BLACK-NEW', unit_buying_price: 725 }));
 assert.equal(buildReport({ orders: [oldSkuOrder], purchases: [sameVariant] }).rows[0].purchasing, 725, 'A legacy/main SKU can use the latest PO for its exact saved product and variant IDs.');
-assert.equal(buildReport({ orders: [oldSkuOrder], purchases: [purchase({ variant_id: 'green', sku: 'R0053-GREEN', variant_sku: 'R0053-GREEN' })] }).rows[0].purchasing, null, 'A main SKU must never borrow another variant price.');
+assert.equal(buildReport({ orders: [oldSkuOrder], purchases: [purchase({ variant_id: 'green', sku: 'R0053-GREEN', variant_sku: 'R0053-GREEN' })] }).rows[0].purchasing, 450, 'A main SKU without exact variant history uses its own item type Purchasing price.');
+const typePurchases = immutable([
+  purchase({ id: 'type-old', sku: 'R0053-GREEN', variant_sku: 'R0053-GREEN', variant_id: 'green', unit_buying_price: 500 }),
+  purchase({ id: 'type-new', po_number: 'PO-TYPE-LATEST', sku: 'R0053-RED', variant_sku: 'R0053-RED', variant_id: 'red', unit_buying_price: 650, quantity_added: 1, created_at: '2026-10-11T09:00:00Z' }),
+  purchase({ id: 'other-product', product_id: 'holder', product_name: 'Phone Holder', sku: 'R0041', variant_sku: undefined, variant_id: undefined, unit_buying_price: 9999, created_at: '2026-10-11T12:00:00Z' }),
+]);
+const missingTypesBefore = JSON.stringify({ orders: sixMissing, purchases: typePurchases });
+const filledTypes = buildReport({ orders: sixMissing, purchases: typePurchases });
+assert.equal(filledTypes.totals.ready, 6, 'All six orders become complete when only other variants of their own item type have Purchasing records.');
+assert.equal(filledTypes.totals.review, 0);
+assert.equal(filledTypes.totals.purchasing, 3900, 'The newest unit cost is reusable for missing report costs, regardless of purchased stock quantity.');
+assert(filledTypes.rows.every(row => row.items[0].allocations[0].reference === 'PO-TYPE-LATEST' && row.items[0].allocations[0].unitCost === 650));
+assert.equal(JSON.stringify({ orders: sixMissing, purchases: typePurchases }), missingTypesBefore, 'Same-type price fallback does not change orders or Purchasing history.');
+assert.equal(buildReport({ orders: [{ ...partial, stock_allocated: false }], purchases: typePurchases }).rows[0].purchasing, 1950, 'Latest same-type unit price is multiplied by the whole order item quantity.');
+assert.equal(buildReport({ orders: [oldSkuOrder], purchases: [typePurchases[2]] }).rows[0].purchasing, null, 'A different product cannot supply a missing Purchasing cost.');
+const mainCodeOrder = order({ stock_allocated: false, items: [{ ...earlier.items[0], product_id: 'old-watch-id', sku: 'R0053-BLACK-LEGACY', main_sku: 'R0053' }] });
+assert.equal(buildReport({ orders: [mainCodeOrder], purchases: [purchase({ sku: 'R0053', variant_sku: undefined, variant_id: undefined, unit_buying_price: 550 })] }).rows[0].purchasing, 550, 'An explicit main item code can match its Purchasing record when an old order has a retired product ID.');
 const renamedNormal = order({ stock_allocated: false, items: [{ ...earlier.items[0], sku: 'R0041', product_id: 'holder', product_type: 'normal', variant_id: undefined, variant_name: undefined }] });
 assert.equal(buildReport({ orders: [renamedNormal], purchases: [purchase({ sku: 'OLDER-HOLDER', product_id: 'holder', variant_id: undefined, variant_name: undefined, variant_sku: undefined, unit_buying_price: 300 })] }).rows[0].purchasing, 300);
 const combinedPurchases = mergeProfitPurchaseHistory([latest], [purchase(), { ...latest, unit_buying_price: 800 }]);
@@ -152,6 +168,7 @@ assert.equal(bundleReport.rows[0].packing, 100);
 const fallbackBundle = buildReport({ orders: [{ ...bundle, stock_allocated: false }], purchases: [latest] });
 assert.equal(fallbackBundle.rows[0].purchasing, 2400, 'Latest component price is multiplied by component quantity and bundle quantity.');
 assert.equal(fallbackBundle.rows[0].items[0].allocations[0].quantity, 4);
+assert.equal(buildReport({ orders: [{ ...bundle, stock_allocated: false }], purchases: typePurchases }).rows[0].purchasing, 2600, 'Missing component variant history uses the latest price of that component item type, multiplied by component and bundle quantities.');
 
 const returned: ReturnRecord = { id: 'returned', order_id: earlier.id, order_number: earlier.order_number, waybill_number: '18160001', checked_by: 'Test', checked_at: '2026-09-02T09:00:00Z', status: 'Verified',
   items: [{ product_id: 'watch', sku: 'R0053-BLACK', variant_id: 'black', product_name: 'Sport Watch', expected_qty: 1, good_qty: 1, missing_qty: 0, damaged_qty: 0 }] };
@@ -210,6 +227,10 @@ try {
   assert(!html.includes('Paste waybill numbers') && !html.includes('Upload Paid Waybills'), 'No duplicate waybill entry is needed after payment has been saved.');
   const defaultHtml = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, { ...props, initialDraft: undefined }));
   assert(defaultHtml.includes('<tbody'), 'The default report shows saved paid orders before any input.');
+  const typeFallbackHtml = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, { ...props, orders: sixMissing, purchases: typePurchases }));
+  const typeFallbackBody = typeFallbackHtml.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/)![1];
+  assert(!typeFallbackBody.includes('Pending') && !typeFallbackBody.includes('Needs Review'), 'The workspace displays resolved same-item-type Purchasing costs for all six test orders.');
+  assert(typeFallbackBody.includes('PO-TYPE-LATEST') && typeFallbackBody.includes('Rs. 650.00'), 'The displayed cost remains traceable to the actual Purchasing record and unit price.');
   const loading = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, { ...props, ready: false }));
   assert(!loading.includes('<tbody'), 'Do not show stale report totals before saved system data is loaded.');
   const review = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, { ...props, orders: [onlineWithoutWaybill], purchases }));

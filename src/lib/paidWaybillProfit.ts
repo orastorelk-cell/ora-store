@@ -251,7 +251,7 @@ function purchaseCosts(orders: Order[], purchases: PurchaseOrder[], returns: Ret
 }
 
 /** Price fallback only: it neither consumes stock nor rewrites historical FIFO lots. */
-type PurchaseSelection = { sku?: string; product_id: string; variant_id?: string; variant_name?: string };
+type PurchaseSelection = { sku?: string; main_sku?: string; product_id: string; variant_id?: string };
 export function mergeProfitPurchaseHistory(local: PurchaseOrder[], saved: PurchaseOrder[]): PurchaseOrder[] {
   // Browser corrections take precedence over older restored records with the same ID.
   const byId = new Map(saved.map(purchase => [String(purchase.id), purchase]));
@@ -262,6 +262,7 @@ export function mergeProfitPurchaseHistory(local: PurchaseOrder[], saved: Purcha
 function latestPurchasePrices(purchases: PurchaseOrder[]) {
   const latest = new Map<string, PurchaseAllocation>();
   const identities = new Map<string, PurchaseAllocation>();
+  const products = new Map<string, PurchaseAllocation>();
   const sorted = [...purchases].filter(purchase => validQuantity(purchase.quantity_added)
     && Number.isFinite(timestamp(purchase.created_at)) && amount(purchase.unit_buying_price) !== null)
     .sort((a, b) => timestamp(b.created_at) - timestamp(a.created_at) || b.id.localeCompare(a.id, 'en', { numeric: true }));
@@ -270,20 +271,19 @@ function latestPurchasePrices(purchases: PurchaseOrder[]) {
     const price: PurchaseAllocation = { purchaseId: purchase.id, reference: purchase.po_number || purchase.id, sku,
       quantity: 0, unitCost: amount(purchase.unit_buying_price), costBasis: 'latest-purchase' };
     if (!latest.has(sku)) latest.set(sku, price);
-    // Older order snapshots can retain the main/previous SKU for the SAME variant.
-    // Match stable product + variant IDs without borrowing another colour's price.
+    // Keep exact item/variant matches first, including older saved SKU snapshots.
     if (purchase.product_id && purchase.variant_id) {
       const identity = JSON.stringify([String(purchase.product_id), String(purchase.variant_id)]);
       if (!identities.has(identity)) identities.set(identity, price);
     }
-    if (purchase.product_id && !purchase.variant_id && !purchase.variant_name && !purchase.variant_sku) {
-      const identity = JSON.stringify([String(purchase.product_id), 'base']);
-      if (!identities.has(identity)) identities.set(identity, price);
-    }
+    // Missing variant history uses the newest Purchasing price for that item type.
+    // This is a report price, independent of available stock and order dates.
+    if (purchase.product_id && !products.has(String(purchase.product_id))) products.set(String(purchase.product_id), price);
   }
-  return (selection: PurchaseSelection) => latest.get(inventoryKey(selection)) || (selection.product_id && (
-    selection.variant_id ? identities.get(JSON.stringify([String(selection.product_id), String(selection.variant_id)]))
-      : !selection.variant_name ? identities.get(JSON.stringify([String(selection.product_id), 'base'])) : undefined));
+  return (selection: PurchaseSelection) => latest.get(inventoryKey(selection))
+    || (selection.product_id && selection.variant_id ? identities.get(JSON.stringify([String(selection.product_id), String(selection.variant_id)])) : undefined)
+    || products.get(String(selection.product_id))
+    || (selection.main_sku ? latest.get(skuKey(selection.main_sku)) : undefined);
 }
 
 function receivedPayment(order: Order, courier: number | null, basis: PaymentAmountBasis) {
@@ -364,7 +364,7 @@ export function buildPaidWaybillProfitReport(input: {
         ? amount(round(allocations.reduce((sum, allocation) => sum + allocation.quantity * allocation.unitCost!, 0))) : null;
       const sales = valid ? amount(item.subtotal) ?? (unit === null ? null : round(unit * qty)) : null;
       if (!valid || sales === null || unit === null) row.issues.push(`${item.sku || item.product_name}: sale price / quantity needs review.`);
-      if (purchasing === null) row.issues.push(`${item.sku || item.product_name}: a matching Purchasing price is missing.`);
+      if (purchasing === null) row.issues.push(`${item.sku || item.product_name}: no usable Purchasing price was found for this item type.`);
       return { name: `${item.product_name}${item.variant_name ? ` - ${item.variant_name}` : ''}`, sku: item.sku, quantity: qty, unitSale: unit, sales, purchasing, allocations };
     });
     if (!row.items.length) row.issues.push('This order has no items.');
