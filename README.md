@@ -101,6 +101,11 @@ connected order tabs, groups every item row by Order ID, ignores Pending orders,
 and saves all decisions in one guarded R2 write before allocating stock. Ready
 orders receive one `PACK-SHEET-…` invoice batch. The download contains one A6 PDF
 and one UTF-8 Fardar CSV. Existing invoices and courier numbers are preserved.
+Missing FB/TK COD lead snapshots can be recovered from complete Sheet rows with
+their original Order ID, Lead ID, contact details and historical prices. Recovery
+and all decisions commit atomically; Pending rows are never created. Existing
+lead identities and courier/packing history prevent a second parcel. Incomplete
+rows and missing bank-payment records require review before any invoice starts.
 
 Super Admin connects the Sheet once using **Connect Google Sheet once**:
 

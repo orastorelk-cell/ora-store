@@ -11,6 +11,7 @@ import { returnPackingHandler } from './r2ReturnPacking';
 import { cancellationInProgress } from './r2OrderCancellation';
 import { readGoogleSheetTabs, sheetMetadata, spreadsheetId, validateServiceAccount, googleSheetRequest, SheetApiError, type SheetConnection } from './googleSheetsApi';
 import { pauseR2Conflict } from './r2Retry';
+import { recoverSheetLead, sheetParcelHistory } from './sheetLeadRecovery';
 
 type Row=Record<string,any>;
 type Phase='reading'|'saving'|'verifying'|'packing'|'colouring'|'complete'|'blocked'|'sheet_update_failed';
@@ -18,6 +19,7 @@ type Job={
   operation_id:string;batch_id:string;phase:Phase;created_at:string;updated_at:string;actor:Row;
   spreadsheet_id:string;tabs:string[];sources:SheetDecision[];entries:ConfirmCsvEntry[];order_ids:string[];
   counts:Row;errors:string[];warnings:string[];ack_cursor:number;packing_id:string;
+  recovered_orders?:Row[];
   imported:boolean;invoices_ready:boolean;holds_released?:boolean;attempts:number;retry_at?:string;error?:string;
   lease_owner?:string;lease_until?:number;completed_at?:string;downloaded_at?:string;
 };
@@ -65,20 +67,29 @@ const locked=(order:Row)=>invoiceComplete(order)||order.invoice_locked||order.wa
 // The complete decision set is written in ONE R2 CAS transaction, so a bad order
 // cannot leave half an import eligible for the old browser invoice effects.
 const prepareJob = async(env:unknown,job:Job,connection:SheetConnection) => {
-  const [tabs,orders,admin]=await Promise.all([readGoogleSheetTabs(connection),r2ReturnStorage(env).readOrders(),readDataTable(env,'admin_data_store')]);
+  const [tabs,orders,admin,waybills]=await Promise.all([readGoogleSheetTabs(connection),r2ReturnStorage(env).readOrders(),readDataTable(env,'admin_data_store'),readDataTable(env,'courier_waybills')]);
   const ignored=new Set(orders.filter(locked).map(order=>String(order.order_number||'').toUpperCase()));
   const parsed=await readSheetDecisions(tabs,ignored),catalog=admin.find(row=>row.key==='storefront-state-v1')?.payload;
   if(!Array.isArray(catalog?.products))throw new SheetApiError('Shared product catalog is unavailable.');
-  const errors=[...parsed.errors],entries:ConfirmCsvEntry[]=[],sources:SheetDecision[]=[],orderIds:string[]=[];
-  const counts={confirmed:0,cancelled:0,pending:parsed.pendingCount,already_processed:parsed.alreadyProcessedCount,imported:0,invoices:0,stock:0,waybills:0,details:0,return_checks:0};
+  const errors=[...parsed.errors],entries:ConfirmCsvEntry[]=[],sources:SheetDecision[]=[],orderIds:string[]=[],recoveredOrders:Row[]=[],warnings:string[]=[];
+  const parcelHistory=sheetParcelHistory(waybills,admin);
+  const counts={recovered:0,confirmed:0,cancelled:0,pending:parsed.pendingCount,already_processed:parsed.alreadyProcessedCount,imported:0,invoices:0,stock:0,waybills:0,details:0,return_checks:0};
   const byNumber=new Map<string,Row[]>();
   for(const order of orders){const number=String(order.order_number||'').toUpperCase();byNumber.set(number,[...(byNumber.get(number)||[]),order]);}
   const selected=new Set(parsed.decisions.map(value=>value.order_number));
   for(const order of orders.filter(order=>order.sheet_confirm_hold===job.operation_id))if(!selected.has(String(order.order_number).toUpperCase()))
     errors.push(order.order_number+': The decision changed to Pending, was removed, or is invalid during this saved import. Set Confirm or Cancel and retry before invoices can start.');
   for(const decision of parsed.decisions){
-    const matches=byNumber.get(decision.order_number)||[],order=matches[0];
-    if(matches.length!==1){errors.push(decision.order_number+': The order was not found uniquely in the system. Import its original lead first.');continue;}
+    const matches=byNumber.get(decision.order_number)||[];let order=matches[0];
+    if(matches.length>1){errors.push(decision.order_number+': Multiple system orders have this Order ID. Review their identities before retrying.');continue;}
+    if(!order){
+      if(parcelHistory.has(decision.order_number)){counts.already_processed++;warnings.push(decision.order_number+': Missing order has existing courier / packing history; skipped to preserve the original parcel.');continue;}
+      try{
+        order=recoverSheetLead(decision,catalog.products,catalog.settings||{},job.created_at,job.operation_id);
+        if([...orders,...recoveredOrders].some(other=>String(other.id)===order.id||(other.order_source===order.order_source&&String(other.platform_lead_id||'')===order.platform_lead_id)))throw new Error(decision.order_number+': Its Lead ID already belongs to another system order. Review before retrying.');
+        recoveredOrders.push(order);counts.recovered++;
+      }catch(error:any){errors.push(error.message);continue;}
+    }
     if(locked(order)){counts.already_processed++;continue;}
     const receipt=order.sheet_confirm_import;
     if(order.order_status==='Cancelled'){
@@ -120,18 +131,32 @@ const prepareJob = async(env:unknown,job:Job,connection:SheetConnection) => {
     if(entry.patch.call_center_status==='Confirmed'){orderIds.push(String(order.id));counts.confirmed++;}else counts.cancelled++;
   }
   if(errors.length)throw new Blocked(errors);
-  return {entries,sources,order_ids:orderIds,counts};
+  return {entries,sources,order_ids:orderIds,counts,recovered_orders:recoveredOrders,warnings};
 };
 const commitDecisions = async(env:unknown,job:Job) => {
   const sources=new Map(job.sources.map(source=>[source.order_number,source]));
+  const recovered=job.recovered_orders||[];
+  if(recovered.length){
+    const history=sheetParcelHistory(await readDataTable(env,'courier_waybills'),await readDataTable(env,'admin_data_store'));
+    if(recovered.some(order=>history.has(order.order_number)))throw new Blocked(['A recovered order acquired courier / packing history. Retry before creating invoices.']);
+  }
   return replaceDataTable(env,'order_snapshots',rows=>{
-    const applied=applyConfirmCsvDecisions(rows.map(row=>row.payload).filter(Boolean),job.entries);
+    let base=rows;
+    for(const seed of recovered){
+      const matches=base.filter(row=>String(row.order_id)===seed.id||String(row.order_number)===seed.order_number||(row.payload?.order_source===seed.order_source&&String(row.payload?.platform_lead_id||'')===seed.platform_lead_id));
+      if(matches.length){
+        if(matches.length!==1||matches[0].order_id!==seed.id||matches[0].order_number!==seed.order_number||matches[0].payload?.sheet_lead_recovery?.operation_id!==job.operation_id)throw new Blocked([seed.order_number+': The original lead arrived or its identity changed during recovery. Retry the latest system data.']);
+        continue;
+      }
+      base=[...base,{order_id:seed.id,order_number:seed.order_number,payload:seed,created_at:seed.created_at,updated_at:job.created_at}];
+    }
+    const applied=applyConfirmCsvDecisions(base.map(row=>row.payload).filter(Boolean),job.entries);
     const failed=applied.results.filter(result=>result.status==='failed');
     if(failed.length)throw new Blocked(failed.map(result=>result.order_number+': '+result.error));
     const decisions=new Map(applied.results.map(result=>[String(result.id),result.order!]));
     const selected=new Set(job.sources.map(source=>source.order_number));
-    let changed=false;
-    const next=rows.map(row=>{
+    let changed=base!==rows;
+    const next=base.map(row=>{
       const order=decisions.get(String(row.order_id))||row.payload,source=sources.get(order?.order_number);
       if(!source||!selected.has(order.order_number))return row;
       if(locked(order))throw new Blocked([order.order_number+': The order was allocated or invoiced while this import was starting. Retry the Sheet snapshot.']);
