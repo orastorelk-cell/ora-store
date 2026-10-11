@@ -11,6 +11,7 @@ const grid:any={sheets:[{properties:{sheetId:100001},data:[{startRow:1,startColu
 const snapshot=JSON.stringify(tab);
 let requests=planDropdownRepairs([tab],catalog,grid,8550,1000);
 assert.equal(requests.length,27);
+assert.equal(requests.find(r=>r.setDataValidation.range.startColumnIndex===5).setDataValidation.rule.condition.values[0].userEnteredValue,"='CITY DROPDOWN OPTIONS'!$A$2:$A$17099");
 const variant=(row:number)=>requests.find(r=>r.setDataValidation.range.startRowIndex===row&&r.setDataValidation.range.startColumnIndex===10)?.setDataValidation.rule.condition.values.map((v:any)=>v.userEnteredValue);
 assert.deepEqual(variant(1),['Front Load','Twin Tub']);
 assert.deepEqual(variant(2),['Maroon','Blue']);
@@ -34,7 +35,7 @@ assert(requests.every(r=>r.setDataValidation.range.startRowIndex===5));
 const connection={tabs:['FACEBOOK ORDERS'],spreadsheet_id:'unused'} as SheetConnection;
 let fail=true,writes=0;
 const request=async(_connection:SheetConnection,path:string,body?:any)=>{
-  if(path.includes('fields=sheets.properties'))return {sheets:[{properties:{sheetId:100001,title:'FACEBOOK ORDERS',gridProperties:{rowCount:945,columnCount:41}}},{properties:{title:'PRODUCT CATALOG',gridProperties:{rowCount:1000}}},{properties:{title:'CITY LIST',gridProperties:{rowCount:8550}}}]};
+  if(path.includes('fields=sheets.properties'))return {sheets:[{properties:{sheetId:100001,title:'FACEBOOK ORDERS',gridProperties:{rowCount:945,columnCount:41}}},{properties:{title:'PRODUCT CATALOG',gridProperties:{rowCount:1000}}},{properties:{title:'CITY LIST',gridProperties:{rowCount:8550}}},{properties:{title:'CITY DROPDOWN OPTIONS',gridProperties:{rowCount:17099}}}]};
   if(path.startsWith('/values:batchGet'))return {valueRanges:[{values:tab.values},{values:catalog}]};
   if(path.startsWith('?'))return grid;
   assert.equal(path,':batchUpdate');
@@ -48,4 +49,21 @@ assert.equal(await repairSheetDropdowns(connection,request),7,'Next cron safely 
 assert.equal(await repairSheetDropdowns(connection,request),0);
 assert.equal(writes,2);
 assert.deepEqual(tab.values.slice(0,5),JSON.parse(snapshot).values);
+const helperWrites:any[]=[];
+await repairSheetDropdowns(connection,async(c,path,body)=>{
+  if(path.includes('fields=sheets.properties')) {
+    const result=await request(c,path);
+    result.sheets=result.sheets.filter((s:any)=>s.properties.title!=='CITY DROPDOWN OPTIONS');
+    return result;
+  }
+  if(body?.requests?.[0]?.addSheet) {
+    assert.equal(body.requests[0].addSheet.properties.hidden,true);
+    return {replies:[{addSheet:{properties:{sheetId:987654,title:'CITY DROPDOWN OPTIONS',gridProperties:{rowCount:17099}}}}]};
+  }
+  if(body?.requests?.[0]?.updateCells) {helperWrites.push(body.requests[0].updateCells);return {};}
+  return request(c,path,body);
+});
+assert.equal(helperWrites.length,1);
+assert.equal(helperWrites[0].range.sheetId,987654,'Derived city choices never write into order tabs');
+assert.equal(helperWrites[0].rows[1].values[0].userEnteredValue.formulaValue,"={'CITY LIST'!C2:C8550;'CITY LIST'!A2:A8550}");
 console.log('Sheet dropdown repairs passed: correct product variants, simple items, preserved values, new rows, retry and idempotency.');

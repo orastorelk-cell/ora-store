@@ -7,6 +7,7 @@ const quote = (title:string) => "'"+title.replace(/'/g,"''")+"'";
 const list = (values:string[],inputMessage?:string):Rule => ({condition:{type:'ONE_OF_LIST',values:values.map(userEnteredValue=>({userEnteredValue}))},strict:true,showCustomUi:true,...(inputMessage?{inputMessage}:{})});
 const rangeRule = (value:string):Rule => ({condition:{type:'ONE_OF_RANGE',values:[{userEnteredValue:value}]},showCustomUi:true});
 const key = (value:unknown) => String(value||'').trim().toLowerCase();
+const CITY_OPTIONS_TAB='CITY DROPDOWN OPTIONS';
 // Help text does not affect validity. Ignore order of list choices because Apps
 // Script deliberately puts the order's current color first.
 const sameRule = (a:Rule|undefined,b:Rule) => !!a && a.condition?.type===b.condition.type && !!a.strict===!!b.strict && !!a.showCustomUi===!!b.showCustomUi && JSON.stringify((a.condition.values||[]).map(v=>v.userEnteredValue).sort())===JSON.stringify((b.condition.values||[]).map(v=>v.userEnteredValue).sort());
@@ -29,7 +30,9 @@ export function planDropdownRepairs(tabs:Tab[],catalog:string[][],grid:any,cityR
     const headers=tab.values[0]||[],col=(name:string)=>headers.indexOf(name);
     if(['Order ID','Main Code','Variant / Color','City','Item Action','Order Action'].some(name=>col(name)<0))continue;
     const fixed:[string,Rule][]=[
-      ['City',rangeRule(`='CITY LIST'!$C$2:$C$${cityRows}`)],
+      // Apps Script replaces a selected City | District label with the plain
+      // city name. Both forms must remain valid without losing district choices.
+      ['City',rangeRule(`='${CITY_OPTIONS_TAB}'!$A$2:$A$${cityRows*2-1}`)],
       ['Gift Wrap',list(['NO','YES'])],
       ['Item Action',list(['KEEP ITEM','CANCEL ITEM'],'KEEP ITEM = keep this item. CANCEL ITEM = cancel only this item.')],
       ['Order Action',list(['PENDING','CONFIRM ORDER','CANCEL ENTIRE ORDER'],'PENDING / CONFIRM ORDER / CANCEL ENTIRE ORDER')],
@@ -58,6 +61,19 @@ export async function repairSheetDropdowns(connection:SheetConnection,request=go
   const properties=(metadata.sheets||[]).map((sheet:any)=>sheet.properties);
   const catalog=properties.find((p:any)=>p.title==='PRODUCT CATALOG'),city=properties.find((p:any)=>p.title==='CITY LIST');
   if(!catalog||!city||catalog.gridProperties.rowCount<2||city.gridProperties.rowCount<2)return 0;
+  const optionsRows=city.gridProperties.rowCount*2-1;
+  let options=properties.find((p:any)=>p.title===CITY_OPTIONS_TAB);
+  let initializeOptions=false;
+  if(!options) {
+    const created=await request(connection,':batchUpdate',{requests:[{addSheet:{properties:{title:CITY_OPTIONS_TAB,hidden:true,gridProperties:{rowCount:optionsRows,columnCount:1}}}}]});
+    options=created.replies?.[0]?.addSheet?.properties;
+    if(!options)throw new Error('City dropdown helper was not acknowledged');
+    initializeOptions=true;
+  } else if(options.gridProperties.rowCount!==optionsRows) {
+    await request(connection,':batchUpdate',{requests:[{updateSheetProperties:{properties:{sheetId:options.sheetId,gridProperties:{rowCount:optionsRows}},fields:'gridProperties.rowCount'}}]});
+    initializeOptions=true;
+  }
+  if(initializeOptions)await request(connection,':batchUpdate',{requests:[{updateCells:{range:{sheetId:options.sheetId,startRowIndex:0,endRowIndex:2,startColumnIndex:0,endColumnIndex:1},rows:[{values:[{userEnteredValue:{stringValue:'City | District and saved City names'}}]},{values:[{userEnteredValue:{formulaValue:`={'CITY LIST'!C2:C${city.gridProperties.rowCount};'CITY LIST'!A2:A${city.gridProperties.rowCount}}`}}]}],fields:'userEnteredValue'}}]});
   const selected=properties.filter((p:any)=>connection.tabs.includes(p.title)&&/^(CALL CENTER|FACEBOOK|TIKTOK) ORDERS$/.test(p.title));
   if(!selected.length||selected.some((p:any)=>p.gridProperties.rowCount>20000||p.gridProperties.columnCount>100||p.gridProperties.columnCount<38))return 0;
   const query=new URLSearchParams({valueRenderOption:'FORMATTED_VALUE'});
