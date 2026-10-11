@@ -7,6 +7,7 @@ import { buildPaidWaybillProfitReport as buildReport, mergeProfitPurchaseHistory
 import { createPaidWaybillProfitPdf } from '../src/lib/paidWaybillProfitPdf';
 import { profitBatchFixture, profitOrderFixture as order, profitPurchaseFixture as purchase } from './profit-report-fixtures';
 import type { Order, ReturnRecord } from '../src/types';
+import type { ProfitCatalogProduct } from '../src/lib/paidWaybillProfit';
 
 const immutable = <T>(value: T): T => {
   if (value && typeof value === 'object') { Object.freeze(value); Object.values(value).forEach(immutable); }
@@ -88,6 +89,22 @@ assert.equal(buildReport({ orders: [{ ...partial, stock_allocated: false }], pur
 assert.equal(buildReport({ orders: [oldSkuOrder], purchases: [typePurchases[2]] }).rows[0].purchasing, null, 'A different product cannot supply a missing Purchasing cost.');
 const mainCodeOrder = order({ stock_allocated: false, items: [{ ...earlier.items[0], product_id: 'old-watch-id', sku: 'R0053-BLACK-LEGACY', main_sku: 'R0053' }] });
 assert.equal(buildReport({ orders: [mainCodeOrder], purchases: [purchase({ sku: 'R0053', variant_sku: undefined, variant_id: undefined, unit_buying_price: 550 })] }).rows[0].purchasing, 550, 'An explicit main item code can match its Purchasing record when an old order has a retired product ID.');
+const profitCatalog: ProfitCatalogProduct[] = [
+  { id: 'watch', sku: 'R0053', name_en: 'Sport Watch', product_type: 'variant', variants: [{ id: 'black', sku: 'R0053-BLACK' }, { id: 'green', sku: 'R0053-GREEN' }, { id: 'red', sku: 'R0053-RED' }] },
+  { id: 'holder', sku: 'R0041', name_en: 'Phone Holder', product_type: 'normal' },
+  { id: 'catalog-combo', sku: 'CB-R0053-R0041', name_en: 'Watch and Holder', product_type: 'bundle', bundle_components: [{ product_id: 'watch', variant_id: 'black', quantity: 2 }, { product_id: 'holder', quantity: 1 }] },
+];
+assert.equal(buildReport({ orders: [mainCodeOrder], purchases: typePurchases, products: profitCatalog }).rows[0].purchasing, 650, 'A legacy item ID and variant SKU can resolve its own item type through the saved full main code.');
+const retiredPurchaseId = purchase({ product_id: 'retired-watch', sku: 'R0053-RED', variant_sku: 'R0053-RED', variant_id: 'red', unit_buying_price: 700 });
+assert.equal(buildReport({ orders: [oldSkuOrder], purchases: [retiredPurchaseId], products: profitCatalog }).rows[0].purchasing, 700, 'An older Purchasing product ID can resolve to the same saved catalog item through its full variant code.');
+const codeOnlyCombo = order({ stock_allocated: false, items: [{ ...earlier.items[0], product_id: 'retired-combo', sku: 'CB-R0053-R0041', main_sku: undefined, product_type: undefined, variant_id: undefined, variant_name: undefined, bundle_components: undefined, quantity: 2, buying_price: 123456, effective_buying_price: 123456 }] });
+const comboPurchases = [typePurchases[0], typePurchases[1], purchase({ product_id: 'holder', sku: 'R0041', variant_id: undefined, variant_sku: undefined, unit_buying_price: 300 })];
+const comboBefore = JSON.stringify({ orders: [codeOnlyCombo], purchases: comboPurchases, products: profitCatalog });
+const resolvedCombo = buildReport({ orders: [codeOnlyCombo], purchases: comboPurchases, products: profitCatalog });
+assert.equal(resolvedCombo.rows[0].purchasing, 3200, 'An older combo order uses saved system components: 2 bundles x (2 watches x Rs650 + 1 holder x Rs300), without splitting its CB code or using an order Buy Price.');
+assert.deepEqual(resolvedCombo.rows[0].items[0].allocations.map(allocation => [allocation.quantity, allocation.unitCost]), [[4, 650], [2, 300]]);
+assert.equal(JSON.stringify({ orders: [codeOnlyCombo], purchases: comboPurchases, products: profitCatalog }), comboBefore, 'Catalog identity and combo recovery are read-only report operations.');
+assert.equal(buildReport({ orders: [{ ...codeOnlyCombo, items: [{ ...codeOnlyCombo.items[0], sku: 'CB-R0053-R0041-NOT-SAVED' }] }], purchases: comboPurchases, products: profitCatalog }).rows[0].purchasing, null, 'A CB code must match a saved system item in full; its text is never split to guess a combo.');
 const renamedNormal = order({ stock_allocated: false, items: [{ ...earlier.items[0], sku: 'R0041', product_id: 'holder', product_type: 'normal', variant_id: undefined, variant_name: undefined }] });
 assert.equal(buildReport({ orders: [renamedNormal], purchases: [purchase({ sku: 'OLDER-HOLDER', product_id: 'holder', variant_id: undefined, variant_name: undefined, variant_sku: undefined, unit_buying_price: 300 })] }).rows[0].purchasing, 300);
 const combinedPurchases = mergeProfitPurchaseHistory([latest], [purchase(), { ...latest, unit_buying_price: 800 }]);
@@ -231,6 +248,9 @@ try {
   const typeFallbackBody = typeFallbackHtml.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/)![1];
   assert(!typeFallbackBody.includes('Pending') && !typeFallbackBody.includes('Needs Review'), 'The workspace displays resolved same-item-type Purchasing costs for all six test orders.');
   assert(typeFallbackBody.includes('PO-TYPE-LATEST') && typeFallbackBody.includes('Rs. 650.00'), 'The displayed cost remains traceable to the actual Purchasing record and unit price.');
+  const recoveredComboHtml = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, { ...props, orders: [codeOnlyCombo], purchases: comboPurchases, products: profitCatalog }));
+  const recoveredComboBody = recoveredComboHtml.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/)![1];
+  assert(recoveredComboBody.includes('Rs. 3,200.00') && !recoveredComboBody.includes('Pending'), 'The actual workspace passes saved catalog metadata into legacy combo Purchasing recovery.');
   const loading = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, { ...props, ready: false }));
   assert(!loading.includes('<tbody'), 'Do not show stale report totals before saved system data is loaded.');
   const review = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, { ...props, orders: [onlineWithoutWaybill], purchases }));

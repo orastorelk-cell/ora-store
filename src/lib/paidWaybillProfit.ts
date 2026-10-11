@@ -1,4 +1,4 @@
-import type { Order, PurchaseOrder, ReturnRecord } from '../types';
+import type { Order, Product, ProductVariant, PurchaseOrder, ReturnRecord } from '../types';
 
 export const PROFIT_PACKING_COST = 100;
 export const PROFIT_PAGE_SIZE = 10;
@@ -6,6 +6,10 @@ export type PaymentAmountBasis = 'auto' | 'gross' | 'net';
 export type ProfitSource = 'Facebook' | 'TikTok' | 'Other';
 export type ProfitPaymentFilter = 'all' | 'cod' | 'online';
 export interface PaidProfitSelection { paymentFilter?: ProfitPaymentFilter; fromDate?: string; toDate?: string; }
+/** Catalog metadata identifies items and saved combo components; prices come only from Purchasing. */
+export type ProfitCatalogProduct = Pick<Product, 'id' | 'sku' | 'name_en' | 'product_type' | 'bundle_components'> & {
+  variants?: Array<Pick<ProductVariant, 'id' | 'sku'>>;
+};
 export interface PurchaseAllocation {
   purchaseId: string;
   reference: string;
@@ -252,6 +256,18 @@ function purchaseCosts(orders: Order[], purchases: PurchaseOrder[], returns: Ret
 
 /** Price fallback only: it neither consumes stock nor rewrites historical FIFO lots. */
 type PurchaseSelection = { sku?: string; main_sku?: string; product_id: string; variant_id?: string };
+function profitCatalogLookup(products: readonly ProfitCatalogProduct[]) {
+  const byId = new Map(products.map(product => [String(product.id), product]));
+  const bySku = new Map<string, ProfitCatalogProduct | null>();
+  for (const product of products) for (const raw of [product.sku, ...(product.variants || []).map(variant => variant.sku)]) {
+    const code = skuKey(raw);
+    if (!code) continue;
+    if (!bySku.has(code)) bySku.set(code, product);
+    else if (bySku.get(code)?.id !== product.id) bySku.set(code, null);
+  }
+  return (selection: PurchaseSelection) => bySku.get(skuKey(selection.sku))
+    || bySku.get(skuKey(selection.main_sku)) || byId.get(String(selection.product_id));
+}
 export function mergeProfitPurchaseHistory(local: PurchaseOrder[], saved: PurchaseOrder[]): PurchaseOrder[] {
   // Browser corrections take precedence over older restored records with the same ID.
   const byId = new Map(saved.map(purchase => [String(purchase.id), purchase]));
@@ -259,7 +275,7 @@ export function mergeProfitPurchaseHistory(local: PurchaseOrder[], saved: Purcha
   return [...byId.values()];
 }
 
-function latestPurchasePrices(purchases: PurchaseOrder[]) {
+function latestPurchasePrices(purchases: PurchaseOrder[], productFor: ReturnType<typeof profitCatalogLookup>) {
   const latest = new Map<string, PurchaseAllocation>();
   const identities = new Map<string, PurchaseAllocation>();
   const products = new Map<string, PurchaseAllocation>();
@@ -268,6 +284,7 @@ function latestPurchasePrices(purchases: PurchaseOrder[]) {
     .sort((a, b) => timestamp(b.created_at) - timestamp(a.created_at) || b.id.localeCompare(a.id, 'en', { numeric: true }));
   for (const purchase of sorted) {
     const sku = inventoryKey({ ...purchase, sku: purchase.variant_sku || purchase.sku });
+    const productId = productFor({ ...purchase, sku: purchase.variant_sku || purchase.sku })?.id || purchase.product_id;
     const price: PurchaseAllocation = { purchaseId: purchase.id, reference: purchase.po_number || purchase.id, sku,
       quantity: 0, unitCost: amount(purchase.unit_buying_price), costBasis: 'latest-purchase' };
     if (!latest.has(sku)) latest.set(sku, price);
@@ -276,14 +293,22 @@ function latestPurchasePrices(purchases: PurchaseOrder[]) {
       const identity = JSON.stringify([String(purchase.product_id), String(purchase.variant_id)]);
       if (!identities.has(identity)) identities.set(identity, price);
     }
+    if (productId && purchase.variant_id) {
+      const identity = JSON.stringify([String(productId), String(purchase.variant_id)]);
+      if (!identities.has(identity)) identities.set(identity, price);
+    }
     // Missing variant history uses the newest Purchasing price for that item type.
     // This is a report price, independent of available stock and order dates.
-    if (purchase.product_id && !products.has(String(purchase.product_id))) products.set(String(purchase.product_id), price);
+    if (productId && !products.has(String(productId))) products.set(String(productId), price);
   }
-  return (selection: PurchaseSelection) => latest.get(inventoryKey(selection))
-    || (selection.product_id && selection.variant_id ? identities.get(JSON.stringify([String(selection.product_id), String(selection.variant_id)])) : undefined)
-    || products.get(String(selection.product_id))
-    || (selection.main_sku ? latest.get(skuKey(selection.main_sku)) : undefined);
+  return (selection: PurchaseSelection) => {
+    const productId = productFor(selection)?.id || selection.product_id;
+    return latest.get(inventoryKey(selection))
+      || (selection.variant_id ? identities.get(JSON.stringify([String(productId), String(selection.variant_id)])) : undefined)
+      || (selection.product_id && selection.variant_id ? identities.get(JSON.stringify([String(selection.product_id), String(selection.variant_id)])) : undefined)
+      || products.get(String(productId)) || products.get(String(selection.product_id))
+      || (selection.main_sku ? latest.get(skuKey(selection.main_sku)) : undefined);
+  };
 }
 
 function receivedPayment(order: Order, courier: number | null, basis: PaymentAmountBasis) {
@@ -310,12 +335,13 @@ function receivedPayment(order: Order, courier: number | null, basis: PaymentAmo
 
 export function buildPaidWaybillProfitReport(input: {
   waybills?: string[]; orders: Order[]; purchases: PurchaseOrder[]; returns?: ReturnRecord[]; paymentBasis?: PaymentAmountBasis;
-  selection?: PaidProfitSelection;
+  selection?: PaidProfitSelection; products?: readonly ProfitCatalogProduct[];
 }): PaidWaybillProfitReport {
   const normalized = (input.waybills || []).map(normalizeProfitWaybill).filter(Boolean);
   const waybills = [...new Set(normalized)];
   const costs = purchaseCosts(input.orders, input.purchases, input.returns || []);
-  const latestPrices = latestPurchasePrices(input.purchases);
+  const productFor = profitCatalogLookup(input.products || []);
+  const latestPrices = latestPurchasePrices(input.purchases, productFor);
   const byWaybill = new Map<string, Order[]>();
   input.orders.forEach(order => {
     const key = normalizeProfitWaybill(order.waybill_number);
@@ -348,8 +374,18 @@ export function buildPaidWaybillProfitReport(input: {
     row.items = (order.items || []).map((item, index) => {
       const qty = Number(item.quantity), unit = amount(item.unit_price);
       const valid = validQuantity(qty);
-      const required = item.product_type === 'bundle' && item.bundle_components?.length
-        ? item.bundle_components.map(component => ({ ...component, sku: inventoryKey(component), quantity: qty * Math.max(1, Number(component.quantity_per_bundle || 1)) }))
+      const product = productFor(item);
+      // Older snapshots can omit combo metadata. Use the saved system definition,
+      // matched by its full item code; never infer components by splitting a CB code.
+      const components = item.bundle_components?.length ? item.bundle_components
+        : product?.product_type === 'bundle' ? (product.bundle_components || []).map(component => {
+          const child = productFor({ product_id: component.product_id });
+          const variant = child?.variants?.find(variant => variant.id === component.variant_id);
+          return { product_id: component.product_id, variant_id: component.variant_id, sku: variant?.sku || child?.sku || '',
+            main_sku: child?.sku, quantity_per_bundle: component.quantity };
+        }) : [];
+      const required = components.length
+        ? components.map(component => ({ ...component, sku: inventoryKey(component), quantity: qty * Math.max(1, Number(component.quantity_per_bundle || 1)) }))
         : [{ ...item, sku: inventoryKey(item), quantity: qty }];
       const original = costs.get(order.id)?.[index];
       const uncovered: PurchaseAllocation[] = valid ? required.map(selection => ({ purchaseId: '', reference: 'Missing purchase history',

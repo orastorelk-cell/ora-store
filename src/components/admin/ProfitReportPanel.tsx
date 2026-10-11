@@ -8,6 +8,7 @@ import { FacebookProfitAdsPanel } from './FacebookProfitAdsPanel';
 import {
   buildPaidWaybillProfitReport, mergeProfitPurchaseHistory, selectSavedPaidProfitOrders, parseProfitWaybillUpload, profitAdvertisingPeriodKey, profitAdvertisingSummary, profitMoney, PROFIT_PAGE_SIZE,
   type PaymentAmountBasis, type ProfitDateRange, type ProfitPaymentFilter,
+  type ProfitCatalogProduct,
 } from '../../lib/paidWaybillProfit';
 
 export interface ProfitReportDraft {
@@ -44,6 +45,7 @@ const money = (value: number | null) => value === null ? 'Pending' : profitMoney
 export interface ProfitReportWorkspaceProps {
   orders: Order[];
   purchases: PurchaseOrder[];
+  products?: readonly ProfitCatalogProduct[];
   returns: ReturnRecord[];
   ready: boolean;
   loadError?: string;
@@ -60,7 +62,7 @@ export interface ProfitReportWorkspaceProps {
   useUploadedWaybills?: boolean;
 }
 
-export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ orders, purchases, returns, ready, loadError, storageKey, onRefresh, initialDraft,
+export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ orders, purchases, products = [], returns, ready, loadError, storageKey, onRefresh, initialDraft,
   advertisingLedger, advertisingReady = true, advertisingError, canImportAds = false, knownAdCodes = [], onImportAds, onReloadAds, useUploadedWaybills = false }) => {
   const [draft, setDraft] = useState<ProfitReportDraft>(() => initialDraft || readDraft(storageKey));
   const [message, setMessage] = useState('');
@@ -76,12 +78,12 @@ export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ or
   const reportingPeriods = useMemo(() => facebookReportingPeriods(ledger, draft.facebookPeriods), [ledger, draft.facebookPeriods]);
   const allReportingPeriods = useMemo(() => facebookReportingPeriods(ledger, [...new Set(ledger.rows.map(row => `${row.from}|${row.to}`))]), [ledger]);
   const report = useMemo(() => {
-    const built = buildPaidWaybillProfitReport({ orders, purchases, returns, paymentBasis: draft.paymentBasis, selection,
+    const built = buildPaidWaybillProfitReport({ orders, purchases, products, returns, paymentBasis: draft.paymentBasis, selection,
       ...(useUploadedWaybills ? { waybills: draft.waybills || [] } : {}) });
     if (useUploadedWaybills) built.ranges.Facebook = reportingPeriods.length ? { from: reportingPeriods[0].from, to: reportingPeriods.at(-1)!.to,
       count: built.rows.filter(row => row.source === 'Facebook' && row.eligible).length } : null;
     return built;
-  }, [orders, purchases, returns, draft.paymentBasis, draft.waybills, selection, useUploadedWaybills, reportingPeriods]);
+  }, [orders, purchases, products, returns, draft.paymentBasis, draft.waybills, selection, useUploadedWaybills, reportingPeriods]);
   const requiredFacebookDates = useMemo(() => facebookRequiredCostDates(orders, report), [orders, report]);
   const periodDescription = reportingPeriods.length > 3 ? `${reportingPeriods[0].from} to ${reportingPeriods.at(-1)!.to} (${reportingPeriods.length} CSV periods)` : reportingPeriods.map(period => `${period.from} to ${period.to}`).join(' / ') || 'Not uploaded';
   const sourceName = useUploadedWaybills ? `Uploaded waybills: ${draft.waybillFileName || 'Waybill list'} | Facebook CSV reporting: ${periodDescription}`
@@ -306,7 +308,7 @@ export const ProfitReportPanel: React.FC = () => {
   };
   const refresh = async () => { await Promise.all([refreshOrdersFromServer(), loadAdvertising()]); };
   const canImport = adminUser?.role === 'admin' || Boolean(adminUser?.permissions?.includes('profit_report') && !adminUser?.permissions?.includes('level:profit_report:view'));
-  return <ProfitReportWorkspace key={adminUser?.id} orders={orders} purchases={reportPurchases} returns={returnRecords} ready={sharedStoreReady && sharedOrdersReady && advertisingReady}
+  return <ProfitReportWorkspace key={adminUser?.id} orders={orders} purchases={reportPurchases} products={products} returns={returnRecords} ready={sharedStoreReady && sharedOrdersReady && advertisingReady}
     loadError={orderLoadError || advertisingError} storageKey={`ora_paid_waybill_profit_v2:${adminUser?.id || 'staff'}`} onRefresh={refresh}
     advertisingLedger={ledger} advertisingReady={advertisingReady} advertisingError={advertisingError} canImportAds={canImport}
     knownAdCodes={products.flatMap(product => [product.sku, ...(product.variants || []).map(variant => variant.sku)])}
