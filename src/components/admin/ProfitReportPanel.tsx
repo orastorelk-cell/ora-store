@@ -164,7 +164,7 @@ export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ or
     ...(csvMode ? [
       ['Facebook Cost — selected delivered / paid orders', facebookAllocation.paidCost],
       ['Facebook Ad Loss — cancelled / returned / zero leads', facebookAllocation.lostCost],
-      ['Commercial Facebook Cost', facebookAllocation.commercialCost],
+      ['Commercial / promotion share — selected paid orders', facebookAllocation.commercialCost],
     ] as Array<[string, number]> : [['Facebook Cost', ads.facebook ?? (report.ranges.Facebook ? null : 0)]] as Array<[string, number | null]>),
     ['TikTok Cost', ads.tiktok ?? (report.ranges.TikTok ? null : 0)],
   ];

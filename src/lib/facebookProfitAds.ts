@@ -19,6 +19,7 @@ const key = (value: string) => value.trim().toUpperCase();
 const cents = (value: number) => Math.round(value * 100);
 const round = (value: number) => cents(value) / 100;
 const normalized = (value: string) => value.trim().toLowerCase().replace(/\s+/g, ' ');
+const formLeadResult = (value: string) => /^(?:leads? \(form\)|on-facebook leads?|leadgen|onsite_conversion\.lead_grouped)$/.test(value);
 const overlaps = (a: { from: string; to: string }, b: { from: string; to: string }) => a.from <= b.to && b.from <= a.to;
 const samePeriod = (a: FacebookAdCost, b: FacebookAdCost) => a.from === b.from && a.to === b.to;
 const cohortKey = (row: FacebookAdCost) => `${row.code || 'Commercial'}|${row.from}|${row.to}`;
@@ -89,15 +90,21 @@ export function parseFacebookAdCostCsv(csv: string, knownCodes: string[] = []): 
     const code = explicitCode && row[explicitCode] ? key(row[explicitCode]) : facebookAdCode(names, main ? codesByMain.get(main) || [] : otherCodes);
     if (code && !/^[A-Z0-9][A-Z0-9._-]{0,119}$/.test(code)) throw new FacebookAdError(`Row ${line}: use a valid catalog code of at most 120 characters.`);
     if (deliveryLevel === 'ad' && !(idHeader && row[idHeader])) throw new FacebookAdError(`Row ${line}: include Ad ID when exporting individual ads.`);
-    if (!code && !/\b(?:commercial|commersial)\b|\bcm\s+ad\b/i.test(`${name} ${set}`))
-      throw new FacebookAdError(`Row ${line}: no catalog code was found in "${name}". Only named Commercial ads can be saved without a code.`);
     const type = normalized(row[resultType] || ''), rawLeads = String(row[results] || '').trim();
-    if (code && !/^(?:leads? \(form\)|on-facebook leads?|leadgen|onsite_conversion\.lead_grouped)$/.test(type))
-      throw new FacebookAdError(`Row ${line}: item ads need form-lead results; messages, clicks and purchases cannot be used as lead counts.`);
     const leads = rawLeads ? numeric(rawLeads, 'Results', line) : 0;
     if (!Number.isSafeInteger(leads)) throw new FacebookAdError(`Row ${line}: Results must be a whole lead count.`);
+    // Meta leaves both result fields empty when an ad spends without a result.
+    // Preserve that item's zero-lead spend instead of rejecting the whole CSV.
+    if (code && !formLeadResult(type) && !(type === '' && leads === 0))
+      throw new FacebookAdError(`Row ${line}: item ads need form-lead results; messages, clicks and purchases cannot be used as lead counts.`);
+    const namedCommercial = /\b(?:commercial|commersial)\b|\bcm\s+ad\b/i.test(`${name} ${set}`);
+    // Boosted posts and link/video promotions often have no catalog code.
+    // Their saved spend is a general promotion expense; never treat their views
+    // or messages as item leads. Uncoded form-lead ads still need a real code.
+    if (!code && !namedCommercial && (formLeadResult(type) || type === '' && leads > 0))
+      throw new FacebookAdError(`Row ${line}: no catalog code was found in "${name}". Add its item / complete CB code before using form-lead costs.`);
     return { campaign: name, adSet: set, entityId: String(row[idHeader] || '').trim(), level: deliveryLevel,
-      code, from: start, to: end, spend: round(numeric(row[spend], 'Amount spent (LKR)', line)), leads: code ? leads : 0 };
+      code, from: start, to: end, spend: round(numeric(row[spend], 'Amount spent (LKR)', line)), leads: code || formLeadResult(type) ? leads : 0 };
   });
   if (new Set(rows.map(row => row.level)).size !== 1) throw new FacebookAdError('Do not combine campaign, ad set and ad totals in one file. Export one reporting level.');
   const identities = new Set<string>(), namedPeriods = new Map<string, { unnamed: boolean; count: number }>();
@@ -157,6 +164,8 @@ export interface FacebookAdCohort {
 export interface FacebookAdAllocation {
   cohorts: FacebookAdCohort[]; orderCosts: Map<string, { cost: number; state: 'paid' | 'pending' | 'lost'; from: string; to: string; code: string }>;
   paidCost: number; lostCost: number; commercialCost: number; pendingCost: number; unmatchedCost: number;
+  commercialSpend: number; commercialRemainingCost: number;
+  commercialCohorts: Array<{ from: string; to: string; spend: number; leads: number; selectedPaid: number; selectedCost: number; remainingCost: number }>;
   missingOrderIds: string[]; issues: string[]; totalSpend: number;
   waybillScoped?: boolean;
 }
@@ -205,16 +214,12 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
   const selectedOrderIds = scope ? new Set(scope.orderIds) : undefined;
   const selectedPeriod = (row: { from: string; to: string }) => scope?.reportingPeriods.some(period => period.from === row.from && period.to === row.to);
   const groups = new Map<string, FacebookAdCohort>();
+  const promotions = new Map<string, { from: string; to: string; spend: number; formLeads: number }>();
   const issues: string[] = [];
-  let commercialCost = 0;
   for (const row of ledger.rows) {
     if (!row.code) {
-      if (scope) { if (selectedPeriod(row)) commercialCost += row.spend; continue; }
-      if ((!selection.fromDate || row.to >= selection.fromDate) && (!selection.toDate || row.from <= selection.toDate)) {
-        if ((selection.fromDate && row.from < selection.fromDate) || (selection.toDate && row.to > selection.toDate))
-          issues.push(`Commercial cost covers ${row.from} to ${row.to}. Select its full period or upload daily costs for a narrower report.`);
-        else commercialCost += row.spend;
-      }
+      const id = `${row.from}|${row.to}`, period = promotions.get(id) || { from: row.from, to: row.to, spend: 0, formLeads: 0 };
+      period.spend = round(period.spend + row.spend); period.formLeads += row.leads; promotions.set(id, period);
       continue;
     }
     const id = `${row.code}|${row.from}|${row.to}`;
@@ -288,7 +293,34 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
   }
   const missingOrderIds = report.rows.filter(row => row.source === 'Facebook' && row.orderId
     && orderCosts.get(row.orderId)?.state !== 'paid').map(row => row.orderId!);
-  return { cohorts: visible, orderCosts, paidCost: round(paidCost), lostCost: round(lostCost), commercialCost: round(commercialCost),
+  const orderById = new Map(orders.map(order => [order.id, order]));
+  const selectedFacebook = report.rows.filter(row => row.source === 'Facebook' && row.eligible && row.orderId);
+  const commercialCohorts = [...promotions.values()].filter(row => scope ? selectedPeriod(row)
+    : (!selection.fromDate || row.to >= selection.fromDate) && (!selection.toDate || row.from <= selection.toDate)).map(period => {
+    // Use the CSV's form-lead total for this exact period. Views and messages
+    // from promotion rows never increase the denominator or become item leads.
+    const leads = period.formLeads + cohorts.filter(row => row.from === period.from && row.to === period.to).reduce((sum, row) => sum + row.leads, 0);
+    const selectedPaid = selectedFacebook.filter(row => {
+      const saved = orderCosts.get(row.orderId!);
+      const order = orderById.get(row.orderId!);
+      return selectedReady.has(row.orderId) && saved?.state === 'paid' && saved.from === period.from && saved.to === period.to
+        && Boolean(order && (scope || inSelection(order, selection)));
+    }).length;
+    const hasSelectedLead = selectedFacebook.some(row => {
+      const order = orderById.get(row.orderId!);
+      if (!order) return false;
+      const day = profitSystemDay(order.platform_lead_created_at || order.created_at);
+      return day && day >= period.from && day <= period.to;
+    });
+    if (!leads && period.spend > 0 && hasSelectedLead)
+      issues.push(`Commercial / promotion cost for ${period.from} to ${period.to} has no matching CSV form-lead count. Upload item-ad lead results for the same dates before allocating it.`);
+    const selectedCost = leads ? Math.round(cents(period.spend) * selectedPaid / leads) / 100 : 0;
+    return { ...period, leads, selectedPaid, selectedCost, remainingCost: (cents(period.spend) - cents(selectedCost)) / 100 };
+  }).sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
+  const commercialCost = round(commercialCohorts.reduce((sum, row) => sum + row.selectedCost, 0));
+  return { cohorts: visible, orderCosts, paidCost: round(paidCost), lostCost: round(lostCost), commercialCost,
+    commercialSpend: round(commercialCohorts.reduce((sum, row) => sum + row.spend, 0)),
+    commercialRemainingCost: round(commercialCohorts.reduce((sum, row) => sum + row.remainingCost, 0)), commercialCohorts,
     pendingCost: round(visible.reduce((sum, row) => sum + row.pendingCost, 0)), unmatchedCost: round(visible.reduce((sum, row) => sum + row.unmatchedCost, 0)),
     missingOrderIds, issues: [...new Set(issues)], totalSpend: round(ledger.rows.reduce((sum, row) => sum + row.spend, 0)), waybillScoped: Boolean(scope) };
 }

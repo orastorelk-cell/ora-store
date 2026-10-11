@@ -44,7 +44,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     ['Actual Fardar delivery cost', -report.totals.courier],
     [`Packing (${report.totals.ready} orders x Rs. ${PROFIT_PACKING_COST})`, -report.totals.packing],
     ['PROFIT BEFORE ADVERTISING', report.totals.beforeAds],
-    [allocation ? 'Facebook (paid orders + ad losses + Commercial)' : 'Facebook advertising cost', advertising.facebook === null && report.ranges.Facebook ? null : -(advertising.facebook ?? 0)],
+    [allocation ? 'Facebook (item ads + ad losses + promotion share)' : 'Facebook advertising cost', advertising.facebook === null && report.ranges.Facebook ? null : -(advertising.facebook ?? 0)],
     ['TikTok advertising cost', advertising.tiktok === null && report.ranges.TikTok ? null : -(advertising.tiktok ?? 0)],
   ];
   rows.forEach(([label, value], index) => {
@@ -93,20 +93,43 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
   if (allocation) {
     doc.addPage(); title('Facebook cost allocation | Average cost per original form lead'); y = 35;
     const intro = [
-      `Selected paid-order cost: ${money(allocation.paidCost)} | Known ad losses: ${money(allocation.lostCost)} | Commercial included: ${money(allocation.commercialCost)}`,
+      `Selected paid-order cost: ${money(allocation.paidCost)} | Known ad losses: ${money(allocation.lostCost)} | Promotion share included: ${money(allocation.commercialCost)}`,
       `Pending lead cost: ${money(allocation.pendingCost)} | Unmatched lead cost: ${money(allocation.unmatchedCost)} | Total recorded spend (all saved reports): ${money(allocation.totalSpend)}`,
       'Original Facebook lead dates link each order to its saved cost period. Older records without a lead date use their system date.',
       'Pending costs remain separate until delivered and paid. Full incurred spend remains recorded; this is a management allocation for paid orders.',
+      'Code-free promotion share = period spend / CSV form leads x selected paid orders. Messages and views are not form leads.',
       ...(allocation.waybillScoped ? ['The summary selects uploaded waybills. This table shows all leads in the cost periods; costs for other leads remain separate.'] : []),
     ];
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
     intro.forEach(note => { const lines = doc.splitTextToSize(note, width); doc.text(lines, left, y); y += lines.length * 4 + 2; }); y += 3;
+    if (allocation.commercialCohorts.length) {
+      const widths = [46, 44, 28, 32, 58, 65];
+      const promotionHeader = () => {
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.text('COMMERCIAL / CODE-FREE PROMOTION ALLOCATION', left, y); y += 8;
+        doc.setFillColor(239, 246, 255); doc.rect(left, y - 4, width, 9, 'F');
+        let x = left; doc.setFontSize(7.5);
+        ['CSV PERIOD', 'RECORDED SPEND', 'FB LEADS', 'SELECTED PAID', 'SHARE INCLUDED', 'OTHER / PENDING SHARE'].forEach((label, i) => { doc.text(label, x + 2, y); x += widths[i]; }); y += 9;
+      };
+      if (y + 30 > bottom) { doc.addPage(); title('Commercial / promotion allocation'); y = 35; }
+      promotionHeader();
+      allocation.commercialCohorts.forEach(row => {
+        const values = [`${row.from} to ${row.to}`, money(row.spend), String(row.leads), String(row.selectedPaid), money(row.selectedCost), money(row.remainingCost)];
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5);
+        const cells = values.map((value, i) => doc.splitTextToSize(value, widths[i] - 4));
+        const height = Math.max(...cells.map(lines => lines.length)) * 4 + 5;
+        if (y + height > bottom) { doc.addPage(); title('Commercial / promotion allocation - continued'); y = 35; promotionHeader(); }
+        let x = left; doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5);
+        cells.forEach((lines, i) => { doc.text(lines, x + 2, y); x += widths[i]; }); y += height;
+      });
+      y += 8;
+    }
     const adsWidths = [38, 46, 27, 16, 36, 36, 36, 38];
     const adHeader = () => {
       doc.setFillColor(243, 244, 246); doc.rect(left, y - 4, width, 9, 'F');
       let x = left; doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5);
       ['CODE', 'LEAD PERIOD', 'SPEND', 'LEADS', 'PAID', 'PENDING', 'AD LOSS', 'UNMATCHED'].forEach((label, i) => { doc.text(label, x + 2, y); x += adsWidths[i]; }); y += 9;
     };
+    if (y + 25 > bottom) { doc.addPage(); title('Facebook item-ad cost allocation'); y = 35; }
     adHeader();
     allocation.cohorts.forEach((row, index) => {
       const values = [row.code, `${row.from} to ${row.to}`, money(row.spend), `${row.leads} / ${row.matched}`,
