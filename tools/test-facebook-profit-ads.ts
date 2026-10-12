@@ -148,6 +148,9 @@ const scopedLedger = mergeFacebookAdLedger(ledger, [{ ...rows[0], from: '2026-09
   { ...rows[1], from: '2026-09-20', to: '2026-09-30', spend: 200 }, { ...rows[0], code: 'R0048', campaign: 'R0048', adSet: 'R0048', spend: 999, leads: 3 },
   { ...rows[0], code: 'R0017', campaign: 'R0017', adSet: 'R0017', spend: 250, leads: 0 }],
   { ...meta, expectedVersion: 1, importedAt: '2026-10-10T17:00:00Z' }).ledger;
+// A legacy saved ledger can contain historical rows. The current CSV snapshot
+// contains all October item/promotion rows; older reporting dates stay inactive.
+scopedLedger.rows = scopedLedger.rows.map(row => ({ ...row, importedAt: row.from === '2026-10-01' ? '2026-10-10T17:00:00Z' : '2026-09-30T17:00:00Z' }));
 const waybillPeriods = facebookReportingPeriods(scopedLedger, ['2026-10-01|2026-10-08']);
 assert.deepEqual(waybillPeriods, [{ from: '2026-10-01', to: '2026-10-08' }]);
 const scope = { orderIds: waybillReport.rows.map(row => row.orderId!), reportingPeriods: waybillPeriods };

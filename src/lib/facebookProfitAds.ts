@@ -131,25 +131,34 @@ export function readFacebookAdLedger(value: unknown): FacebookAdLedger {
   return ledger;
 }
 
+/** Compatibility for saved ledgers that still contain several uploaded files. */
+export function latestFacebookAdLedger(ledger: FacebookAdLedger): FacebookAdLedger {
+  if (!ledger.rows.length) return ledger;
+  const latest = ledger.rows.reduce((at, row) => row.importedAt > at ? row.importedAt : at, '');
+  if (!latest) throw new FacebookAdError('The latest Facebook CSV could not be identified. Upload the current report again.', 503);
+  return { ...ledger, rows: ledger.rows.filter(row => row.importedAt === latest) };
+}
+
 /** Each upload is a complete snapshot for its code/period. Rename/removal of an
  * ad set cannot leave an old cost behind, even in exports without Ad set IDs. */
 export function mergeFacebookAdLedger(current: FacebookAdLedger, incoming: FacebookAdCost[], meta: {
-  expectedVersion: number; fileName: string; importedAt: string; importedBy: string;
+  expectedVersion: number; fileName: string; importedAt: string; importedBy: string; replaceExisting?: boolean;
 }): { ledger: FacebookAdLedger; unchanged: boolean } {
   const existing = new Map<string, FacebookAdCost[]>(), replacements = new Map<string, FacebookAdCost[]>();
   for (const row of current.rows) existing.set(cohortKey(row), [...(existing.get(cohortKey(row)) || []), row]);
   for (const row of incoming) replacements.set(cohortKey(row), [...(replacements.get(cohortKey(row)) || []), row]);
-  if ([...replacements].every(([id, rows]) => costSignature(existing.get(id) || []) === costSignature(rows))) return { ledger: current, unchanged: true };
+  if (meta.replaceExisting ? costSignature(current.rows) === costSignature(incoming)
+    : [...replacements].every(([id, rows]) => costSignature(existing.get(id) || []) === costSignature(rows))) return { ledger: current, unchanged: true };
   if (meta.expectedVersion !== current.version) throw new FacebookAdError('Advertising history changed in another session. Refresh it before importing this file.', 409);
   const periods = new Map<string | null, FacebookAdCost[]>();
-  for (const rows of existing.values()) periods.set(rows[0].code, [...(periods.get(rows[0].code) || []), rows[0]]);
+  if (!meta.replaceExisting) for (const rows of existing.values()) periods.set(rows[0].code, [...(periods.get(rows[0].code) || []), rows[0]]);
   for (const rows of replacements.values()) {
     const row = rows[0], conflicts = (periods.get(row.code) || []).filter(old => overlaps(old, row));
     if (conflicts.some(old => !samePeriod(old, row)))
       throw new FacebookAdError(`Overlapping dates for ${row.code || 'Commercial'}: saved costs already cover part of ${row.from} to ${row.to}. Re-upload the same dates, or use non-overlapping / daily reports.`, 409);
     periods.set(row.code, [...(periods.get(row.code) || []), row]);
   }
-  const rows = [...current.rows.filter(row => !replacements.has(cohortKey(row))), ...incoming.map(row => ({ ...row,
+  const rows = [...(meta.replaceExisting ? [] : current.rows.filter(row => !replacements.has(cohortKey(row)))), ...incoming.map(row => ({ ...row,
     fileName: meta.fileName.slice(0, 200), importedAt: meta.importedAt, importedBy: meta.importedBy }))];
   if (rows.length > 20000) throw new FacebookAdError('Advertising history has reached its row limit. Export longer non-overlapping periods.', 413);
   rows.sort((a, b) => a.from.localeCompare(b.from) || (a.code || '').localeCompare(b.code || '') || a.campaign.localeCompare(b.campaign) || a.adSet.localeCompare(b.adSet));
@@ -158,6 +167,7 @@ export function mergeFacebookAdLedger(current: FacebookAdLedger, incoming: Faceb
 
 export interface FacebookAdCohort {
   code: string; from: string; to: string; spend: number; leads: number; matched: number;
+  allocationLeads: number; warnings: string[];
   paid: number; pending: number; lost: number; unmatched: number;
   paidCost: number; pendingCost: number; lostCost: number; unmatchedCost: number; fallbackDates: number; issues: string[];
 }
@@ -169,6 +179,7 @@ export interface FacebookAdAllocation {
   lossCohorts: Array<{ from: string; to: string; spend: number; leads: number; lostLeads: number; selectedPaid: number; selectedCost: number; remainingCost: number }>;
   commercialCohorts: Array<{ from: string; to: string; spend: number; leads: number; selectedPaid: number; selectedReturned: number; selectedCost: number; remainingCost: number }>;
   missingOrderIds: string[]; issues: string[]; totalSpend: number;
+  outsidePeriodOrderIds: Set<string>;
   waybillScoped?: boolean;
 }
 export interface FacebookWaybillScope {
@@ -177,10 +188,12 @@ export interface FacebookWaybillScope {
 }
 /** These are CSV reporting dates, not order arrival or payment dates. */
 export function facebookReportingPeriods(ledger: FacebookAdLedger, keys?: string[]) {
-  const latestImport = ledger.rows.reduce((last, row) => row.importedAt > last ? row.importedAt : last, '');
+  const active = latestFacebookAdLedger(ledger);
   const selected = keys ? new Set(keys) : undefined;
   const periods = new Map<string, { from: string; to: string }>();
-  for (const row of ledger.rows) if (selected ? selected.has(`${row.from}|${row.to}`) : row.importedAt === latestImport)
+  for (const row of active.rows) if (!selected || selected.has(`${row.from}|${row.to}`))
+    periods.set(`${row.from}|${row.to}`, { from: row.from, to: row.to });
+  if (!periods.size && active.rows.length) for (const row of active.rows)
     periods.set(`${row.from}|${row.to}`, { from: row.from, to: row.to });
   return [...periods.values()].sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
 }
@@ -214,10 +227,15 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
   selection: PaidProfitSelection = {}, scope?: FacebookWaybillScope): FacebookAdAllocation {
   const scopedIds = scope ? new Set(scope.orderIds) : undefined;
   const selectedPeriod = (row: { from: string; to: string }) => scope?.reportingPeriods.some(period => period.from === row.from && period.to === row.to);
+  // A waybill report uses only the cost periods the user selected from their CSV.
+  // Saved historical reports never add an expense to this selection implicitly.
+  const active = latestFacebookAdLedger(ledger);
+  const costRows = scope ? active.rows.filter(selectedPeriod) : active.rows;
+  const orderById = new Map(orders.map(order => [order.id, order]));
   const groups = new Map<string, FacebookAdCohort>();
   const promotions = new Map<string, { from: string; to: string; spend: number; formLeads: number }>();
   const issues: string[] = [];
-  for (const row of ledger.rows) {
+  for (const row of costRows) {
     if (!row.code) {
       const id = `${row.from}|${row.to}`, period = promotions.get(id) || { from: row.from, to: row.to, spend: 0, formLeads: 0 };
       period.spend = round(period.spend + row.spend); period.formLeads += row.leads; promotions.set(id, period);
@@ -225,7 +243,7 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
     }
     const id = `${row.code}|${row.from}|${row.to}`;
     const cohort = groups.get(id) || { code: row.code, from: row.from, to: row.to, spend: 0, leads: 0, matched: 0,
-      paid: 0, pending: 0, lost: 0, unmatched: 0, paidCost: 0, pendingCost: 0, lostCost: 0, unmatchedCost: 0, fallbackDates: 0, issues: [] };
+      allocationLeads: 0, warnings: [], paid: 0, pending: 0, lost: 0, unmatched: 0, paidCost: 0, pendingCost: 0, lostCost: 0, unmatchedCost: 0, fallbackDates: 0, issues: [] };
     cohort.spend = round(cohort.spend + row.spend); cohort.leads += row.leads; groups.set(id, cohort);
   }
   const cohorts = [...groups.values()], assignments = new Map<FacebookAdCohort, Order[]>(), cohortsByCode = new Map<string, FacebookAdCohort[]>();
@@ -257,19 +275,29 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
     assignments.set(cohort, [...(assignments.get(cohort) || []), order]);
   }
   const orderCosts: FacebookAdAllocation['orderCosts'] = new Map();
+  const outsidePeriodOrderIds = new Set<string>();
   let paidCost = 0, returnedCost = 0, lostCost = 0;
   const selectedReady = new Set(report.rows.filter(row => row.profit !== null && (!scopedIds || row.orderId && scopedIds.has(row.orderId))).map(row => row.orderId));
   const selectedReturnOrderIds = new Set(report.rows.filter(row => row.outcome === 'returned' && row.orderId && selectedReady.has(row.orderId)).map(row => row.orderId!));
   for (const cohort of cohorts) {
     const matched = (assignments.get(cohort) || []).sort((a, b) => (a.platform_lead_id || a.id).localeCompare(b.platform_lead_id || b.id));
     cohort.matched = matched.length;
-    if (matched.length > cohort.leads) cohort.issues.push(`System has ${matched.length} unique leads; Facebook reports ${cohort.leads}. Check dates, attribution and lead counts.`);
+    cohort.allocationLeads = cohort.leads;
+    if (matched.length > cohort.leads) {
+      if (scope && cohort.leads > 0 && !cohort.issues.length) {
+        // Meta Results is an attribution count, not a guaranteed count of saved
+        // unique leads. Spread this exact spend over observed leads when there
+        // are more of them; never exceed the CSV budget or fabricate extra spend.
+        cohort.allocationLeads = matched.length;
+        cohort.warnings.push(`Facebook reports ${cohort.leads} leads; the system has ${matched.length} unique leads. This CSV spend is shared across ${matched.length} leads without exceeding the recorded spend.`);
+      } else cohort.issues.push(`System has ${matched.length} unique leads; Facebook reports ${cohort.leads}. Check dates, attribution and lead counts.`);
+    }
     if (cohort.issues.length) {
       cohort.unmatched = cohort.leads; cohort.unmatchedCost = cohort.spend; continue;
     }
     if (!cohort.leads) { cohort.lostCost = cohort.spend; continue; }
-    cohort.unmatched = cohort.leads - matched.length;
-    const allocated = Math.round(cents(cohort.spend) * matched.length / cohort.leads);
+    cohort.unmatched = cohort.allocationLeads - matched.length;
+    const allocated = Math.round(cents(cohort.spend) * matched.length / cohort.allocationLeads);
     const base = matched.length ? Math.floor(allocated / matched.length) : 0, remainder = allocated - base * matched.length;
     matched.forEach((order, index) => {
       const cost = (base + (index < remainder ? 1 : 0)) / 100, state = orderState(order);
@@ -281,12 +309,21 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
     });
     cohort.unmatchedCost = (cents(cohort.spend) - allocated) / 100;
   }
+  if (scope?.reportingPeriods.length) for (const row of report.rows) {
+    if (row.source !== 'Facebook' || !row.orderId || !row.eligible) continue;
+    const order = orderById.get(row.orderId);
+    const day = order && profitSystemDay(order.platform_lead_created_at || order.created_at);
+    if (!day || scope.reportingPeriods.some(period => day >= period.from && day <= period.to)) continue;
+    outsidePeriodOrderIds.add(row.orderId);
+    orderCosts.set(row.orderId, { cost: 0, lossCost: 0, promotionCost: 0, state: row.outcome === 'returned' ? 'lost' : 'paid',
+      from: day, to: day, code: '' });
+  }
   const selectedCohorts = new Set(report.rows.flatMap(row => { const saved = row.orderId ? orderCosts.get(row.orderId) : undefined;
     return saved ? [`${saved.code}|${saved.from}|${saved.to}`] : []; }));
-  const visible = cohorts.filter(row => (scope ? selectedPeriod(row) : (!selection.fromDate || row.to >= selection.fromDate) && (!selection.toDate || row.from <= selection.toDate))
+  const visible = cohorts.filter(row => scope ? selectedPeriod(row) : ((!selection.fromDate || row.to >= selection.fromDate) && (!selection.toDate || row.from <= selection.toDate))
     || selectedCohorts.has(`${row.code}|${row.from}|${row.to}`));
   for (const cohort of visible) {
-    if (!scope || selectedCohorts.has(`${cohort.code}|${cohort.from}|${cohort.to}`)) issues.push(...cohort.issues.map(issue => `${cohort.code}: ${issue}`));
+    issues.push(...cohort.issues.map(issue => `${cohort.code}: ${issue}`));
     if (!cohort.leads && cohort.spend > 0) {
       if (scope) continue; // Allocated through the period's shared loss pool below.
       else if ((selection.fromDate && cohort.from < selection.fromDate) || (selection.toDate && cohort.to > selection.toDate))
@@ -296,7 +333,6 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
   }
   const missingOrderIds = report.rows.filter(row => row.source === 'Facebook' && row.orderId
     && orderCosts.get(row.orderId)?.state !== (row.outcome === 'returned' ? 'lost' : 'paid')).map(row => row.orderId!);
-  const orderById = new Map(orders.map(order => [order.id, order]));
   const selectedFacebook = report.rows.filter(row => row.source === 'Facebook' && row.eligible && row.orderId);
   const paidForPeriod = (period: { from: string; to: string }) => selectedFacebook.filter(row => {
     const saved = orderCosts.get(row.orderId!);
@@ -321,7 +357,7 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
       .reduce((sum, order) => sum + (orderCosts.get(order.id)?.cost || 0), 0);
     // A selected returned waybill pays its own ad cost once. Remove that same
     // cost from the shared loss pool before allocating other losses to sales.
-    pool.spend = round(pool.spend + cohort.lostCost - directlySelectedReturns); pool.leads += cohort.leads; pool.lostLeads += cohort.lost;
+    pool.spend = round(pool.spend + cohort.lostCost - directlySelectedReturns); pool.leads += cohort.allocationLeads; pool.lostLeads += cohort.lost;
     lossPeriods.set(id, pool);
   }
   const lossCohorts = [...lossPeriods.values()].filter(period => period.spend > 0).map(period => {
@@ -337,9 +373,9 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
   if (scope) lostCost = lossCohorts.reduce((sum, row) => sum + row.selectedCost, 0);
   const commercialCohorts = [...promotions.values()].filter(row => scope ? selectedPeriod(row)
     : (!selection.fromDate || row.to >= selection.fromDate) && (!selection.toDate || row.from <= selection.toDate)).map(period => {
-    // Use the CSV's form-lead total for this exact period. Views and messages
-    // from promotion rows never increase the denominator or become item leads.
-    const leads = period.formLeads + cohorts.filter(row => row.from === period.from && row.to === period.to).reduce((sum, row) => sum + row.leads, 0);
+    // Use each current cohort's reported/observed form-lead allocation count.
+    // Promotion views and messages never become item leads.
+    const leads = period.formLeads + cohorts.filter(row => row.from === period.from && row.to === period.to).reduce((sum, row) => sum + row.allocationLeads, 0);
     const paidIds = paidForPeriod(period), returnedIds = returnedForPeriod(period);
     const selectedIds = [...paidIds, ...returnedIds].sort(), selectedPaid = paidIds.length, selectedReturned = returnedIds.length;
     const hasSelectedLead = selectedFacebook.some(row => {
@@ -361,7 +397,7 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
     commercialSpend: round(commercialCohorts.reduce((sum, row) => sum + row.spend, 0)),
     commercialRemainingCost: round(commercialCohorts.reduce((sum, row) => sum + row.remainingCost, 0)), commercialCohorts,
     pendingCost: round(visible.reduce((sum, row) => sum + row.pendingCost, 0)), unmatchedCost: round(visible.reduce((sum, row) => sum + row.unmatchedCost, 0)),
-    missingOrderIds, issues: [...new Set(issues)], totalSpend: round(ledger.rows.reduce((sum, row) => sum + row.spend, 0)), waybillScoped: Boolean(scope) };
+    missingOrderIds, outsidePeriodOrderIds, issues: [...new Set(issues)], totalSpend: round(costRows.reduce((sum, row) => sum + row.spend, 0)), waybillScoped: Boolean(scope) };
 }
 
 export function facebookOrderAdvertisingCost(allocation: FacebookAdAllocation, orderId?: string) {

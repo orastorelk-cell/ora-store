@@ -1,4 +1,4 @@
-import { FACEBOOK_AD_LEDGER_KEY, FacebookAdError, mergeFacebookAdLedger, parseFacebookAdCostCsv, readFacebookAdLedger } from './facebookProfitAds';
+import { FACEBOOK_AD_LEDGER_KEY, FacebookAdError, latestFacebookAdLedger, mergeFacebookAdLedger, parseFacebookAdCostCsv, readFacebookAdLedger } from './facebookProfitAds';
 
 type Row = Record<string, any>;
 export interface ProfitAdsStorage {
@@ -16,7 +16,7 @@ export async function profitAdCostHandler(request: Request, storage: ProfitAdsSt
     if (request.method === 'GET') {
       const rows = await storage.readAdmin();
       const purchases = new URL(request.url).searchParams.get('includePurchases') === '1' ? await readPurchases?.() || [] : undefined;
-      return json({ ledger: readFacebookAdLedger(rows.find(row => row.key === FACEBOOK_AD_LEDGER_KEY)?.payload),
+      return json({ ledger: latestFacebookAdLedger(readFacebookAdLedger(rows.find(row => row.key === FACEBOOK_AD_LEDGER_KEY)?.payload)),
         ...(purchases ? { purchases: purchases.map(({ id, po_number, product_id, product_name, sku, variant_id, variant_name, variant_sku,
           quantity_added, unit_buying_price, total_cost, created_at }) => ({ id, po_number, product_id, product_name, sku, variant_id,
           variant_name, variant_sku, quantity_added, unit_buying_price, total_cost, created_at, supplier_name: '', performed_by: '' })) } : {}) });
@@ -35,7 +35,7 @@ export async function profitAdCostHandler(request: Request, storage: ProfitAdsSt
     const saved = await storage.changeAdmin(rows => {
       const old = rows.find(row => row.key === FACEBOOK_AD_LEDGER_KEY);
       const result = mergeFacebookAdLedger(readFacebookAdLedger(old?.payload), incoming, { expectedVersion: body.expectedVersion,
-        fileName: body.fileName, importedAt: at, importedBy: String(user.id || user.username || 'Admin') });
+        fileName: body.fileName, importedAt: at, importedBy: String(user.id || user.username || 'Admin'), replaceExisting: true });
       if (result.unchanged) return { rows, result };
       const replacement = { ...old, key: FACEBOOK_AD_LEDGER_KEY, payload: result.ledger, updated_at: at };
       return { rows: old ? rows.map(row => row === old ? replacement : row) : [...rows, replacement], result };

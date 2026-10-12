@@ -461,6 +461,7 @@ export function profitAdvertisingSummary(report: PaidWaybillProfitReport, facebo
   const missing = (['Facebook', 'TikTok'] as const).filter(source => report.ranges[source] && (source === 'Facebook' ? facebookCost : tiktokCost) === null);
   const invalid = (facebook.trim() !== '' && facebookCost === null) || (tiktok.trim() !== '' && tiktokCost === null);
   const total = round((facebookCost ?? 0) + (tiktokCost ?? 0));
+  const recordedCostProfit = report.rows.length > 0 && report.totals.review === 0 && !missing.length && !invalid ? round(report.totals.beforeAds - total) : null;
   return { facebook: facebookCost, tiktok: tiktokCost, total, missing, invalid,
-    netProfit: report.rows.length > 0 && report.totals.review === 0 && !missing.length && !invalid ? round(report.totals.beforeAds - total) : null };
+    recordedCostProfit, netProfit: recordedCostProfit };
 }
