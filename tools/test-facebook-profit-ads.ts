@@ -238,54 +238,52 @@ await importRecovery(dataBucket(env)!, { format: 'ora-r2-recovery-v1', orders, t
   admin_users: [{ id: 'admin', role: 'admin', is_active: true }, { id: 'view', role: 'staff', is_active: true, permissions: ['profit_report', 'level:profit_report:view'] },
     { id: 'staff', role: 'staff', is_active: true, permissions: ['orders'] }], courier_waybills: [] });
 const token = (id: string) => { const payload = Buffer.from(JSON.stringify({ sub: id, role: id === 'admin' ? 'admin' : 'staff', exp: Date.now() + 60000 })).toString('base64url'); return payload + '.' + crypto.createHmac('sha256', secret).update(payload).digest('base64url'); };
-const request = (method = 'GET', body?: any, auth = token('admin'), url = '/api/admin/profit-ad-costs') => withR2DataFallback(new Request('https://synthetic.test' + url, { method,
+const request = (method = 'GET', body?: any, auth = token('admin'), url = '/api/admin/profit-ad-costs?reportOnly=1') => withR2DataFallback(new Request('https://synthetic.test' + url, { method,
   headers: { 'content-type': 'application/json', authorization: 'Bearer ' + auth }, ...(body ? { body: JSON.stringify(body) } : {}) }), env, {}, async () => new Response('Unexpected bridge', { status: 599 }));
 assert.equal((await request('GET', undefined, 'invalid')).status, 401);
 assert.equal((await request('GET', undefined, token('staff'))).status, 403);
 assert.equal((await request('GET', undefined, token('view'))).status, 200);
 assert.equal((await request('POST', { csv, fileName: 'QA.csv', expectedVersion: 0 }, token('view'))).status, 403);
 raw.writes = [];
-const purchaseHistory: any = await (await request('GET', undefined, token('view'), '/api/admin/profit-ad-costs?includePurchases=1')).json();
+const purchaseHistory: any = await (await request('GET', undefined, token('view'), '/api/admin/profit-ad-costs?includePurchases=1&reportOnly=1')).json();
 assert.equal(purchaseHistory.purchases.length, purchases.length);
 assert.equal(purchaseHistory.purchases[0].unit_buying_price, purchases[0].unit_buying_price);
 assert.equal(purchaseHistory.purchases[0].id, purchases[0].id);
 assert(!('bill_image_url' in purchaseHistory.purchases[0]) && !('notes' in purchaseHistory.purchases[0]), 'Report reads expose cost provenance, not bill images or supplier notes.');
 assert.equal(raw.writes.length, 0, 'Reading archived Purchasing history never allocates stock or saves orders.');
-assert.equal((await request('GET', undefined, token('staff'), '/api/admin/profit-ad-costs?includePurchases=1')).status, 403);
+assert.equal((await request('GET', undefined, token('staff'), '/api/admin/profit-ad-costs?includePurchases=1&reportOnly=1')).status, 403);
 const protectedOrders = JSON.stringify(await readDataTable(env, 'order_snapshots'));
 const upload = { csv, fileName: 'QA.csv', expectedVersion: 0 };
-assert.equal((await request('POST', upload)).status, 200);
+await replaceDataTable(env, 'admin_data_store', rows => ({ rows: [...rows, { key: FACEBOOK_AD_LEDGER_KEY, payload: ledger }], result: null }));
 const stored: any = await (await request()).json();
-assert.equal(stored.ledger.version, 1); assert.equal(stored.ledger.rows.length, 2);
+assert.equal(stored.ledger.rows.length, 0);
+assert.equal((await request('GET', undefined, token('admin'), '/api/admin/profit-ad-costs')).status, 410, 'An old cached profit screen must use the new flow.');
+assert.equal((await request('POST', upload)).status, 410, 'Old clients cannot save expense history again.');
+assert.equal((await request('POST', { action: 'start-report' })).status, 200);
 raw.writes = [];
-assert.equal((await request('POST', upload)).status, 200); assert.equal(raw.writes.length, 0, 'Repeated imports do not write or double-charge.');
+assert.equal((await request('POST', { action: 'start-report' })).status, 200); assert.equal(raw.writes.length, 0, 'Report reset is idempotent.');
 const durable = await readDataTable(env, 'admin_data_store');
+assert.equal(durable.find(row => row.key === FACEBOOK_AD_LEDGER_KEY)?.payload.rows.length, 0);
 assert.deepEqual(durable.find(row => row.key === catalog.key)?.payload, catalog.payload);
 assert.deepEqual(durable.find(row => row.key === 'unrelated-finance')?.payload, ['preserve-me']);
-assert.equal(JSON.stringify(await readDataTable(env, 'order_snapshots')), protectedOrders, 'No order, payment, invoice, stock or waybill is changed by ad-cost saves.');
+assert.equal(JSON.stringify(await readDataTable(env, 'order_snapshots')), protectedOrders, 'Reset never changes an order, payment, invoice, stock or waybill.');
 const publicState = await (await request('GET', undefined, '', '/api/storefront/state')).json() as any;
 assert(!JSON.stringify(publicState).includes('3850.11') && !JSON.stringify(publicState).includes(FACEBOOK_AD_LEDGER_KEY), 'Ad costs never appear in public website settings.');
+await replaceDataTable(env, 'admin_data_store', rows => ({ rows: rows.map(row => row.key === FACEBOOK_AD_LEDGER_KEY ? { ...row, payload: ledger } : row), result: null }));
 const active = (await activeData(dataBucket(env)!))!, adminKey = active.prefix + 'admin_data_store.json';
 let interleaved = false;
 raw.beforePut = async key => {
   if (key !== adminKey || interleaved) return; interleaved = true;
   await replaceDataTable(env, 'admin_data_store', rows => ({ rows: rows.map(row => row.key === catalog.key ? { ...row, payload: { ...row.payload, version: 2, settings: { website_name: 'Concurrent staff update' } } } : row), result: null }));
 };
-assert.equal((await request('POST', { ...upload, csv: csv.replace('3850.11', '4000'), expectedVersion: 1 })).status, 200);
-assert.equal((await readDataTable(env, 'admin_data_store')).find(row => row.key === catalog.key)?.payload.settings.website_name, 'Concurrent staff update', 'CAS retry retains unrelated concurrent edits.');
-assert.equal((await request('POST', { ...upload, csv: csv.replace('3850.11', '4200'), expectedVersion: 1 })).status, 409);
+assert.equal((await request('POST', { action: 'start-report' })).status, 200);
+assert.equal((await readDataTable(env, 'admin_data_store')).find(row => row.key === catalog.key)?.payload.settings.website_name, 'Concurrent staff update', 'CAS reset retains unrelated concurrent edits.');
+assert.equal((await request('POST', { ...upload, csv: csv.replace('3850.11', '4200') })).status, 410);
 if (process.argv[5]) {
   const augustCsv = fs.readFileSync(process.argv[5], 'utf8');
-  const beforeAugust: any = await (await request()).json();
-  const augustUpload = { csv: augustCsv, fileName: 'August-September.csv', expectedVersion: beforeAugust.ledger.version };
-  const augustResponse = await request('POST', augustUpload);
-  assert.equal(augustResponse.status, 200, 'The supplied CSV saves through the protected production R2 handler.');
-  const afterAugust: any = await augustResponse.json();
-  assert.equal(afterAugust.ledger.rows.filter((row: any) => row.from === '2026-08-26').length, 23);
   raw.writes = [];
-  assert.equal((await request('POST', augustUpload)).status, 200);
-  assert.equal(raw.writes.length, 0, 'A retry of the supplied report cannot double-charge saved advertising.');
-  assert.equal(JSON.stringify(await readDataTable(env, 'order_snapshots')), protectedOrders, 'The supplied report does not modify orders or payments.');
+  assert.equal((await request('POST', { csv: augustCsv, fileName: 'August-September.csv', expectedVersion: 0 })).status, 410);
+  assert.equal(raw.writes.length, 0, 'Historical expenses cannot be restored by a stale upload.');
 }
 assert([...raw.objects.values()].every(value => /^ora-aes-gcm-v[12]$/.test(JSON.parse(value.value).format)), 'Finance history and backups remain encrypted.');
 

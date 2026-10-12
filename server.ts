@@ -88,7 +88,7 @@ import dotenv from "dotenv";
 import crypto from "crypto";
 import fs from "fs";
 import { createClient } from "@supabase/supabase-js";
-import { cloudflareDataFetch, dataBucket } from "./worker/cloudflareData";
+import { cloudflareDataFetch, dataBucket, readDataTable } from "./worker/cloudflareData";
 import { markR2SheetSynced } from './worker/r2SheetSyncStatus';
 import { returnSheetsHandler, r2ReturnStorage, type ReturnStorage } from './worker/r2ReturnSheets';
 import { sharedReturnInventory } from './src/lib/returnSheets';
@@ -2365,7 +2365,8 @@ app.all('/api/admin/profit-ad-costs',requireStaffPermission('profit_report'),asy
     if (isLiveServerlessRuntime && !dataBucket()) return res.status(503).json({error:'Durable advertising storage is unavailable. Please retry.'});
     const request = new Request('http://localhost' + req.originalUrl,{method:req.method,
       headers:{'content-type':'application/json'},...(['GET','HEAD'].includes(req.method) ? {} : {body:JSON.stringify(req.body)})});
-    const response = await profitAdCostHandler(request,dataBucket() ? r2ReturnStorage() : localReturnStorage,(req as any).staffSessionUser);
+    const response = await profitAdCostHandler(request,dataBucket() ? r2ReturnStorage() : localReturnStorage,(req as any).staffSessionUser,
+      async () => dataBucket() ? readDataTable(undefined,'purchase_orders') : []);
     return res.status(response.status).json(await response.json());
   } catch (error:any) { return res.status(503).json({error:error.message || 'Advertising history could not be saved. Retry the same CSV.'}); }
 });

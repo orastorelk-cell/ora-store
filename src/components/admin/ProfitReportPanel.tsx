@@ -6,6 +6,7 @@ import { staffJsonRequest } from '../../lib/staffRequest';
 import { allocateFacebookAdCosts, emptyFacebookAdLedger, facebookAllocatedAdvertisingSummary, facebookOrderAdvertisingCost, facebookReportingPeriods, facebookRequiredCostDates, latestFacebookAdLedger, parseFacebookAdCostCsv, readFacebookAdLedger, type FacebookAdLedger } from '../../lib/facebookProfitAds';
 import { parseFardarInvoicePayments, type CodPaymentEntry } from '../../lib/codPaymentImport';
 import { FacebookProfitAdsPanel } from './FacebookProfitAdsPanel';
+import { CurrentCsvProfitReport } from './CurrentCsvProfitReport';
 import {
   buildPaidWaybillProfitReport, mergeProfitPurchaseHistory, selectSavedPaidProfitOrders, parseProfitWaybillUpload, profitAdvertisingPeriodKey, profitAdvertisingSummary, profitMoney, PROFIT_PAGE_SIZE,
   type PaymentAmountBasis, type ProfitDateRange, type ProfitPaymentFilter,
@@ -300,43 +301,43 @@ export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ or
 };
 
 export const ProfitReportPanel: React.FC = () => {
-  const { orders, products, purchaseOrders, returnRecords, sharedStoreReady, sharedOrdersReady, orderLoadError, refreshOrdersFromServer, recordCodPayments, adminUser } = useStore();
-  const [ledger, setLedger] = useState<FacebookAdLedger>(emptyFacebookAdLedger);
-  const [advertisingReady, setAdvertisingReady] = useState(false);
-  const [advertisingError, setAdvertisingError] = useState('');
+  const { orders, products, purchaseOrders, returnRecords, sharedStoreReady, sharedOrdersReady, orderLoadError, refreshOrdersFromServer, adminUser } = useStore();
+  const [inputsReady, setInputsReady] = useState(false);
+  const [inputsError, setInputsError] = useState('');
+  const [resetError, setResetError] = useState('');
   const [savedPurchases, setSavedPurchases] = useState<PurchaseOrder[]>([]);
   const reportPurchases = useMemo(() => mergeProfitPurchaseHistory(purchaseOrders, savedPurchases), [purchaseOrders, savedPurchases]);
-  const loadAdvertising = useCallback(async () => {
-    setAdvertisingReady(false); setAdvertisingError('');
+  const canReset = adminUser?.role === 'admin' || Boolean(adminUser?.permissions?.includes('profit_report') && !adminUser?.permissions?.includes('level:profit_report:view'));
+  const loadInputs = useCallback(async () => {
+    setInputsReady(false); setInputsError('');
     try {
-      const data = await staffJsonRequest('/api/admin/profit-ad-costs?includePurchases=1', { headers: { Authorization: `Bearer ${localStorage.getItem('ora_staff_session_token') || ''}` } });
-      if (!data.ledger) throw new Error('Advertising history response was incomplete. Refresh Ad Costs to retry.');
-      const saved = readFacebookAdLedger(data.ledger);
-      if (!Array.isArray(data.purchases)) throw new Error('Saved Purchasing history was not returned. Refresh Orders to retry.');
+      const data = await staffJsonRequest('/api/admin/profit-ad-costs?includePurchases=1&reportOnly=1', { headers: { Authorization: `Bearer ${localStorage.getItem('ora_staff_session_token') || ''}` } });
+      if (!Array.isArray(data.purchases)) throw new Error('Purchasing history did not load. Refresh System Records to retry.');
       setSavedPurchases(data.purchases);
-      setLedger(current => saved.version >= current.version ? saved : current);
-      setAdvertisingReady(true);
-    } catch (error: any) { setAdvertisingError(error.message || 'Saved ad costs could not load. Refresh Ad Costs to retry.'); throw error; }
+      setInputsReady(true);
+    } catch (error: any) { setInputsError(error.message || 'System records could not load. Refresh System Records to retry.'); throw error; }
   }, [adminUser?.id]);
+  const resetPrevious = useCallback(async () => {
+    if (!canReset) return;
+    setResetError('');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const data = await staffJsonRequest('/api/admin/profit-ad-costs', { method: 'POST', headers: { Authorization: `Bearer ${localStorage.getItem('ora_staff_session_token') || ''}`, 'content-type': 'application/json' }, body: JSON.stringify({ action: 'start-report' }) });
+        if (data.cleared !== true) throw new Error('Previous Facebook report reset was not confirmed.');
+        return;
+      } catch (error: any) {
+        if (attempt === 1 || error.status && error.status < 500 && error.status !== 409) { setResetError('Previous Facebook report reset was not confirmed. This report still uses only the CSV you select now.'); return; }
+      }
+    }
+  }, [adminUser?.id, canReset]);
   useEffect(() => {
-    setLedger(emptyFacebookAdLedger()); setSavedPurchases([]); setAdvertisingReady(false); setAdvertisingError('');
-    if (adminUser && sharedStoreReady) void loadAdvertising().catch(() => {});
-  }, [adminUser?.id, sharedStoreReady, loadAdvertising]);
-  const importAdvertising = async (csv: string, fileName: string) => {
-    const data = await staffJsonRequest('/api/admin/profit-ad-costs', { method: 'POST', headers: {
-      Authorization: `Bearer ${localStorage.getItem('ora_staff_session_token') || ''}`, 'content-type': 'application/json',
-    }, body: JSON.stringify({ csv, fileName, expectedVersion: ledger.version }) });
-    if (!data.ledger) throw new Error('Advertising save was not confirmed. Retry the same CSV.');
-    const saved = readFacebookAdLedger(data.ledger);
-    setLedger(current => saved.version >= current.version ? saved : current);
-    setAdvertisingReady(true); setAdvertisingError('');
-    return saved;
-  };
-  const refresh = async () => { await Promise.all([refreshOrdersFromServer(), loadAdvertising()]); };
-  const canImport = adminUser?.role === 'admin' || Boolean(adminUser?.permissions?.includes('profit_report') && !adminUser?.permissions?.includes('level:profit_report:view'));
-  return <ProfitReportWorkspace key={adminUser?.id} orders={orders} purchases={reportPurchases} products={products} returns={returnRecords} ready={sharedStoreReady && sharedOrdersReady && advertisingReady}
-    loadError={orderLoadError || advertisingError} storageKey={`ora_paid_waybill_profit_v2:${adminUser?.id || 'staff'}`} onRefresh={refresh}
-    advertisingLedger={ledger} advertisingReady={advertisingReady} advertisingError={advertisingError} canImportAds={canImport}
-    knownAdCodes={products.flatMap(product => [product.sku, ...(product.variants || []).map(variant => variant.sku)])}
-    onImportAds={importAdvertising} onReloadAds={loadAdvertising} onImportFardar={entries => recordCodPayments(entries, adminUser?.name || 'Admin')} useUploadedWaybills />;
+    setSavedPurchases([]); setInputsReady(false); setInputsError('');
+    try { localStorage.removeItem(`ora_paid_waybill_profit_v2:${adminUser?.id || 'staff'}`); } catch {}
+    if (adminUser && sharedStoreReady) void loadInputs().catch(() => {});
+  }, [adminUser?.id, sharedStoreReady, loadInputs]);
+  useEffect(() => { if (adminUser && sharedStoreReady) void resetPrevious(); }, [adminUser?.id, sharedStoreReady, resetPrevious]);
+  const refresh = async () => { await Promise.all([refreshOrdersFromServer(), loadInputs()]); };
+  return <CurrentCsvProfitReport key={adminUser?.id} orders={orders} purchases={reportPurchases} products={products} returns={returnRecords}
+    ready={sharedStoreReady && sharedOrdersReady && inputsReady} error={orderLoadError || inputsError} onRefresh={refresh}
+    resetError={resetError} onResetPrevious={canReset ? resetPrevious : undefined} />;
 };
