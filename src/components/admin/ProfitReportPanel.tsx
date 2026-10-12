@@ -69,6 +69,7 @@ export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ or
   const [draft, setDraft] = useState<ProfitReportDraft>(() => initialDraft || readDraft(storageKey));
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState<'refresh' | 'pdf' | 'upload' | 'fardar' | ''>('');
+  const [facebookImportState, setFacebookImportState] = useState<'ready' | 'saving' | 'failed'>('ready');
   const waybillInput = useRef<HTMLInputElement>(null);
   const fardarInput = useRef<HTMLInputElement>(null);
   const [search, setSearch] = useState('');
@@ -79,7 +80,7 @@ export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ or
   const emptyLedger = useMemo(emptyFacebookAdLedger, []);
   const ledger = useMemo(() => latestFacebookAdLedger(advertisingLedger || emptyLedger), [advertisingLedger, emptyLedger]);
   const reportingPeriods = useMemo(() => facebookReportingPeriods(ledger, draft.facebookPeriods), [ledger, draft.facebookPeriods]);
-  const allReportingPeriods = useMemo(() => facebookReportingPeriods(ledger, [...new Set(ledger.rows.map(row => `${row.from}|${row.to}`))]), [ledger]);
+  const allReportingPeriods = useMemo(() => facebookReportingPeriods(ledger, [...new Set<string>(ledger.rows.map(row => `${row.from}|${row.to}`))]), [ledger]);
   const report = useMemo(() => {
     const built = buildPaidWaybillProfitReport({ orders, purchases, products, returns, paymentBasis: draft.paymentBasis, selection,
       ...(useUploadedWaybills ? { waybills: draft.waybills || [] } : {}) });
@@ -96,8 +97,8 @@ export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ or
     orderIds: report.rows.flatMap(row => row.orderId ? [row.orderId] : []), reportingPeriods } : undefined), [ledger, orders, report, selection, useUploadedWaybills, reportingPeriods]);
   const ads = useMemo(() => {
     const result = csvMode ? facebookAllocatedAdvertisingSummary(report, facebookAllocation, draft.tiktok) : profitAdvertisingSummary(report, draft.facebook, draft.tiktok);
-    return csvMode && (!advertisingReady || advertisingError) ? { ...result, netProfit: null, recordedCostProfit: null } : result;
-  }, [csvMode, report, facebookAllocation, draft.facebook, draft.tiktok, advertisingReady, advertisingError]);
+    return csvMode && (!advertisingReady || advertisingError || facebookImportState !== 'ready') ? { ...result, netProfit: null, recordedCostProfit: null } : result;
+  }, [csvMode, report, facebookAllocation, draft.facebook, draft.tiktok, advertisingReady, advertisingError, facebookImportState]);
   const shownProfit = ads.netProfit ?? ads.recordedCostProfit;
   const provisionalProfit = ads.netProfit === null && shownProfit !== null;
   const currentPeriod = useUploadedWaybills ? JSON.stringify({ waybills: [...new Set(draft.waybills || [])].sort(), reportingPeriods }) : profitAdvertisingPeriodKey(report, selection);
@@ -163,6 +164,7 @@ export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ or
     finally { setBusy(''); }
   };
   const downloadPdf = async () => {
+    if (facebookImportState !== 'ready') { setMessage('Save the new Facebook CSV successfully before downloading its profit report.'); return; }
     setBusy('pdf');
     try {
       const { createPaidWaybillProfitPdf } = await import('../../lib/paidWaybillProfitPdf');
@@ -248,7 +250,7 @@ export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ or
           {requiredFacebookDates.fallbackCount > 0 && <p className="mt-2 text-xs text-amber-800">{requiredFacebookDates.fallbackCount} older order(s) have no original lead date; their saved system dates are shown.</p>}
           {requiredFacebookDates.missingCount > 0 && <p className="mt-2 text-xs font-bold text-red-700">{requiredFacebookDates.missingCount} Facebook order(s) have no valid lead date. Check their dates before exporting the CSV.</p>}
         </div>
-        {useUploadedWaybills && <div className="mt-4 rounded-xl border border-orange-100 bg-orange-50 p-4">
+        {useUploadedWaybills && facebookImportState === 'ready' && <div className="mt-4 rounded-xl border border-orange-100 bg-orange-50 p-4">
           <p className="text-sm font-bold text-orange-900">Facebook CSV Reporting Date Range</p>
           {reportingPeriods.length ? <>
             <p className="mt-2 text-base font-black text-orange-800">{reportingPeriods.length <= 4 ? reportingPeriods.map(period => `${dateLabel(period.from)} — ${dateLabel(period.to)}`).join(' / ') : `${dateLabel(reportingPeriods[0].from)} — ${dateLabel(reportingPeriods.at(-1)!.to)} (${reportingPeriods.length} reporting periods)`}</p>
@@ -260,13 +262,13 @@ export const ProfitReportWorkspace: React.FC<ProfitReportWorkspaceProps> = ({ or
           <p className="mt-2 text-xs text-orange-900">Dates come from Reporting starts / ends in the cost CSV. Waybills select the orders; each order uses its original lead period for item-ad cost.</p>
         </div>}
         {onImportAds && onReloadAds && <FacebookProfitAdsPanel ledger={advertisingLedger || emptyLedger} allocation={facebookAllocation} ready={advertisingReady}
-          error={advertisingError} canImport={canImportAds} knownCodes={knownAdCodes} onImport={importAds} onReload={onReloadAds} />}
+          error={advertisingError} canImport={canImportAds} knownCodes={knownAdCodes} onImport={importAds} onReload={onReloadAds} onImportStateChange={setFacebookImportState} />}
         <p className="mt-4 text-sm text-gray-500">{useUploadedWaybills ? 'Facebook uses saved cost CSVs. Enter TikTok cost for this uploaded waybill set, or 0 if none.' : csvMode ? 'Facebook costs use saved CSV reports. Enter the TikTok total for the selected system-date period, or 0 if none.' : 'Enter the total spend once for the shown system-date period; enter 0 if none. This report recalculates the cumulative profit when later payments arrive.'}</p>
         <div className="mt-4 grid gap-4 md:grid-cols-2">{(csvMode ? ['TikTok'] as const : ['Facebook', 'TikTok'] as const).map(source => <div key={source} className="rounded-xl border border-gray-200 p-4"><p className="text-sm font-black">{source}</p><p className="mt-2 text-lg font-bold text-orange-700">{rangeLabel(report.ranges[source])}</p><p className="mt-1 text-xs text-gray-500">{report.ranges[source]?.count || 0} paid orders</p><label className="mt-3 block text-xs font-bold">{source} Cost (Rs.)<input aria-label={`${source} Cost (Rs.)`} type="number" min="0" step="0.01" inputMode="decimal" value={source === 'Facebook' ? draft.facebook : draft.tiktok} onChange={event => setDraft(current => ({ ...current, [source === 'Facebook' ? 'facebook' : 'tiktok']: event.target.value, advertisingPeriod: currentPeriod }))} placeholder="Enter cost, or 0" className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-normal" /></label></div>)}</div>
         <details className="mt-4 text-xs text-gray-500"><summary className="cursor-pointer font-bold text-gray-700">Payment amount settings</summary><p className="mt-2">Auto checks whether the saved Fardar amount is the full COD collection or the remittance after courier charges. If the amount cannot be reconciled, select the basis used in your payment import.</p><label className="mt-3 block font-bold">Saved Fardar amount<select aria-label="Saved Fardar amount" value={draft.paymentBasis} onChange={event => setDraft(current => ({ ...current, paymentBasis: event.target.value as PaymentAmountBasis }))} className="ml-3 rounded-lg border border-gray-200 bg-white px-3 py-2 font-normal"><option value="auto">Auto - reconcile saved amounts</option><option value="gross">Gross collection - before courier deduction</option><option value="net">Net remittance - after courier deduction</option></select></label></details>
       </section>
     }
-    {report.rows.length > 0 && available && !invalidDates && <>
+    {report.rows.length > 0 && available && !invalidDates && facebookImportState === 'ready' && <>
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">{[
         [useUploadedWaybills ? 'Uploaded Waybills' : 'Selected Paid Orders', report.rows.length, 'text-gray-900'], ['Complete Orders', report.totals.ready, 'text-emerald-700'], ['Needs Review', report.totals.review, report.totals.review ? 'text-amber-700' : 'text-gray-900'], ['Profit Before Ads', money(report.totals.beforeAds), report.totals.beforeAds >= 0 ? 'text-emerald-700' : 'text-red-700'],
       ].map(([label, value, color]) => <div key={String(label)} className="rounded-xl border border-gray-200 bg-white p-4"><p className="text-[11px] font-bold text-gray-500">{label}</p><p className={`mt-1 break-words text-xl font-black ${color}`}>{value}</p></div>)}</div>

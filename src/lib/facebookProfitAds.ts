@@ -147,7 +147,7 @@ export function mergeFacebookAdLedger(current: FacebookAdLedger, incoming: Faceb
   const existing = new Map<string, FacebookAdCost[]>(), replacements = new Map<string, FacebookAdCost[]>();
   for (const row of current.rows) existing.set(cohortKey(row), [...(existing.get(cohortKey(row)) || []), row]);
   for (const row of incoming) replacements.set(cohortKey(row), [...(replacements.get(cohortKey(row)) || []), row]);
-  if (meta.replaceExisting ? costSignature(current.rows) === costSignature(incoming)
+  if (meta.replaceExisting ? costSignature(current.rows) === costSignature(incoming) && current.rows.every(row => row.fileName === meta.fileName.slice(0, 200))
     : [...replacements].every(([id, rows]) => costSignature(existing.get(id) || []) === costSignature(rows))) return { ledger: current, unchanged: true };
   if (meta.expectedVersion !== current.version) throw new FacebookAdError('Advertising history changed in another session. Refresh it before importing this file.', 409);
   const periods = new Map<string | null, FacebookAdCost[]>();

@@ -7,40 +7,57 @@ export interface FacebookProfitAdsPanelProps {
   ledger: FacebookAdLedger; allocation: FacebookAdAllocation; ready: boolean; error?: string; canImport: boolean; knownCodes: string[];
   onImport: (csv: string, fileName: string) => Promise<FacebookAdLedger>;
   onReload: () => Promise<void>;
+  onImportStateChange?: (state: 'ready' | 'saving' | 'failed') => void;
 }
 
-export function FacebookProfitAdsPanel({ ledger: storedLedger, allocation, ready, error, canImport, knownCodes, onImport, onReload }: FacebookProfitAdsPanelProps) {
+export function FacebookProfitAdsPanel({ ledger: storedLedger, allocation, ready, error, canImport, knownCodes, onImport, onReload, onImportStateChange }: FacebookProfitAdsPanelProps) {
   const ledger = latestFacebookAdLedger(storedLedger);
   const input = useRef<HTMLInputElement>(null);
   const [pending, setPending] = useState<{ csv: string; fileName: string; rows: FacebookAdCost[] } | null>(null);
   const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
+  const [uploadFailed, setUploadFailed] = useState(false);
   const [message, setMessage] = useState('');
+  const save = async (read: () => Promise<NonNullable<typeof pending>>) => {
+    if (inFlight.current || !canImport || !ready || error) return;
+    inFlight.current = true;
+    setBusy(true); setUploadFailed(false); setMessage('Saving the new Facebook CSV and replacing the previous report...');
+    onImportStateChange?.('saving');
+    try {
+      const selected = await read();
+      setPending(selected);
+      const saved = await onImport(selected.csv, selected.fileName);
+      setMessage(saved.version === ledger.version ? 'This CSV is already the current report. No cost was added twice.' : 'Current Facebook CSV saved. The entire previous FB report was replaced and profit recalculated.');
+      setPending(null);
+      onImportStateChange?.('ready');
+    } catch (e: any) {
+      setUploadFailed(true);
+      setMessage(`${e.message || 'The new CSV could not be saved.'} New cost is not confirmed; retry the upload. Profit and PDF are paused to avoid using the previous report.`);
+      onImportStateChange?.('failed');
+    } finally { inFlight.current = false; setBusy(false); }
+  };
   const choose = async (file?: File) => {
     if (!file) return;
-    setMessage(''); setPending(null);
-    try {
+    await save(async () => {
+      setPending(null);
       if (file.size > 2_000_000) throw new Error('Choose a CSV report smaller than 2 MB.');
       const csv = await file.text(), rows = parseFacebookAdCostCsv(csv, knownCodes);
-      mergeFacebookAdLedger(ledger, rows, { expectedVersion: ledger.version, fileName: file.name, importedAt: new Date().toISOString(), importedBy: 'Preview', replaceExisting: true });
-      setPending({ csv, fileName: file.name, rows });
-    } catch (e: any) { setMessage(e.message || 'The CSV could not be read.'); }
+      mergeFacebookAdLedger(ledger, rows, { expectedVersion: ledger.version, fileName: file.name, importedAt: new Date().toISOString(), importedBy: 'Upload', replaceExisting: true });
+      return { csv, fileName: file.name, rows };
+    });
   };
-  const save = async () => {
-    if (!pending) return;
-    setBusy(true); setMessage('');
-    try {
-      const saved = await onImport(pending.csv, pending.fileName);
-      setMessage(saved.version === ledger.version ? 'This report was already saved. No cost was added twice.' : 'Current Facebook CSV saved. The previous FB report was replaced and profit recalculated.');
-      setPending(null);
-    } catch (e: any) { setMessage(e.message || 'Save was not confirmed. The selected CSV is kept; retry it.'); }
-    finally { setBusy(false); }
+  const reload = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true; setBusy(true);
+    try { await onReload(); setUploadFailed(false); setPending(null); onImportStateChange?.('ready'); setMessage('Current saved Facebook CSV refreshed.'); }
+    catch (e: any) { setMessage(e.message); }
+    finally { inFlight.current = false; setBusy(false); }
   };
-  const reload = async () => { setBusy(true); try { await onReload(); setMessage('Saved advertising history refreshed.'); } catch (e: any) { setMessage(e.message); } finally { setBusy(false); } };
   const periods = pending ? [...new Set(pending.rows.map(row => `${row.from} to ${row.to}`))] : [];
   const promotionCount = pending?.rows.filter(row => !row.code).length || 0;
   return <div className="mt-4 space-y-4">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <div><p className="text-sm font-black">Facebook Cost CSV</p><p className="mt-1 text-sm text-gray-500">Code එක සහ මුල් lead date එක අනුව cost බෙදනවා. Pending orders වල කොටස වෙනම පෙන්වනවා.</p></div>
+      <div><p className="text-sm font-black">Facebook Cost CSV</p><p className="mt-1 text-sm text-gray-500">CSV එක තෝරන සැණින් save වෙලා පරණ FB report එක සම්පූර්ණයෙන් replace වෙනවා.</p></div>
       <div className="flex flex-wrap gap-2">
         <button type="button" disabled={busy} onClick={reload} className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm font-bold disabled:opacity-40"><RefreshCw className={`h-4 w-4 ${busy ? 'animate-spin' : ''}`} />Refresh Ad Costs</button>
         {canImport && <button type="button" disabled={!ready || busy || Boolean(error)} onClick={() => input.current?.click()} className="inline-flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40"><Upload className="h-4 w-4" />Upload Facebook Cost CSV</button>}
@@ -55,12 +72,13 @@ export function FacebookProfitAdsPanel({ ledger: storedLedger, allocation, ready
       <p className="mt-2 text-sm text-orange-900">{periods.length > 3 ? `${periods[0]} through ${periods.at(-1)} (${periods.length} reporting periods)` : periods.join(' / ')}</p>
       <p className="mt-2 text-sm text-orange-900">Codes: {[...new Set(pending.rows.map(row => row.code || 'Commercial'))].join(', ')}</p>
       {promotionCount > 0 && <p className="mt-2 text-sm text-orange-900">Commercial total includes {promotionCount} code-free promotion / boosted-post ads. Full spend is saved; the selected paid orders' share is deducted using this period's form-lead count. Messages and views are not counted as item leads.</p>}
-      <p className="mt-2 text-sm text-orange-900">Include all ads for each code and reporting period. Saving replaces that code's previous report for the same dates.</p>
-      <div className="mt-3 flex gap-2"><button type="button" disabled={busy || !ready || Boolean(error)} onClick={save} className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">{busy ? 'Saving...' : 'Save Cost Report'}</button><button type="button" disabled={busy} onClick={() => setPending(null)} className="rounded-lg border border-orange-200 px-4 py-2 text-sm font-bold">Cancel</button></div>
+      <p className="mt-2 text-sm text-orange-900">This CSV replaces the entire previous Facebook report, including its dates and item codes.</p>
+      {busy ? <p className="mt-3 text-sm font-bold">Saving...</p> : uploadFailed && <button type="button" disabled={!ready || Boolean(error)} onClick={() => void save(async () => pending)} className="mt-3 rounded-lg bg-orange-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">Retry CSV upload</button>}
     </div>}
-    {ready && !error && <>
+    {ready && !error && !busy && !uploadFailed && <>
       {!ledger.rows.length && <p className="rounded-xl bg-gray-50 p-4 text-sm text-gray-500">Upload the current Facebook cost CSV. Each new upload replaces the previous FB report.</p>}
       {ledger.rows.length > 0 && <>
+        <div aria-label="Current saved Facebook CSV" className="rounded-xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-900"><p className="break-all font-bold">Current file: {ledger.rows[0].fileName}</p><p className="mt-2">{[...new Set(ledger.rows.map(row => `${row.from} to ${row.to}`))].join(' / ')}</p><p className="mt-2 font-bold">Full CSV spend: {profitMoney(ledger.rows.reduce((sum, row) => sum + row.spend, 0))} · {ledger.rows.length} ad rows</p></div>
         {allocation.waybillScoped && <div aria-label="Selected Facebook CSV costs" className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900"><p className="font-bold">Selected Facebook CSV spend: {profitMoney(allocation.totalSpend)}</p><p className="mt-2">තෝරාගත් CSV date range එකේ FB cost විතරයි මේ report එකට ගන්නේ.</p>{allocation.outsidePeriodOrderIds.size > 0 && <p className="mt-2">{allocation.outsidePeriodOrderIds.size} waybill(s) have lead dates outside this range: their revenue and parcel costs are included, with Rs.0 FB cost from this CSV.</p>}</div>}
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[
           ['Paid orders: allocated Facebook cost', allocation.paidCost], ['Returned waybills: own Facebook cost', allocation.returnedCost], ['FB loss deducted from profit', allocation.lostCost],

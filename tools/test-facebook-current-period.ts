@@ -71,6 +71,10 @@ const replaced = mergeFacebookAdLedger(history, rows, { ...meta, expectedVersion
 assert.equal(replaced.unchanged, false, 'The persisted historical rows are removed even if this current report was previously present.');
 assert.equal(replaced.ledger.rows.length, rows.length);
 assert.equal(mergeFacebookAdLedger(replaced.ledger, rows, { ...meta, replaceExisting: true }).unchanged, true, 'Lost-response retries do not duplicate or replace current expenses again.');
+const renamed = mergeFacebookAdLedger(replaced.ledger, rows, { ...meta, expectedVersion: replaced.ledger.version, fileName: 'latest-file.csv', replaceExisting: true });
+assert.equal(renamed.unchanged, false, 'A new file with identical costs must still become the displayed current CSV.');
+assert(renamed.ledger.rows.every(row => row.fileName === 'latest-file.csv'));
+assert.equal(renamed.ledger.rows.reduce((sum, row) => sum + row.spend, 0), replaced.ledger.rows.reduce((sum, row) => sum + row.spend, 0));
 const overlappingRows = parseFacebookAdCostCsv(syntheticCsv.replace(/2026-09-26/g, '2026-10-01'));
 assert.equal(mergeFacebookAdLedger(replaced.ledger, overlappingRows, { ...meta, expectedVersion: replaced.ledger.version, replaceExisting: true }).ledger.rows.length, overlappingRows.length, 'New CSV periods can overlap the file they replace.');
 let adminRows: any[] = [{ key: FACEBOOK_AD_LEDGER_KEY, payload: history }, { key: 'unrelated-state', payload: { value: 'preserved' } }];
@@ -97,8 +101,11 @@ if (process.argv[3]) {
   assert.equal(supplied.length, 263); assert.equal(new Set(supplied).size, 263);
 }
 const output = new URL('./.current-period-profit-ui.mjs', import.meta.url);
+const mutableReact = React as any, originalCreateElement = mutableReact.createElement;
+let uploadInput: any, importStates: string[] = [], completeUpload: (() => void) | undefined;
 try {
   await build({ entryPoints: ['src/components/admin/ProfitReportPanel.tsx'], outfile: output.pathname, bundle: true, platform: 'node', format: 'esm', packages: 'external',
+    tsconfigRaw: { compilerOptions: { jsx: 'react' } }, jsx: 'transform', jsxFactory: 'React.createElement', jsxFragment: 'React.Fragment',
     define: { 'import.meta.env': '{}' }, plugins: [{ name: 'fixture-store', setup(builder) {
       builder.onResolve({ filter: /context\/StoreContext$/ }, () => ({ path: 'store', namespace: 'fixture' }));
       builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: 'export const useStore=()=>({});', loader: 'js' }));
@@ -112,6 +119,69 @@ try {
   assert(html.includes(summary.netProfit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })));
   const notLoaded = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, { ...props, advertisingReady: false }));
   assert(!notLoaded.includes('Provisional profit from recorded costs'), 'A failed or unfinished load cannot show a subtotal as a profit.');
-} finally { if (fs.existsSync(output)) fs.unlinkSync(output); }
+  // Exercise the actual selection event, not a separate Save button. The real
+  // storage handler must remove every prior row when that event succeeds.
+  mutableReact.createElement = (type: any, elementProps: any, ...children: any[]) => {
+    if (typeof type === 'function' && type.name === 'FacebookProfitAdsPanel') {
+      const onState = elementProps.onImportStateChange;
+      elementProps = { ...elementProps, onImportStateChange: (state: string) => {
+        importStates.push(state); onState(state);
+        if (state !== 'saving') completeUpload?.();
+      } };
+    }
+    if (type === 'input' && elementProps?.['aria-label'] === 'Facebook cost CSV file') uploadInput = elementProps;
+    return originalCreateElement(type, elementProps, ...children);
+  };
+  adminRows = [{ key: FACEBOOK_AD_LEDGER_KEY, payload: history }, { key: 'unrelated-state', payload: { value: 'preserved' } }];
+  let submissions = 0, failNext = false;
+  const uiProps = { ...props, canImportAds: true, onImportAds: async (text: string, fileName: string) => {
+    submissions++;
+    if (failNext) { failNext = false; throw new Error('Synthetic network failure'); }
+    const response = await profitAdCostHandler(new Request('https://synthetic.test/api/ads', { method: 'POST', body: JSON.stringify({
+      csv: text, fileName, expectedVersion: adminRows[0].payload.version,
+    }) }), storage, { role: 'admin' });
+    assert.equal(response.status, 200);
+    return (await response.json() as any).ledger;
+  } };
+  let finishReading!: (csv: string) => void;
+  const delayedText = new Promise<string>(resolve => { finishReading = resolve; });
+  const selectedFile = { name: 'latest-selected.csv', size: Buffer.byteLength(csv), text: () => delayedText };
+  renderToStaticMarkup(React.createElement(ProfitReportWorkspace, uiProps));
+  const firstInput = uploadInput;
+  const finished = new Promise<void>(resolve => { completeUpload = resolve; });
+  const selectedTarget = { value: selectedFile.name, files: [selectedFile] };
+  firstInput.onChange({ target: selectedTarget });
+  firstInput.onChange({ target: { value: selectedFile.name, files: [selectedFile] } });
+  assert.deepEqual(importStates, ['saving'], 'Choosing a file immediately pauses old cost and profit output, before the file is read.');
+  assert.equal(selectedTarget.value, '', 'The same CSV can be selected again after a failure.');
+  finishReading(csv); await finished;
+  assert.equal(submissions, 1, 'One file selection submits automatically; rapid duplicate selections cannot race.');
+  assert.deepEqual(importStates, ['saving', 'ready']);
+  assert.equal(adminRows[0].payload.rows.length, rows.length, 'Selecting the CSV physically replaces the old stored report.');
+  assert(adminRows[0].payload.rows.every((row: any) => row.fileName === selectedFile.name && row.from === periods[0].from));
+  assert.equal(adminRows[1].payload.value, 'preserved');
+  const saved = JSON.stringify(adminRows);
+  uiProps.advertisingLedger = adminRows[0].payload;
+  const savedHtml = renderToStaticMarkup(React.createElement(ProfitReportWorkspace, uiProps));
+  assert(savedHtml.includes('Current file:') && savedHtml.includes(selectedFile.name) && savedHtml.includes('Full CSV spend:'));
+  assert(!savedHtml.includes('Save Cost Report'), 'A successful upload needs no second save step.');
+  failNext = true; importStates = [];
+  let done = new Promise<void>(resolve => { completeUpload = resolve; });
+  uploadInput.onChange({ target: { value: selectedFile.name, files: [{ ...selectedFile, text: async () => csv }] } });
+  await done;
+  assert.deepEqual(importStates, ['saving', 'failed'], 'An unconfirmed save cannot report success or reuse old profit.');
+  assert.equal(JSON.stringify(adminRows), saved, 'A failed upload preserves the last confirmed data.');
+  importStates = []; done = new Promise<void>(resolve => { completeUpload = resolve; });
+  uploadInput.onChange({ target: { value: selectedFile.name, files: [{ ...selectedFile, text: async () => csv }] } });
+  await done;
+  assert.deepEqual(importStates, ['saving', 'ready'], 'The same selected CSV can retry safely.');
+  assert.equal(JSON.stringify(adminRows), saved, 'Retrying the current file adds no duplicate expense.');
+  importStates = []; done = new Promise<void>(resolve => { completeUpload = resolve; });
+  uploadInput.onChange({ target: { value: 'invalid.csv', files: [{ name: 'invalid.csv', size: 12, text: async () => 'invalid csv' }] } });
+  await done;
+  assert.deepEqual(importStates, ['saving', 'failed']);
+  assert.equal(submissions, 3, 'An invalid CSV is never submitted.');
+  assert.equal(JSON.stringify(adminRows), saved);
+} finally { mutableReact.createElement = originalCreateElement; if (fs.existsSync(output)) fs.unlinkSync(output); }
 if (process.argv[4]) fs.writeFileSync(process.argv[4], Buffer.from(createPaidWaybillProfitPdf(report, { facebook: '', tiktok: '0', sourceName: 'Synthetic selected-period regression', paymentBasis: 'auto', facebookAllocation: allocation, facebookReportingPeriods: periods }).output('arraybuffer')));
-console.log('PASS: current CSV only, every selected waybill retained, exact budget reconciliation, Results count variance, no historical expense, outside-period zeros, return fee once, immutable records, visible numeric profit and protected pending states.');
+console.log('PASS: file selection autosaves and fully replaces old costs, no duplicate upload races, safe failure/retry, current filename/spend visible, current CSV only, every selected waybill retained, exact budget reconciliation, Results count variance, outside-period zeros, return fee once, immutable records and protected pending states.');
