@@ -20,7 +20,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4', compress: true });
   const allocation = options.facebookAllocation;
   const currentCsv = options.currentFacebookCsv;
-  const computed = currentCsv ? currentCsvProfitSummary(report, currentCsv, options.tiktok) : allocation ? facebookAllocatedAdvertisingSummary(report, allocation, options.tiktok) : profitAdvertisingSummary(report, options.facebook, options.tiktok);
+  const computed = currentCsv ? currentCsvProfitSummary(report, currentCsv, options.tiktok, options.currentCsvAllocation) : allocation ? facebookAllocatedAdvertisingSummary(report, allocation, options.tiktok) : profitAdvertisingSummary(report, options.facebook, options.tiktok);
   const advertising = options.advertisingError ? { ...computed, netProfit: null, recordedCostProfit: null } : computed;
   const width = 273, left = 12, bottom = 194;
   const text = (value: unknown) => String(value ?? '').replace(/[–—]/g, '-').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ').trim();
@@ -54,7 +54,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
       ['Facebook cost for selected returned waybills', -allocation.returnedCost],
       ['FB loss deducted (cancelled / returned / zero leads)', -allocation.lostCost],
       ['Commercial / promotion share deducted', -allocation.commercialCost],
-    ] as Array<[string, number]> : [[currentCsv ? 'Facebook FULL current CSV (deducted once)' : 'Facebook advertising cost', advertising.facebook === null && report.ranges.Facebook ? null : -(advertising.facebook ?? 0)]] as Array<[string, number | null]>),
+    ] as Array<[string, number]> : [[currentCsv ? 'Facebook paid / returned lead shares only' : 'Facebook advertising cost', advertising.facebook === null && report.ranges.Facebook ? null : -(advertising.facebook ?? 0)]] as Array<[string, number | null]>),
     ['TikTok advertising cost', advertising.tiktok === null && report.ranges.TikTok ? null : -(advertising.tiktok ?? 0)],
   ];
   rows.forEach(([label, value], index) => {
@@ -88,30 +88,32 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
   doc.setFillColor(complete ? positive ? 236 : 254 : 255, complete ? positive ? 253 : 242 : 251, complete ? positive ? 245 : 242 : 235);
   doc.roundedRect(left, y - 4, width, 24, 2, 2, 'F');
   doc.setTextColor(complete ? positive ? 6 : 185 : 146, complete ? positive ? 95 : 28 : 64, complete ? positive ? 70 : 28 : 14);
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.text(!complete && shownProfit !== null ? 'PROVISIONAL PROFIT - RECORDED COSTS' : allocation ? complete ? allocation.waybillScoped ? 'UPLOADED-WAYBILL PROFIT AFTER ADVERTISING' : 'PAID-ORDER PROFIT AFTER ADVERTISING' : 'PROFIT - PENDING REVIEW' : complete ? 'FINAL NET PROFIT' : 'FINAL NET PROFIT - PENDING REVIEW', left + 4, y + 4);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.text(!complete && shownProfit !== null ? 'PROVISIONAL PROFIT - RECORDED COSTS' : allocation ? complete ? allocation.waybillScoped ? 'UPLOADED-WAYBILL PROFIT AFTER ADVERTISING' : 'PAID-ORDER PROFIT AFTER ADVERTISING' : 'PROFIT - PENDING REVIEW' : complete ? currentCsv ? 'ALLOCATED NET PROFIT - SELECTED WAYBILLS' : 'FINAL NET PROFIT' : 'FINAL NET PROFIT - PENDING REVIEW', left + 4, y + 4);
   doc.setFontSize(19); doc.text(money(shownProfit), left + width - 4, y + 6, { align: 'right' });
   doc.setFontSize(8); doc.setFont('helvetica', 'normal');
-  doc.text(currentCsv && shownProfit !== null ? complete ? 'All payment batches minus the FULL current Facebook CSV and this report\'s TikTok cost.' : 'Profit after Facebook only. Enter this report\'s TikTok cost (or 0 if none) for final net profit.' : complete ? 'Sales: receipts - Purchasing - delivery - packing - FB. Returns: - Return Fee - FB only.' : options.advertisingError ? text(options.advertisingError).slice(0, 140) : shownProfit !== null ? `Not final: ${allocation?.missingOrderIds.length || 0} FB cost matches need review. Their unresolved costs are not yet deducted.` : allocation ? 'Review missing costs, lead matching or delivery confirmation. Pending / unmatched ad spend is shown separately.' : `${report.totals.review} order(s) need review. ${advertising.missing.length ? `Enter ${advertising.missing.join(' / ')} cost (0 if none).` : 'Review missing amounts before treating this as a final profit.'}`, left + 4, y + 14);
+  doc.text(currentCsv && shownProfit !== null ? complete ? 'Paid / returned lead shares deducted; pending and other lead shares held separately.' : 'Provisional: unresolved FB matches or TikTok cost must be reviewed before final profit.' : complete ? 'Sales: receipts - Purchasing - delivery - packing - FB. Returns: - Return Fee - FB only.' : options.advertisingError ? text(options.advertisingError).slice(0, 140) : shownProfit !== null ? `Not final: ${allocation?.missingOrderIds.length || 0} FB cost matches need review. Their unresolved costs are not yet deducted.` : allocation ? 'Review missing costs, lead matching or delivery confirmation. Pending / unmatched ad spend is shown separately.' : `${report.totals.review} order(s) need review. ${advertising.missing.length ? `Enter ${advertising.missing.join(' / ')} cost (0 if none).` : 'Review missing amounts before treating this as a final profit.'}`, left + 4, y + 14);
   doc.setTextColor(55, 65, 81); y += 31;
   const notes = [
     'Summary totals include complete orders only. Every selected sale or returned waybill is listed in the detail pages.',
     'Purchasing uses FIFO history. Missing history uses the latest exact item price, or the latest Purchasing price for the same item type, multiplied by the full quantity.',
     'Sale lines show the saved selling prices. Profit uses recorded gross receipts, so order discounts, customer delivery and bank advances are accounted for.',
     'An identified net Fardar remittance is reconciled to gross receipts before subtracting the courier charge once.',
-    currentCsv ? 'Returned waybills deduct their actual Return Fee and current CSV share once. Purchasing and packing are zero. The full CSV expense is deducted once in the summary.' : 'Returned waybills deduct the actual Return Fee and their Facebook cost once. Purchasing and packing are zero. Their own FB cost is removed from the shared loss pool.',
+    currentCsv ? 'Returned waybills deduct their actual Return Fee and their own FB share once. Purchasing and packing are zero. Pending lead costs are not deducted.' : 'Returned waybills deduct the actual Return Fee and their Facebook cost once. Purchasing and packing are zero. Their own FB cost is removed from the shared loss pool.',
   ];
   doc.setFontSize(8);
   notes.forEach(note => { const lines = doc.splitTextToSize(note, width); if (y + lines.length * 4 > bottom) { doc.addPage(); title('Report notes'); y = 35; } doc.text(lines, left, y); y += lines.length * 4 + 1; });
 
   if (currentCsv) {
-    doc.addPage(); title('CURRENT FACEBOOK CSV | Full expense for all selected payment batches'); y = 35;
+    doc.addPage(); title('CURRENT FACEBOOK CSV | Paid / returned shares; pending costs reserved'); y = 35;
     const intro = [
       `Current file: ${text(currentCsv.fileName)}`,
       `Full CSV spend: ${money(currentCsv.totalSpend)} | Item ads: ${money(currentCsv.itemSpend)} | Commercial: ${money(currentCsv.commercialSpend)}`,
       'Only this newly selected CSV is used. Previous saved Facebook reports and browser cost values are never loaded.',
-      'The FULL CSV expense is deducted once for the complete selected waybill set. Meta Results and lead dates do not omit any part of it.',
-      `Order shares: ${money(options.currentCsvAllocation?.assignedSpend || 0)} | Other campaign expense included in summary: ${money(options.currentCsvAllocation?.unassignedSpend || 0)}`,
-      'Item spend is shared by matching item / original form code across selected Facebook waybills. Commercial is shared across all selected Facebook waybills.',
+      'Only the selected paid / returned lead shares are deducted. Pending leads keep their shares until paid or returned. No previous CSV is loaded.',
+      `Order shares: ${money(options.currentCsvAllocation?.assignedSpend || 0)} | All other spend held separately: ${money(options.currentCsvAllocation?.unassignedSpend || 0)}`,
+      `Pending: ${money(options.currentCsvAllocation?.pendingSpend || 0)} | Other orders: ${money(options.currentCsvAllocation?.otherSpend || 0)} | Unmatched: ${money(options.currentCsvAllocation?.unmatchedSpend || 0)}`,
+      options.currentCsvAllocation?.missingOrderIds.length ? `${options.currentCsvAllocation.missingOrderIds.length} selected Facebook orders have unresolved cost matches. Their costs are NOT assumed to be zero; profit is provisional.` : 'All selected Facebook waybills matched. Pending cost remains separate.',
+      'Acquisition cost is an average across ALL unique leads in each original lead-date / ad-ID or form-code cohort. Commercial uses the same lead pool.',
     ];
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
     intro.forEach(note => { const lines = doc.splitTextToSize(note, width); doc.text(lines, left, y); y += lines.length * 4 + 2; }); y += 4;
@@ -205,7 +207,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     { label: 'PACKING', width: 24 }, { label: 'PROFIT*', width: 34 },
   ];
   const header = () => {
-    title(currentCsv ? 'Order details | Current CSV shares only. Full CSV expense is deducted once in the summary.' : allocation ? allocation.waybillScoped ? 'Order details | After FB deducts item ads, FB loss share and Commercial share.' : 'Order details | After FB deducts item ads and Commercial; ad losses are in the summary.' : 'Order details | * Order profit is before advertising costs. All amounts are LKR.');
+    title(currentCsv ? 'Order details | Current paid / returned FB shares only. Pending shares are excluded.' : allocation ? allocation.waybillScoped ? 'Order details | After FB deducts item ads, FB loss share and Commercial share.' : 'Order details | After FB deducts item ads and Commercial; ad losses are in the summary.' : 'Order details | * Order profit is before advertising costs. All amounts are LKR.');
     y = 35; doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5); doc.setFillColor(243, 244, 246); doc.rect(left, y - 4, width, 9, 'F');
     let x = left;
     columns.forEach(column => { doc.text(column.label, x + 2, y + 1); x += column.width; }); y += 9;
@@ -214,7 +216,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
   report.rows.forEach((row, rowIndex) => {
     const savedCost = row.orderId ? allocation?.orderCosts.get(row.orderId) : undefined;
     const currentCost = row.orderId ? options.currentCsvAllocation?.orderCosts.get(row.orderId) : undefined;
-    const fullFacebookCost = currentCsv ? currentCost?.total ?? 0 : allocation ? facebookOrderAdvertisingCost(allocation, row.orderId) : null;
+    const fullFacebookCost = currentCsv ? row.source === 'Facebook' ? currentCost?.total ?? null : 0 : allocation ? facebookOrderAdvertisingCost(allocation, row.orderId) : null;
     const afterFacebook = fullFacebookCost !== null && row.profit !== null ? Math.round((row.profit - fullFacebookCost) * 100) / 100 : null;
     const purchaseLines = row.outcome === 'returned' ? ['Rs.0 - returned items'] : row.items.flatMap(item => [money(item.purchasing), ...item.allocations.map(allocation => `${allocation.costBasis === 'latest-purchase' ? 'Latest price / ' : ''}${text(allocation.reference)}: ${allocation.quantity} x ${money(allocation.unitCost)}`)]);
     const saleLines = row.outcome === 'returned' ? ['Returned parcel - no sale'] : row.items.map(item => `${item.quantity} x ${money(item.unitSale)} = ${money(item.sales)}`);
@@ -224,7 +226,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
       row.items.length ? row.items.flatMap(item => [text(item.name), `${text(item.sku)} | Qty ${item.quantity}`]) : ['No matched order'],
       [...saleLines, `Received: ${money(row.received)}`],
       [...purchaseLines, row.items.length > 1 ? `Total: ${money(row.purchasing)}` : ''],
-      row.outcome === 'returned' ? [`Return Fee: ${money(row.returnFee ?? null)}`] : [money(row.courier)], [money(row.packing)], [money(row.profit), ...(currentCsv && row.source === 'Facebook' ? [`FB item: ${money(currentCost?.item ?? 0)}`, `Commercial: ${money(currentCost?.commercial ?? 0)}`, `After FB: ${money(afterFacebook)}`] : allocation && row.source === 'Facebook'
+      row.outcome === 'returned' ? [`Return Fee: ${money(row.returnFee ?? null)}`] : [money(row.courier)], [money(row.packing)], [money(row.profit), ...(currentCsv && row.source === 'Facebook' ? [`FB item: ${money(currentCost?.item ?? null)}`, `Commercial: ${money(currentCost?.commercial ?? null)}`, `After FB: ${money(afterFacebook)}`] : allocation && row.source === 'Facebook'
         ? fullFacebookCost !== null && savedCost ? [`FB item: ${money(savedCost.cost)}`, ...(row.outcome !== 'returned' ? [`FB loss: ${money(savedCost.lossCost)}`] : []), `Commercial: ${money(savedCost.promotionCost)}`, `After FB: ${money(afterFacebook)}`] : ['FB ad: Pending match'] : [])],
     ];
     doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5);

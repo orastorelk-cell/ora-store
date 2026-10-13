@@ -27,7 +27,7 @@ if (process.argv[3]) {
     const entry = entries.get(waybill)!, returned = entry.status === 'returned', code = codes[index % codes.length];
     const bank = waybill === '18160373', amount = bank ? 1150 : entry.amount || 0;
     return profitOrderFixture({ id: 'synthetic-' + index, order_number: 'FB-QA-' + index, waybill_number: waybill, notes: 'Form: ' + code,
-      platform_lead_id: 'synthetic-lead-' + index, cod_payment_received: !returned && !bank, cod_payment_amount: !returned && !bank ? amount : undefined,
+      platform_lead_id: String(100000 + index), platform_lead_created_at: fb.periods[0].from + 'T09:00:00Z', cod_payment_received: !returned && !bank, cod_payment_amount: !returned && !bank ? amount : undefined,
       payment_method: bank ? 'Bank Payment' : 'COD', payment_paid_type: bank ? 'Full' : 'COD', payment_status: returned ? 'Pending' : 'Paid',
       order_status: returned ? 'Cancelled' : 'Delivered', payment_received_amount: bank ? 1150 : undefined,
       total_amount: amount, subtotal: amount, delivery_fee: 0, fardar_delivery_fee: entry.delivery_fee,
@@ -38,13 +38,21 @@ if (process.argv[3]) {
   assert.equal(fb.totalSpend, 55048.68); assert.equal(fb.rows.length, 14);
 } else {
   orders = Array.from({ length: 12 }, (_, index) => profitOrderFixture({ id: 'synthetic-' + index, order_number: 'FB-QA-' + index,
-    waybill_number: '1816' + String(index + 1).padStart(4, '0'), notes: 'Form: R0053', platform_lead_id: 'test-' + index,
+    waybill_number: '1816' + String(index + 1).padStart(4, '0'), notes: 'Form: R0053', platform_lead_id: String(100000 + index), platform_lead_created_at: fb.periods[0].from + 'T09:00:00Z',
     ...(index % 4 === 3 ? { cod_payment_received: false, order_status: 'Cancelled' as const, fardar_return_fee: 450, fardar_invoice_status: 'Return Complete', fardar_invoice_waybill: '1816' + String(index + 1).padStart(4, '0') } : {}),
   }));
   waybills = orders.map(order => order.waybill_number!);
 }
 const purchases = codes.map(code => profitPurchaseFixture({ id: code, sku: code + '-TEST', variant_sku: code + '-TEST', variant_id: code, quantity_added: 1000, unit_buying_price: 450, total_cost: 450000 }));
 if (!process.argv[3]) purchases[0] = profitPurchaseFixture({ quantity_added: 1000, total_cost: 450000 });
+const pendingOrders = codes.flatMap((code, index) => Array.from({ length: 10 }, (_, n) => profitOrderFixture({
+  id: `pending-${index}-${n}`, order_number: `FB-PENDING-${index}-${n}`, platform_lead_id: String(200000 + index * 10 + n),
+  platform_lead_created_at: fb.periods[0].from + 'T10:00:00Z', notes: 'Facebook Auto Lead | Form: ' + code + ' | Ad ID: 123',
+  waybill_number: undefined, cod_payment_received: false, cod_payment_amount: undefined, payment_status: 'Pending', order_status: 'New Orders',
+  fardar_invoice_status: undefined, fardar_invoice_waybill: undefined,
+  items: [{ ...profitOrderFixture().items[0], main_sku: code, sku: code + '-TEST' }],
+})));
+orders = [...orders, ...pendingOrders];
 const inputBefore = JSON.stringify({ orders, purchases });
 const report = buildPaidWaybillProfitReport({ orders, purchases, waybills: [...waybills, waybills[0]] });
 assert.equal(report.rows.length, waybills.length); assert.equal(report.totals.review, 0, JSON.stringify(report.rows.filter(row => row.profit === null).map(row => ({ waybill: row.waybill, issues: row.issues }))));
@@ -57,19 +65,21 @@ if (process.argv[3]) {
 assert(report.rows.filter(row => row.outcome === 'returned').every(row => row.purchasing === 0 && row.packing === 0));
 const allocation = allocateCurrentCsvCosts(fb, orders, report);
 assert.equal(Math.round((allocation.assignedSpend + allocation.unassignedSpend) * 100), Math.round(fb.totalSpend * 100));
-const summary = currentCsvProfitSummary(report, fb, '0');
-assert.equal(summary.netProfit, Math.round((report.totals.beforeAds - fb.totalSpend) * 100) / 100, 'The FULL new CSV expense is deducted exactly once for all payment batches.');
+const summary = currentCsvProfitSummary(report, fb, '0', allocation);
+assert.equal(summary.netProfit, Math.round((report.totals.beforeAds - allocation.assignedSpend) * 100) / 100, 'Only paid / returned shares are deducted. Pending cost is excluded.');
 const changedDates = orders.map(order => ({ ...order, platform_lead_created_at: '2026-01-01T00:00:00Z' }));
-assert.deepEqual(allocateCurrentCsvCosts(fb, changedDates, report), allocation, 'Older lead dates cannot restore old spend or omit current batch expenses.');
+assert.equal(allocateCurrentCsvCosts(fb, changedDates, report).missingOrderIds.length, waybills.length, 'Outside-period orders need matching current CSV dates; their costs are never silently zero.');
+assert(allocation.pendingSpend > 0 && allocation.assignedSpend < fb.totalSpend);
+assert.equal(Math.round((allocation.assignedSpend + allocation.pendingSpend + allocation.otherSpend + allocation.unmatchedSpend) * 100), Math.round(fb.totalSpend * 100));
 const nextCsv = csv.replace(/2026-09-26/g, '2026-10-01').replace(/2026-10-08/g, '2026-10-12');
 const next = currentFacebookCsv(nextCsv, 'next-only.csv');
 assert(next.rows.every(row => row.from === '2026-10-01'));
-assert.equal(currentCsvProfitSummary(report, next, '0').facebook, next.totalSpend, 'There is no history argument to add previous Facebook costs.');
+assert.equal(currentCsvProfitSummary(report, next, '0', allocateCurrentCsvCosts(next, orders, report)).facebook, 0, 'There is no history argument to add previous Facebook costs.');
 assert.equal(currentCsvProfitSummary(report, null, '0').netProfit, null);
-assert.equal(currentCsvProfitSummary(report, fb, '-1').recordedCostProfit, null);
+assert.equal(currentCsvProfitSummary(report, fb, '-1', allocation).recordedCostProfit, null);
 const withTikTok = { ...report, ranges: { ...report.ranges, TikTok: { from: '2026-09-01', to: '2026-10-12', count: 1 } } };
-assert.equal(currentCsvProfitSummary(withTikTok, fb, '').recordedCostProfit, summary.netProfit, 'Profit after FB remains visible while this report\'s TikTok amount is missing.');
-assert.equal(currentCsvProfitSummary(withTikTok, fb, '').netProfit, null, 'Missing TikTok expense is not claimed as final net profit.');
+assert.equal(currentCsvProfitSummary(withTikTok, fb, '', allocation).recordedCostProfit, summary.netProfit, 'Profit after FB remains visible while this report\'s TikTok amount is missing.');
+assert.equal(currentCsvProfitSummary(withTikTok, fb, '', allocation).netProfit, null, 'Missing TikTok expense is not claimed as final net profit.');
 assert.equal(JSON.stringify({ orders, purchases }), inputBefore, 'Calculating never saves or changes payments, stock, purchases or returns.');
 
 class MemoryBucket {
@@ -89,6 +99,10 @@ await importRecovery(dataBucket(env)!, { format: 'ora-r2-recovery-v1', orders, t
 const token = (id: string) => { const value = Buffer.from(JSON.stringify({ sub: id, role: id === 'admin' ? 'admin' : 'staff', exp: Date.now() + 60000 })).toString('base64url'); return value + '.' + crypto.createHmac('sha256', secret).update(value).digest('base64url'); };
 const request = (method = 'GET', body?: unknown, auth = token('admin')) => withR2DataFallback(new Request('https://synthetic.test/api/admin/profit-ad-costs?includePurchases=1&reportOnly=1', { method, headers: { 'content-type': 'application/json', authorization: 'Bearer ' + auth }, ...(body ? { body: JSON.stringify(body) } : {}) }), env, {}, async () => new Response('Unexpected bridge', { status: 599 }));
 assert.equal((await request('GET', undefined, 'invalid')).status, 401);
+const metaUnauth = await withR2DataFallback(new Request('https://synthetic.test/api/admin/profit-facebook-leads', { method: 'POST', body: JSON.stringify({ order_ids: [orders[0].id] }) }), env, {}, async () => new Response('Unexpected bridge', { status: 599 }));
+assert.equal(metaUnauth.status, 401, 'The native Meta attribution route requires the current staff session.');
+const metaUnconfigured = await withR2DataFallback(new Request('https://synthetic.test/api/admin/profit-facebook-leads', { method: 'POST', headers: { authorization: 'Bearer ' + token('admin') }, body: JSON.stringify({ order_ids: [orders[0].id] }) }), env, {}, async () => new Response('Unexpected bridge', { status: 599 }));
+assert.equal(metaUnconfigured.status, 503, 'An unconfigured Meta connection is explicit; the route does not fall through to legacy persistence.');
 const loaded = await (await request()).json() as any;
 assert.deepEqual(loaded.ledger.rows, []); assert.equal(loaded.purchases.length, purchases.length);
 const staleGet = await withR2DataFallback(new Request('https://synthetic.test/api/admin/profit-ad-costs?includePurchases=1', { headers: { authorization: 'Bearer ' + token('admin') } }), env, {}, async () => new Response('Unexpected bridge', { status: 599 }));
@@ -119,11 +133,20 @@ const { act, create } = renderer;
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 const bundle = new URL('./.current-csv-report-ui.mjs', import.meta.url);
 const originalFetch = globalThis.fetch, originalStorage = (globalThis as any).localStorage;
+let metaFails = true;
 let requests: any[] = [], accessedStorage: string[] = [], removedStorage: string[] = [];
 (globalThis as any).localStorage = { getItem: (key: string) => { accessedStorage.push(key); return key === 'ora_staff_session_token' ? 'synthetic-ui-token' : JSON.stringify({ facebook: '987654.32', waybills, fileName: 'obsolete-two-payment-batches.csv' }); }, removeItem: (key: string) => { removedStorage.push(key); } };
 (globalThis as any).__currentReportStore = { orders, products: [], purchaseOrders: purchases, returnRecords: [], sharedStoreReady: true, sharedOrdersReady: true, orderLoadError: '', adminUser: { id: 'synthetic-ui-admin', role: 'admin' }, refreshOrdersFromServer: async () => {} };
 globalThis.fetch = async (url: any, options: any = {}) => {
   requests.push({ url, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : undefined });
+  if (String(url).includes('/profit-facebook-leads')) {
+    if (metaFails) return new Response(JSON.stringify({ error: 'Facebook ads permissions are missing.' }), { status: 403 });
+    const body = JSON.parse(options.body);
+    return new Response(JSON.stringify({ ok: true, results: body.order_ids.map((id: string) => {
+      const order = orders.find(order => order.id === id)!;
+      return { order_id: id, lead_id: order.platform_lead_id, created_at: order.platform_lead_created_at, ad_id: '111', adset_id: '222', campaign_id: '333' };
+    }) }));
+  }
   if (options.method === 'POST') { assert.equal(JSON.parse(options.body).action, 'start-report'); return new Response(JSON.stringify({ ok: true, cleared: true })); }
   return new Response(JSON.stringify({ ledger: obsolete.payload, purchases }));
 };
@@ -152,15 +175,24 @@ try {
   assert.equal(button('Calculate Profit').props.disabled, true, 'A fresh FB CSV is required for the new selection.');
   await changeFile('Current report Facebook CSV', fb.fileName, csv);
   assert(content().includes(profitMoney(fb.totalSpend))); assert.equal(button('Calculate Profit').props.disabled, false);
-  assert(!content().includes('Net Profit — All Selected Payment Batches'));
+  assert(!content().includes('Allocated Net Profit — Selected Payment Batches'));
   await act(async () => { button('Calculate Profit').props.onClick(); });
   assert(content().includes('Profit for All ') && content().includes(String(waybills.length)));
-  assert(content().includes(profitMoney(summary.netProfit!)), 'The actual component calculates the full new CSV against every selected waybill.');
+  assert(content().includes(profitMoney(summary.netProfit!)), 'The actual component deducts selected shares and shows pending spend separately.');
+  assert(content().includes('Pending leads — NOT deducted') && content().includes(profitMoney(allocation.pendingSpend)));
   assert.equal(ui.root.findByProps({ 'aria-label': 'Current CSV waybill profit' }).findAllByType('tbody')[0].findAllByType('tr').length, 10);
+  await act(async () => { button('Verify Facebook Lead / Ad IDs').props.onClick(); await new Promise(resolve => setImmediate(resolve)); });
+  assert(content().includes('ads permissions are missing') && content().includes(fb.fileName), 'Denied Meta reads preserve the current CSV and expose the actual failure.');
+  assert.equal(button('Calculate Profit').props.disabled, false);
+  metaFails = false;
+  await act(async () => { button('Verify Facebook Lead / Ad IDs').props.onClick(); await new Promise(resolve => setImmediate(resolve)); });
+  assert(content().includes(`Facebook verified ${orders.length} lead / ad identities.`));
+  await act(async () => { button('Calculate Profit').props.onClick(); });
+  assert(content().includes(profitMoney(summary.netProfit!)), 'Meta identity checks never add a previous CSV or change the available spend.');
   await act(async () => { button('Refresh System Records').props.onClick(); await new Promise(resolve => setImmediate(resolve)); });
   assert(content().includes(fb.fileName) && !content().includes('obsolete-two-payment-batches'), 'Refreshing financial data never brings an old FB report back.');
   await changeFile('Current report Facebook CSV', 'bad.csv', 'invalid csv');
-  assert(!content().includes(fb.fileName) && !content().includes('Net Profit — All Selected Payment Batches'));
+  assert(!content().includes(fb.fileName) && !content().includes('Allocated Net Profit — Selected Payment Batches'));
   assert.equal(button('Calculate Profit').props.disabled, true, 'Invalid replacement clears prior cost and calculation instead of falling back.');
   let finishSlow!: (value: string) => void;
   const slow = new Promise<string>(resolve => { finishSlow = resolve; });
@@ -174,11 +206,11 @@ try {
   assert(!content().includes('Full CSV spend:') && button('Calculate Profit').props.disabled, 'Reopening the report starts without any previous Facebook cost.');
   assert(accessedStorage.every(key => key === 'ora_staff_session_token'), 'No previous report inputs are read from or written to browser storage.');
   assert(removedStorage.includes('ora_paid_waybill_profit_v2:synthetic-ui-admin'), 'The legacy browser draft is removed.');
-  assert(requests.filter(request => request.method === 'POST').every(request => request.body.action === 'start-report'), 'No Facebook CSV or expense is submitted for persistence.');
+  assert(requests.filter(request => request.method === 'POST').every(request => request.body.action === 'start-report' || request.url.includes('/profit-facebook-leads') && Array.isArray(request.body.order_ids) && !request.body.csv), 'No Facebook CSV or expense is submitted for persistence.');
 } finally {
   if (ui) await act(async () => { ui.unmount(); });
   globalThis.fetch = originalFetch; (globalThis as any).localStorage = originalStorage; delete (globalThis as any).__currentReportStore;
   if (fs.existsSync(bundle)) fs.unlinkSync(bundle);
 }
 if (process.argv[7]) fs.writeFileSync(process.argv[7], Buffer.from(createPaidWaybillProfitPdf(report, { facebook: String(fb.totalSpend), tiktok: '0', sourceName: 'Synthetic financial QA | All three invoice batches | Current CSV only', paymentBasis: 'auto', facebookReportingPeriods: fb.periods, currentFacebookCsv: fb, currentCsvAllocation: allocation }).output('arraybuffer')));
-console.log('PASS: all three payment batches, full latest CSV spend once, all selected waybills retained, return fee once/no return packing, actual React calculation, replacement/failure/race/reset/remount, no old browser or server costs, encrypted R2 cleanup, blocked stale expense saves, exact cents and unchanged financial records.');
+console.log('PASS: all three payment batches, current CSV paid / returned shares only; pending cost reserved, all selected waybills retained, return fee once/no return packing, actual React calculation, replacement/failure/race/reset/remount, no old browser or server costs, encrypted R2 cleanup, blocked stale expense saves, exact cents and unchanged financial records.');

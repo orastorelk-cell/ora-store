@@ -349,6 +349,9 @@ export interface Order {
   replacement_created_by?: string;
   platform_lead_id?: string;
   platform_lead_created_at?: string;
+  platform_ad_id?: string;
+  platform_adset_id?: string;
+  platform_campaign_id?: string;
   lead_import_key?: string;
   lead_imported_at?: string;
 }

@@ -7,7 +7,7 @@
     "dev": "tsx server.ts",
     "build": "node --import tsx tools/generate-confirm-sheet-plan.ts --check && vite build",
     "test:sheet-confirm": "node --import tsx tools/generate-confirm-sheet-plan.ts --check && node --import tsx tools/test-sheet-confirm.ts",
-    "test:profit-csv": "node --import tsx tools/test-current-csv-report.ts",
+    "test:profit-csv": "node --import tsx tools/test-current-csv-pending.ts && node --import tsx tools/test-current-csv-report.ts",
     "build:server": "esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "build:local-prod": "npm run build && npm run build:server",
     "start": "node dist/server.cjs",

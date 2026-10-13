@@ -571,6 +571,7 @@ const buildFacebookOrder = async (
     created_at: createdAt,
     platform_lead_id: String(lead?.id || event.leadgen_id),
     platform_lead_created_at: createdAt,
+    platform_ad_id: event.ad_id || undefined,
     lead_import_key: `facebook ads::lead::${String(lead?.id || event.leadgen_id)}`.toLowerCase(),
     lead_imported_at: importedAt,
   };
