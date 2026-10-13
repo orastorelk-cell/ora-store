@@ -1,4 +1,4 @@
-import { returnPackingInProgress, returnPackingPending } from '../src/lib/returnSheets';
+import { returnPackingInProgress } from '../src/lib/returnSheets';
 import { readDataTable, replaceDataTable } from './cloudflareData';
 import { invoiceComplete } from '../src/lib/invoiceQueue';
 
@@ -38,7 +38,7 @@ export const r2WaybillPoolHandler=async(request:Request,env:unknown)=>{
 };
 
 export const r2AssignWaybill=async(env:unknown,id:string,courier='Fardar')=>{
-  if(returnPackingPending(await readDataTable(env,'admin_data_store')))throw new Error('Check returns and create the packing batch from Return Sheets first.');
+  if(returnPackingInProgress(await readDataTable(env,'admin_data_store')))throw new Error('A stock transaction is finishing. Retry its saved operation before assigning waybills.');
   const before=(await readDataTable(env,'order_snapshots')).map(r=>r.payload).filter(Boolean),order=before.find(o=>String(o.id)===id);
   if(!order)throw new Error('Order not found.');
   if(order.sheet_confirm_hold)throw new Error('Finish the saved Google Sheet import before assigning this order.');

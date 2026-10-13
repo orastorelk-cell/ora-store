@@ -6,10 +6,10 @@ export const returnWorkflowPatch = () => ({
     let text = code;
     const marker = '    const allocatorSignature=JSON.stringify({';
     if (!text.includes(marker)) throw new Error('[O-RA returns] allocator marker missing');
-    text = text.replace(marker,'    if(returnPackingPending)return;\n' + marker);
+    text = text.replace(marker,'    if(returnStockTransactionPending)return;\n' + marker);
     const deps = 'waybillPoolRetry]);';
     if (!text.includes(deps)) throw new Error('[O-RA returns] allocator dependencies missing');
-    text = text.replace(deps,'waybillPoolRetry,returnPackingPending]);');
+    text = text.replace(deps,'waybillPoolRetry,returnStockTransactionPending]);');
     return { code: text,map: null };
   },
 });

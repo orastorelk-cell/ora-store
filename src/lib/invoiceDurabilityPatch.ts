@@ -22,7 +22,7 @@ export const invoiceDurabilityPatch = () => ({
       if(start<0||end<0)throw new Error('[O-RA durable invoices] auto queue not found');
       text=text.slice(0,start)+String.raw`  // AUTO INVOICE QUEUE: publish only invoices acknowledged by durable R2.
   useEffect(()=>{
-    if(!adminUser||!sharedStoreReady||!getStaffSessionToken()||returnPackingPending||invoiceQueueBusyRef.current)return;
+    if(!adminUser||!sharedStoreReady||!getStaffSessionToken()||returnStockTransactionPending||invoiceQueueBusyRef.current)return;
     const ready=orders.filter(o=>invoiceReady(o)&&!invoiceComplete(o)&&!autoInvoiceReadyRef.current.has(o.id))
       .sort((a,b)=>new Date(a.created_at).getTime()-new Date(b.created_at).getTime()).slice(0,50);
     if(!ready.length)return;
@@ -45,7 +45,7 @@ export const invoiceDurabilityPatch = () => ({
         invoiceQueueBusyRef.current=false;
         if(invoiceQueueRetryTimerRef.current===null)setInvoiceQueueRetry(n=>n+1);
       });
-  },[orders,adminUser?.id,sharedStoreReady,invoiceQueueRetry,returnPackingPending]);
+  },[orders,adminUser?.id,sharedStoreReady,invoiceQueueRetry,returnStockTransactionPending]);
 
 
 `+text.slice(end);

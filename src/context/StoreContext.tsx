@@ -594,6 +594,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [isAdminView, setIsAdminView] = useState(() => ['/system', '/ora-manager'].includes(String(window.location.pathname || '').replace(/\/+$/, '')));
   const [sharedStoreReady, setSharedStoreReady] = useState(false);
   const [returnPackingPending,setReturnPackingPending] = useState(false);
+  const [returnStockTransactionPending,setReturnStockTransactionPending] = useState(false);
   const [returnPackingBatches,setReturnPackingBatches] = useState<{operation_id:string;batch_id:string;created_at:string;count:number}[]>([]);
   const [sharedOrdersReady,setSharedOrdersReady]=useState(false);
   const [orderLoadError,setOrderLoadError]=useState('');
@@ -734,6 +735,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!state || typeof state !== 'object') return;
     if (includePrivateSettings && state.return_inventory) {
       setReturnPackingPending(state.return_inventory.packing_pending === true);
+      setReturnStockTransactionPending((state.return_inventory.allocation_paused ?? state.return_inventory.packing_pending) === true);
       setReturnPackingBatches(state.return_inventory.batches || []);
       const sharedHistory: StockHistory[] = Array.isArray(state.return_inventory.stockHistory) ? state.return_inventory.stockHistory : [];
       const sharedReturns: ReturnRecord[] = Array.isArray(state.return_inventory.returnRecords) ? state.return_inventory.returnRecords : [];

@@ -64,8 +64,9 @@ assert.equal((await call('/api/returns/unlisted')).body.parcels.length,0);assert
 assert.equal((await call('/api/returns/parcels/WB-EXTRA/receive','POST',{operation_id:partial.receipt.operation_id,expected_revision:0,waybill:'WB-EXTRA',items:[{id:'mat::',good_qty:4,damaged_qty:0,not_received:false,photo_ids:[]}],notes:''},'receiver')).body.unchanged,true,'Receipt retries survive later CSV linking');
 assert.equal((await call('/api/returns/scan','POST',{waybill:'WB-UNKNOWN'},'receiver')).body.sheet.parcels[0].review_reason,'Waybill not found in system orders.');
 assert.equal((await call('/api/storefront/state')).body.state.return_inventory,undefined);
-assert.equal((await call('/api/orders/invoices/ensure','POST',{order_ids:['allocated'],batch_id:'PACK-AUTO-FIXTURE',automatic:true})).status,409,'Returns do not automatically invoice');
-assert.equal((await call('/api/orders/first','PUT',{order:{...orders[3],stock_allocated:true,stock_status:'Allocated'}})).status,409,'Old browser cannot allocate before manual packing');
+const automatic=await call('/api/orders/invoices/ensure','POST',{order_ids:['allocated'],batch_id:'PACK-AUTO-FIXTURE',automatic:true});
+assert.equal(automatic.status,200,JSON.stringify(automatic));assert.equal(automatic.body.results[0].status,'saved','Received returns do not block existing allocated orders from automatic invoicing');
+assert.equal((await call('/api/admin/storefront/state')).body.state.return_inventory.allocation_paused,false,'A pending packing download is not a stock transaction');
 assert.deepEqual(creditReturnStock({stock_quantity:0,return_stock_debt:2},1),{stock_quantity:0,return_stock_debt:1,balance_qty:1});
 assert.deepEqual(creditReturnStock({stock_quantity:0,return_stock_debt:1},3),{stock_quantity:2,return_stock_debt:0,balance_qty:1});
 
@@ -73,7 +74,7 @@ assert.deepEqual(creditReturnStock({stock_quantity:0,return_stock_debt:1},3),{st
 // purchase implementation, so debt is settled once for exact variants too.
 const config=(await loadConfigFromFile({command:'build',mode:'production'}))!.config as any;
 let source=fs.readFileSync('src/context/StoreContext.tsx','utf8');for(const plugin of config.plugins.flat(Infinity))if(plugin?.name?.startsWith('ora-')&&typeof plugin.transform==='function'){const result=await plugin.transform(source,process.cwd()+'/src/context/StoreContext.tsx');if(result)source=typeof result==='string'?result:result.code;}
-assert.ok(source.includes('if(returnPackingPending)return;'));assert.ok(source.includes('invoiceQueueRetry,returnPackingPending]'));
+assert.ok(source.includes('if(returnStockTransactionPending)return;'));assert.ok(source.includes('invoiceQueueRetry,returnStockTransactionPending]'));
 const single=source.slice(source.indexOf('  const addPurchaseOrder='),source.indexOf('  const addPurchaseOrdersBatch='));
 const bulk=source.slice(source.indexOf('  const addPurchaseOrdersBatch='),source.indexOf('  // Category CRUD\n  const addCategory =',source.indexOf('  const addPurchaseOrdersBatch=')));
 let fixtureProducts:any[]=[{id:'v',product_type:'variant',name_en:'Variant',sku:'V',stock_quantity:7,variants:[{id:'blue',stock_quantity:0,return_stock_debt:2,option_value:'Blue'},{id:'red',stock_quantity:7,return_stock_debt:0,option_value:'Red'}]}];
@@ -86,15 +87,16 @@ await replaceDataTable(env,'admin_data_store',rows=>({rows:rows.map(row=>row.key
 const originalPrinted=JSON.stringify(await order('printed')),operation=crypto.randomUUID();raw.failKey=orderKey;raw.failMode='before';
 const interrupted=await call('/api/returns/packing','POST',{operation_id:operation},'receiver');assert.equal(interrupted.status,503,JSON.stringify(interrupted));assert.equal((await product()).stock_quantity,4,'Preparing failed batch has not deducted stock');
 assert.equal((await call('/api/admin/storefront/state','PUT',{...await state(),expected_version:(await state()).version})).status,409,'Active journal blocks catalog overwrites');
-const packed=await call('/api/returns/packing','POST',{operation_id:operation},'receiver');assert.equal(packed.status,200,JSON.stringify(packed));assert.equal(packed.body.orders.length,3);assert.equal(new Set(packed.body.orders.map((order:any)=>order.invoice_pack_batch_id)).size,1);assert.ok(packed.body.orders.every((order:any)=>order.invoice_locked&&order.invoice_pack_batch_id==='PACK-RETURN-'+operation));
+const packed=await call('/api/returns/packing','POST',{operation_id:operation},'receiver');assert.equal(packed.status,200,JSON.stringify(packed));assert.equal(packed.body.orders.length,2);assert.equal(new Set(packed.body.orders.map((order:any)=>order.invoice_pack_batch_id)).size,1);assert.ok(packed.body.orders.every((order:any)=>order.invoice_locked&&order.invoice_pack_batch_id==='PACK-RETURN-'+operation));
 assert.ok(packed.body.orders.every((value:any)=>value.fardar_csv_export_batch_id===packed.body.batch_id&&value.fardar_csv_exported_waybill===value.waybill_number),'Batch creation claims its CSV rows before another export screen can duplicate them');
 assert.equal((await product()).stock_quantity,0);assert.equal((await product('a')).stock_quantity,0);assert.equal((await product('b')).stock_quantity,0);assert.equal((await product('variant')).variants[1].stock_quantity,5);assert.equal((await order('variant')).stock_allocated,false);assert.equal(JSON.stringify(await order('printed')),originalPrinted);
 const retry=await call('/api/returns/packing','POST',{operation_id:operation},'receiver');assert.deepEqual(retry.body.orders.map((order:any)=>order.waybill_number),packed.body.orders.map((order:any)=>order.waybill_number));assert.equal((await product()).stock_quantity,0);
-const courierCsv=returnPackingCsv(packed.body.orders,packed.body.settings);assert.ok(courierCsv.startsWith('\uFEFF'));assert.equal(courierCsv.split('\r\n').length,4);assert.ok(courierCsv.includes(',500,0'));assert.ok(courierCsv.includes(',0,0'));
+const courierCsv=returnPackingCsv(packed.body.orders,packed.body.settings);assert.ok(courierCsv.startsWith('\uFEFF'));assert.equal(courierCsv.split('\r\n').length,3);assert.ok(courierCsv.includes(',500,0'));
+assert.ok(returnPackingCsv([await order('allocated')],packed.body.settings).includes(',0,0'),'Automatically saved fully-paid invoices preserve the zero COD amount');
 assert.equal((await call('/api/returns/packing/'+operation+'/downloaded','POST',{},'receiver')).status,200);
 for(const value of packed.body.orders){const saved=await order(value.id);assert.equal(saved.fardar_csv_export_batch_id,packed.body.batch_id);assert.equal(saved.fardar_csv_exported_waybill,saved.waybill_number);assert.ok(saved.invoice_pack_downloaded_at);assert.equal(saved.return_packing_lock,undefined);}
 assert.equal((await call('/api/returns/packing/'+operation+'/downloaded','POST',{},'receiver')).status,200);
-const afterHistory=(await call('/api/admin/storefront/state')).body.state.return_inventory;assert.ok(afterHistory.stockHistory.some((row:any)=>row.id.startsWith('return-stock:packing:')));assert.equal(afterHistory.batches[0].count,3);
+const afterHistory=(await call('/api/admin/storefront/state')).body.state.return_inventory;assert.ok(afterHistory.stockHistory.some((row:any)=>row.id.startsWith('return-stock:packing:')));assert.equal(afterHistory.batches[0].count,2);
 
 await scan('WB-FUTURE');const future=await receive('WB-FUTURE',2);assert.equal((await product()).stock_quantity,2);
 await correct('WB-FUTURE',2);assert.equal((await product()).stock_quantity,0);assert.equal(JSON.stringify(await order('printed')),originalPrinted);assert.equal((await order('first')).invoice_pack_batch_id,packed.body.batch_id);

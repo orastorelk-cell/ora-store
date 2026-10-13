@@ -209,7 +209,9 @@ export const sharedReturnInventory = (rows: readonly any[]) => {
       expected_qty: item.expected_qty, good_qty: item.good_qty, damaged_qty: item.damaged_qty, missing_qty: pendingReturnQty(item), received_items: actualReturnItems(item) })),
     wrong_item_note: parcel.items.filter(wrongReturnQty).map(item => 'Expected ' + item.name + '; received ' + actualReturnItems(item).map(value => value.name + ' × ' + (value.good_qty + value.damaged_qty)).join(', ')).join(' | ') || undefined, notes: parcel.notes,
   })));
-  return { stockHistory, returnRecords, packing_pending: returnPackingPending(rows), batches: rows.filter(row => String(row.key).startsWith(RETURN_PACKING_PREFIX) && !['confirm_recovery','sheet_confirm'].includes(row.payload?.kind) && row.payload?.phase === 'complete').map(row => ({ operation_id: row.payload.operation_id, batch_id: row.payload.batch_id, created_at: row.payload.created_at, count: row.payload.order_ids?.length || 0 })).sort((a,b) => b.created_at.localeCompare(a.created_at)).slice(0,30) };
+  // Stock waiting for a packing download is not an active stock transaction.
+  // Only unfinished journals may pause normal FIFO, waybills and invoices.
+  return { stockHistory, returnRecords, packing_pending: returnPackingPending(rows), allocation_paused: returnPackingInProgress(rows), batches: rows.filter(row => String(row.key).startsWith(RETURN_PACKING_PREFIX) && !['confirm_recovery','sheet_confirm'].includes(row.payload?.kind) && row.payload?.phase === 'complete').map(row => ({ operation_id: row.payload.operation_id, batch_id: row.payload.batch_id, created_at: row.payload.created_at, count: row.payload.order_ids?.length || 0 })).sort((a,b) => b.created_at.localeCompare(a.created_at)).slice(0,30) };
 };
 
 // A correction can reveal a shortage after stock was committed to an invoice.
