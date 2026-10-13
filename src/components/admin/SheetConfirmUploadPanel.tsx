@@ -5,8 +5,9 @@ import { invoiceRecoveryRequest } from '../../lib/invoiceRecovery';
 import { SHEET_CONFIRM_API, sheetConfirmPhaseLabel } from '../../lib/sheetConfirmState';
 import { invoiceComplete } from '../../lib/invoiceQueue';
 import { StoreOnlyZip } from '../../lib/productFolderZip';
+import { watchSavedSheetConnection, type SavedSheetConnection } from '../../lib/sheetConnectionSync';
 
-type Connection={connected:boolean;spreadsheet_id?:string;tabs?:string[];client_email?:string};
+type Connection=SavedSheetConnection;
 type Job={operation_id:string;batch_id:string;phase:string;created_at:string;updated_at:string;counts:Record<string,number>;errors:string[];warnings:string[];error?:string;invoices_ready:boolean;downloaded_at?:string};
 const primary='inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-xs font-black text-white hover:bg-emerald-500 disabled:cursor-default disabled:opacity-50 sm:w-auto';
 const field='mt-1 w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2.5 text-xs text-white outline-none focus:border-emerald-500';
@@ -17,6 +18,8 @@ export const SheetConfirmUploadPanel=()=>{
   const [connection,setConnection]=useState<Connection|null>(null),[job,setJob]=useState<Job|null>(null),[history,setHistory]=useState<Job[]>([]);
   const [busy,setBusy]=useState(''),[error,setError]=useState(''),[message,setMessage]=useState('');
   const [sheet,setSheet]=useState(''),[tabs,setTabs]=useState(''),[account,setAccount]=useState<any>(null);
+  const [checkingConnection,setCheckingConnection]=useState(true),[connectionError,setConnectionError]=useState(''),[showSettings,setShowSettings]=useState(false);
+  const reloadConnection=useRef<(()=>Promise<void>)|null>(null);
   const running=useRef(false),refreshing=useRef(false),lastRefresh=useRef('');
   const pendingKey='ora_sheet_confirm_request:'+adminUser?.id;
   const editable=adminUser?.role==='admin'||!adminUser?.permissions?.includes('level:confirm_upload:view');
@@ -36,13 +39,19 @@ export const SheetConfirmUploadPanel=()=>{
   };
   useEffect(()=>{
     let live=true;
-    request(SHEET_CONFIRM_API+'/connection').then(data=>{
+    setConnection(null);setAccount(null);setSheet('');setTabs('');setShowSettings(false);
+    if(!adminUser?.id){setCheckingConnection(false);return;}
+    const sync=watchSavedSheetConnection(request,state=>{
       if(!live)return;
-      setConnection(data.connection);
-      if(data.connection?.connected){setSheet(data.connection.spreadsheet_id);setTabs(data.connection.tabs.join('\n'));}
-    }).catch(failure=>{if(live)setError(failure.message||'Sheet connection could not be checked.');});
+      setConnection(state.connection);setCheckingConnection(state.checking);setConnectionError(state.error);
+      if(state.connection?.connected){setSheet(state.connection.spreadsheet_id||'');setTabs((state.connection.tabs||[]).join('\n'));}
+    });
+    reloadConnection.current=sync.refresh;
+    const reload=()=>{if(document.visibilityState==='visible')void sync.refresh();};
+    void sync.refresh();
+    window.addEventListener('focus',reload);window.addEventListener('online',reload);document.addEventListener('visibilitychange',reload);
     request(SHEET_CONFIRM_API+'/jobs').then(data=>{if(live){accept(data.job);if(Array.isArray(data.history))setHistory(data.history);}}).catch(failure=>{if(live)setError(failure.message||'Saved Sheet imports could not be checked.');});
-    return()=>{live=false;};
+    return()=>{live=false;sync.stop();reloadConnection.current=null;window.removeEventListener('focus',reload);window.removeEventListener('online',reload);document.removeEventListener('visibilitychange',reload);};
   },[adminUser?.id]);
   useEffect(()=>{
     if(!active)return;
@@ -57,6 +66,7 @@ export const SheetConfirmUploadPanel=()=>{
       const selected=tabs.split(/[\r\n,]+/).map(value=>value.trim()).filter(Boolean);
       const data=await request(SHEET_CONFIRM_API+'/connection',{spreadsheet_id:sheet,tabs:selected,...(account?{service_account:account}:{})});
       setConnection(data.connection);setSheet(data.connection.spreadsheet_id);setTabs(data.connection.tabs.join('\n'));setAccount(null);
+      setShowSettings(false);void reloadConnection.current?.();
       setMessage('Google Sheet connected. Apps Script එක වෙනස් කරන්න ඕන නැහැ. දැන් Auto Upload button එක භාවිත කරන්න පුළුවන්.');
     }catch(failure:any){setError(failure.message||'The Google Sheet could not be connected.');}
     finally{running.current=false;setBusy('');}
@@ -110,7 +120,10 @@ export const SheetConfirmUploadPanel=()=>{
       <div><h3 className="flex items-center gap-2 text-sm font-black text-emerald-300"><FileSpreadsheet className="h-5 w-5 shrink-0"/>New Confirm Orders Auto Upload</h3><p className="mt-2 text-xs leading-5 text-neutral-300">Calls ඉවර වුණාම button එක ඔබන්න. Sheet එකේ Confirm / Cancel සියල්ල save කරලා ඉවර වුණාට පස්සේ stock තියෙන orders වලට එක invoice batch එකක් + එක Fardar CSV එකක් හැදෙනවා. Pending orders import වෙන්නේ නැහැ.</p></div>
       <button type="button" className={primary+' shrink-0'} disabled={!editable||!connection?.connected||!!busy||(active&&!retryable)} onClick={()=>void start()}><RefreshCw className={'h-4 w-4'+(active||busy?' animate-spin':'')}/>{busy||(retryable?'Retry saved Sheet import':active?'Import running…':'New Confirm Orders Auto Upload')}</button>
     </div>
-    {connection?.connected&&<p className="flex items-center gap-2 text-[11px] text-emerald-300"><CheckCircle2 className="h-4 w-4 shrink-0"/>Connected · {connection.tabs?.join(' / ')}</p>}
+    {connection?.connected&&<div className="space-y-2"><p className="flex items-center gap-2 text-[11px] text-emerald-300"><CheckCircle2 className="h-4 w-4 shrink-0"/>Connected · {connection.tabs?.join(' / ')}</p><p className="text-xs leading-5 text-neutral-300">Sheet connection එක server එකේ save කරලා තියෙනවා. PC / mobile දෙකෙන්ම භාවිත කරන්න පුළුවන්. JSON key එක නැවත upload කරන්න අවශ්‍ය නැහැ.</p>{adminUser?.role==='admin'&&<button type="button" onClick={()=>setShowSettings(value=>!value)} className="text-xs font-bold text-neutral-400 underline">{showSettings?'Close connection settings':'Edit saved connection'}</button>}</div>}
+    {!connection&&checkingConnection&&<p role="status" className="text-xs text-neutral-300">Checking the saved Google Sheet connection…</p>}
+    {connectionError&&<div role="alert" className="space-y-2 text-xs leading-5 text-amber-300"><p>{connectionError}</p><p>Saved connection එක load කරගන්න බැරි වුණා. JSON key එක ආයෙ upload කරන්න එපා; Retry කරන්න.</p></div>}
+    {(!connection?.connected||connectionError)&&<button type="button" disabled={checkingConnection} onClick={()=>void reloadConnection.current?.()} className="text-xs font-bold text-emerald-300 disabled:opacity-50">{checkingConnection?'Checking connection…':'Retry saved connection'}</button>}
     {job&&<div className="rounded-xl border border-neutral-700 bg-neutral-950 p-3 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2"><p role="status" className="text-xs font-black text-white">{sheetConfirmPhaseLabel(job.phase)}</p><button type="button" onClick={()=>void load().catch(failure=>setError(failure.message))} className="text-xs font-bold text-emerald-300">Refresh status</button></div>
       <div className="flex flex-wrap gap-2 text-[11px] font-bold">{[['Recovered missing',job.counts.recovered],['Confirmed',job.counts.confirmed],['Cancelled',job.counts.cancelled],['Pending skipped',job.counts.pending],['Already processed',job.counts.already_processed],['Invoices ready',job.counts.invoices]].map(([label,value])=><span key={String(label)} className="rounded-lg bg-neutral-800 px-2.5 py-1.5 text-neutral-200">{label} {Number(value||0)}</span>)}</div>
@@ -123,17 +136,17 @@ export const SheetConfirmUploadPanel=()=>{
     </div>}
     {message&&<p role="status" className="text-xs leading-5 text-emerald-300">{message}</p>}
     {error&&<p role="alert" className="text-xs leading-5 text-amber-300">{error}</p>}
-    {adminUser?.role==='admin'?<details open={connection?.connected===false} className="rounded-xl border border-neutral-700 p-3">
+    {adminUser?.role==='admin'&&(showSettings||(connection?.connected===false&&!checkingConnection&&!connectionError))?<details open className="rounded-xl border border-neutral-700 p-3">
       <summary className="flex cursor-pointer items-center gap-2 text-xs font-bold text-neutral-200"><Settings2 className="h-4 w-4"/>{connection?.connected?'Google Sheet connection':'Connect Google Sheet once'}</summary>
       <div className="mt-3 space-y-3">
         <p className="text-xs leading-5 text-neutral-400">Apps Script update අවශ්‍ය නැහැ. <a href="https://console.cloud.google.com/apis/library/sheets.googleapis.com" target="_blank" rel="noreferrer" className="text-emerald-300 underline">Google Sheets API enable</a> කරලා <a href="https://console.cloud.google.com/iam-admin/serviceaccounts" target="_blank" rel="noreferrer" className="text-emerald-300 underline">service account</a> එකක් සාදා JSON key එකක් ලබාගන්න. ඒ account email එකට අදාළ Sheet එක Editor ලෙස share කරන්න.</p>
         <label className="block text-xs font-bold text-neutral-300">Google Sheet link<input className={field} value={sheet} onChange={e=>setSheet(e.target.value)} placeholder="https://docs.google.com/spreadsheets/d/…" autoComplete="off"/></label>
         <label className="block text-xs font-bold text-neutral-300">Order tab names · one per line<textarea className={field} rows={3} value={tabs} onChange={e=>setTabs(e.target.value)} placeholder={'Leave blank to detect CALL CENTER ORDERS, FACEBOOK ORDERS and TIKTOK ORDERS.'}/></label>
-        <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-neutral-700 p-3 text-xs font-bold text-neutral-200"><Upload className="h-4 w-4"/>{account?'Key file selected':'Choose service account JSON key'}<input type="file" accept=".json,application/json" className="hidden" onChange={e=>{const file=e.currentTarget.files?.[0];e.currentTarget.value='';void chooseKey(file);}}/></label>
+        <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-neutral-700 p-3 text-xs font-bold text-neutral-200"><Upload className="h-4 w-4"/>{account?'Replacement key selected':connection?.connected?'Saved key is active · choose only to replace it':'Choose service account JSON key'}<input type="file" accept=".json,application/json" className="hidden" onChange={e=>{const file=e.currentTarget.files?.[0];e.currentTarget.value='';void chooseKey(file);}}/></label>
         {(account?.client_email||connection?.client_email)&&<p className="break-all text-xs leading-5 text-emerald-300">Share the Sheet as Editor with: {account?.client_email||connection?.client_email}</p>}
         <button type="button" className={primary} disabled={!!busy||!sheet||(!account&&!connection?.connected)||active} onClick={()=>void connect()}><CheckCircle2 className="h-4 w-4"/>{connection?.connected?'Check & save connection':'Connect Google Sheet'}</button>
       </div>
-    </details>:connection?.connected===false&&<p className="text-xs leading-5 text-amber-300">Super Admin එක් වරක් Google Sheet connect කළාට පස්සේ Auto Upload භාවිත කරන්න පුළුවන්.</p>}
+    </details>:adminUser?.role!=='admin'&&connection?.connected===false&&!checkingConnection&&!connectionError&&<p className="text-xs leading-5 text-amber-300">Super Admin එක් වරක් Google Sheet connect කළාට පස්සේ Auto Upload භාවිත කරන්න පුළුවන්.</p>}
     {!!history.filter(batch=>batch.invoices_ready&&batch.counts.invoices>0&&batch.operation_id!==job?.operation_id).length&&<details><summary className="cursor-pointer text-xs font-bold text-neutral-300">Previous Auto Upload batches</summary><div className="mt-3 space-y-2">{history.filter(batch=>batch.invoices_ready&&batch.counts.invoices>0&&batch.operation_id!==job?.operation_id).map(batch=><div key={batch.operation_id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-neutral-950 p-3"><span className="text-xs text-neutral-300">{batch.counts.invoices} invoices · {new Date(batch.created_at).toLocaleString('en-GB',{timeZone:'Asia/Colombo'})}</span><button type="button" className={primary} disabled={!!busy||!editable} onClick={()=>void download(batch.operation_id)}><Download className="h-4 w-4"/>Download batch</button></div>)}</div></details>}
   </section>;
 };
