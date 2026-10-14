@@ -1,6 +1,6 @@
 import { readDataTable, mutateDataTable } from './cloudflareData';
 import { canonicalJson } from '../src/lib/confirmCsvSave';
-import { returnPackingInProgress, VARIANT_CORRECTION_PREFIX } from '../src/lib/returnSheets';
+import { returnPackingInProgress, VARIANT_CORRECTION_PREFIX, RETURN_PACKING_PREFIX } from '../src/lib/returnSheets';
 import { cancellationInProgress } from './r2OrderCancellation';
 
 type Row = Record<string, any>;
@@ -16,7 +16,19 @@ const orderAt = (rows: readonly Row[], id: string) => {
   if (matches.length !== 1) fail('Order not uniquely found.', 404);
   return matches[0];
 };
-const eligible = (order: Row) => {
+const packingLockActive = (order: Row, adminRows: readonly Row[]) => {
+  const lock = order.return_packing_lock;
+  if (!lock || (typeof lock === 'object' && !Array.isArray(lock) && Object.keys(lock).length === 0)) return false;
+  const operationId = String(lock.operation_id || '');
+  if (!operationId) return true;
+  const journal = adminRows.find(row => row.key === RETURN_PACKING_PREFIX + operationId)?.payload;
+  // Release only this order's proven, completed allocation. Unknown and active
+  // transactions stay locked, and their stock can never be allocated twice.
+  return !(journal?.phase === 'complete' && order.return_packing_operation === operationId &&
+    journal.batch_id === order.invoice_pack_batch_id && journal.order_ids?.includes(String(order.id)) &&
+    journal.plans?.some((plan: Row) => String(plan.id) === String(order.id) && String(plan.waybill) === String(order.waybill_number)));
+};
+const eligible = (order: Row, adminRows: readonly Row[]) => {
   if (!order.invoice_locked || !order.stock_allocated || !order.waybill_number || !order.invoice_number) fail('An existing invoice and allocated stock are required.');
   const blockedHistory: Record<string, unknown> = {
     order_status: !['Processing','Packed','Confirmed'].includes(order.order_status),
@@ -26,7 +38,7 @@ const eligible = (order: Row) => {
     return_sheet_id: order.return_sheet_id,
     return_tracking_waybill: order.return_tracking_waybill,
     cancel_stock_restore: order.cancel_stock_restore,
-    return_packing_lock: order.return_packing_lock,
+    return_packing_lock: packingLockActive(order, adminRows),
     fardar_csv_exported_at: order.fardar_csv_exported_at,
     // A matching waybill marker alone is not proof that a CSV was exported.
     // The timestamp is the export acknowledgement used by the dashboard.
@@ -88,11 +100,12 @@ export const correctInvoicedVariants = async (env: unknown, input: Row, actor: s
   const { order_id: id, operation_id: operationId } = input, key = VARIANT_CORRECTION_PREFIX + operationId;
   const before = await readDataTable(env, 'order_snapshots'), initial = orderAt(before, id).payload;
   const locks = await readDataTable(env, 'courier_waybills'), requestIdentity = canonicalJson(input);
+  const adminBefore = await readDataTable(env, 'admin_data_store');
   let journal = await mutateDataTable(env, 'admin_data_store', rows => {
     const saved = rows.find(row => row.key === key);
     if (saved) { if (saved.payload.request_identity !== requestIdentity) fail('The saved correction request changed.'); if (saved.payload.phase === 'failed') fail('This correction was not applied. Reload the order before making a new correction.'); return saved.payload; }
     if (returnPackingInProgress(rows) || cancellationInProgress(rows)) fail('A stock transaction is finishing. Retry its saved operation first.');
-    eligible(initial); owner(before, locks, initial);
+    eligible(initial, rows); owner(before, locks, initial);
     if (identity(initial) !== input.expected_identity || initial.waybill_number !== input.waybill_number) fail('The order changed. Reload its current colors first.');
     const products = rows.find(row => row.key === KEY)?.payload?.products;
     if (!Array.isArray(products)) fail('The stock catalog is unavailable.');
@@ -108,7 +121,7 @@ export const correctInvoicedVariants = async (env: unknown, input: Row, actor: s
     await mutateDataTable(env, 'order_snapshots', rows => {
       const row = orderAt(rows, id), order = row.payload;
       if (order.variant_correction?.operation_id === operationId || order.variant_correction_lock === operationId) return;
-      eligible(order); owner(rows, locks, order);
+      eligible(order, adminBefore); owner(rows, locks, order);
       if (identity(order) !== journal.expected_identity) fail('The order changed before the correction started.');
       row.payload = { ...order, variant_correction_lock: operationId }; row.updated_at = new Date().toISOString();
     });
@@ -147,7 +160,7 @@ export const correctInvoicedVariants = async (env: unknown, input: Row, actor: s
           previous_batch_id: journal.previous_batch_id, previous_invoice_generated_at: existing.invoice_generated_at, batch_id: journal.batch_id },
         notes: [existing.notes, 'Invoice colors corrected: ' + journal.reason].filter(Boolean).join(' | ') };
       // The corrected parcel gets its own batch and keeps the same invoice number/waybill.
-      for (const field of ['variant_correction_lock','invoice_pack_downloaded_at','invoice_pack_downloaded_by','invoice_pack_download_set_date','invoice_pack_download_set_number']) delete updated[field];
+      for (const field of ['variant_correction_lock','return_packing_lock','invoice_pack_downloaded_at','invoice_pack_downloaded_by','invoice_pack_download_set_date','invoice_pack_download_set_number']) delete updated[field];
       row.payload = updated; row.updated_at = new Date().toISOString(); return updated;
     });
     await mutateDataTable(env, 'admin_data_store', rows => { const entry = rows.find(row => row.key === key)!; if (entry.payload.phase !== 'complete') { entry.payload.phase = 'complete'; entry.updated_at = new Date().toISOString(); } });
@@ -168,8 +181,9 @@ export const r2VariantCorrectionHandler = async (request: Request, env: unknown,
   try {
     if (request.method === 'GET') {
       const id = new URL(request.url).searchParams.get('order_id') || '', order = orderAt(await readDataTable(env, 'order_snapshots'), id).payload;
-      eligible(order);
-      const products = (await readDataTable(env, 'admin_data_store')).find(row => row.key === KEY)?.payload?.products || [];
+      const adminRows = await readDataTable(env, 'admin_data_store');
+      eligible(order, adminRows);
+      const products = adminRows.find(row => row.key === KEY)?.payload?.products || [];
       return json({ ok: true, order, expected_identity: identity(order), options: order.items.map((item: Row) => {
         const { product } = exactVariant(products, item, item.variant_id);
         return product.variants.map((variant: Row) => ({ id: variant.id, name: variant.option_value, sku: variant.sku, stock: variant.stock_quantity }));

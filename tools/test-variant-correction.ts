@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { configureCloudflareData, dataBucket, importRecovery, readDataTable, mutateDataTable } from '../worker/cloudflareData';
 import { withR2DataFallback } from '../worker/r2RecoveryFallback';
+import { RETURN_PACKING_PREFIX } from '../src/lib/returnSheets';
 import { returnPackingCsv } from '../src/lib/returnExports';
 import { runAuthorizedOrder659Correction, ORDER659_CORRECTION_OPERATION } from '../worker/authorizedOrder659Correction';
 
@@ -25,7 +26,7 @@ const setup = async () => {
     sku: 'R0008-' + id.toUpperCase(), product_name: 'Lunch Bag', variant_id: id, variant_name: variants.find(v => v.id === id)!.option_value,
     quantity: 1, unit_price: 900, buying_price: 500, subtotal: 900 }));
   const order = { id: 'order-659', order_number: 'FB-000659', customer_name: 'Synthetic fixture', created_at: '2026-10-14T00:29:27Z',
-    order_status: 'Processing', return_status: 'None', call_center_status: 'Confirmed', stock_allocated: true, stock_status: 'Allocated', stock_allocated_at: '2026-10-14T14:21:21Z',
+    order_status: 'Processing', return_status: 'None', return_packing_lock: {}, call_center_status: 'Confirmed', stock_allocated: true, stock_status: 'Allocated', stock_allocated_at: '2026-10-14T14:21:21Z',
     waybill_number: '18160741', fardar_csv_exported_waybill: '18160741', invoice_number: 'INV-FB-000659', invoice_locked: true, invoice_generated_at: '2026-10-14T14:21:33Z',
     invoice_pack_batch_id: 'PACK-SHEET-fixture', invoice_pack_downloaded_at: '2026-10-14T14:22:00Z', subtotal: 2700, total_amount: 2450,
     special_offer_discount: 500, delivery_fee: 250, payment_method: 'COD', items, sheet_confirm_import: { operation_id: 'sheet-fixture' },
@@ -108,6 +109,25 @@ assert.equal((await exported.request('/api/orders/variant-correction?order_id=or
 const mismatchedExport = await setup();
 await mutateDataTable(mismatchedExport.env, 'order_snapshots', rows => { rows.find(row => row.order_id === 'order-659')!.payload.fardar_csv_exported_waybill = '18169999'; });
 assert.equal((await mismatchedExport.request('/api/orders/variant-correction?order_id=order-659')).status, 409, 'A mismatched export waybill remains blocked');
+const completedPacking = await setup(), oldOperation = 'completed-original-packing';
+await mutateDataTable(completedPacking.env, 'order_snapshots', rows => {
+  Object.assign(rows.find(row => row.order_id === 'order-659')!.payload, {return_packing_lock: {operation_id: oldOperation}, return_packing_operation: oldOperation});
+});
+await mutateDataTable(completedPacking.env, 'admin_data_store', rows => {
+  rows.push({key: RETURN_PACKING_PREFIX + oldOperation, payload: {phase: 'complete', operation_id: oldOperation, batch_id: completedPacking.order.invoice_pack_batch_id,
+    order_ids: ['order-659'], plans: [{id:'order-659', waybill:'18160741'}]}});
+});
+const completedPackingInput = await completedPacking.input();
+assert.equal((await completedPacking.post(completedPackingInput)).status, 200, 'This order\'s completed packing allocation allows the requested color correction');
+assert.deepEqual(await completedPacking.stock(), [6,6,4]);
+assert.equal((await completedPacking.current()).return_packing_lock, undefined, 'Remove the proven-complete obsolete lock after correction');
+const unknownPacking = await setup();
+await mutateDataTable(unknownPacking.env, 'order_snapshots', rows => {rows.find(row => row.order_id === 'order-659')!.payload.return_packing_lock = {operation_id:'unknown-packing'};});
+assert.equal((await unknownPacking.request('/api/orders/variant-correction?order_id=order-659')).status, 409, 'Unknown packing locks remain protected');
+const activePacking = await setup();
+await mutateDataTable(activePacking.env, 'order_snapshots', rows => {Object.assign(rows.find(row => row.order_id === 'order-659')!.payload, {return_packing_lock:{operation_id:oldOperation}, return_packing_operation:oldOperation});});
+await mutateDataTable(activePacking.env, 'admin_data_store', rows => {rows.push({key:RETURN_PACKING_PREFIX+oldOperation,payload:{phase:'stock_saved',batch_id:activePacking.order.invoice_pack_batch_id,order_ids:['order-659'],plans:[{id:'order-659',waybill:'18160741'}]}});});
+assert.equal((await activePacking.request('/api/orders/variant-correction?order_id=order-659')).status, 409, 'An incomplete stock transaction remains blocked');
 const maintenance = await setup();
 assert.equal((await runAuthorizedOrder659Correction(maintenance.env)).complete, true);
 assert.deepEqual(await maintenance.stock(), [6,6,4]);
