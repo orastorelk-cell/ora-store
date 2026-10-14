@@ -19,7 +19,7 @@ const orderAt = (rows: readonly Row[], id: string) => {
 const eligible = (order: Row) => {
   if (!order.invoice_locked || !order.stock_allocated || !order.waybill_number || !order.invoice_number) fail('An existing invoice and allocated stock are required.');
   if (!['Processing','Packed','Confirmed'].includes(order.order_status) || order.dispatch_status === 'Handed Over' || order.cod_payment_received ||
-    order.return_status || order.return_sheet_id || order.return_tracking_waybill || order.cancel_stock_restore || order.return_packing_lock ||
+    (order.return_status && order.return_status !== 'None') || order.return_sheet_id || order.return_tracking_waybill || order.cancel_stock_restore || order.return_packing_lock ||
     order.fardar_csv_exported_at || order.fardar_csv_exported_waybill) fail('This parcel has courier/export, payment, cancellation or return history. Its colors cannot be changed here.');
   if (!Array.isArray(order.items) || !order.items.length || order.items.length > 30 ||
     order.items.some((item: Row) => item.product_type === 'bundle' || !item.variant_id || !Number.isSafeInteger(item.quantity) || item.quantity < 1))

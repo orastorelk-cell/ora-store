@@ -25,7 +25,7 @@ const setup = async () => {
     sku: 'R0008-' + id.toUpperCase(), product_name: 'Lunch Bag', variant_id: id, variant_name: variants.find(v => v.id === id)!.option_value,
     quantity: 1, unit_price: 900, buying_price: 500, subtotal: 900 }));
   const order = { id: 'order-659', order_number: 'FB-000659', customer_name: 'Synthetic fixture', created_at: '2026-10-14T00:29:27Z',
-    order_status: 'Processing', call_center_status: 'Confirmed', stock_allocated: true, stock_status: 'Allocated', stock_allocated_at: '2026-10-14T14:21:21Z',
+    order_status: 'Processing', return_status: 'None', call_center_status: 'Confirmed', stock_allocated: true, stock_status: 'Allocated', stock_allocated_at: '2026-10-14T14:21:21Z',
     waybill_number: '18160741', invoice_number: 'INV-FB-000659', invoice_locked: true, invoice_generated_at: '2026-10-14T14:21:33Z',
     invoice_pack_batch_id: 'PACK-SHEET-fixture', invoice_pack_downloaded_at: '2026-10-14T14:22:00Z', subtotal: 2700, total_amount: 2450,
     special_offer_discount: 500, delivery_fee: 250, payment_method: 'COD', items, sheet_confirm_import: { operation_id: 'sheet-fixture' },
@@ -97,6 +97,11 @@ assert.equal((await shortage.state()).return_inventory.allocation_paused, false)
 const dispatched = await setup();
 await mutateDataTable(dispatched.env, 'order_snapshots', rows => { rows.find(row => row.order_id === 'order-659')!.payload.dispatch_status = 'Handed Over'; });
 assert.equal((await dispatched.request('/api/orders/variant-correction?order_id=order-659')).status, 409);
+for (const returnStatus of ['Pending Verification','Verified','Issue Found']) {
+  const returned = await setup();
+  await mutateDataTable(returned.env, 'order_snapshots', rows => { rows.find(row => row.order_id === 'order-659')!.payload.return_status = returnStatus; });
+  assert.equal((await returned.request('/api/orders/variant-correction?order_id=order-659')).status, 409, 'Actual return history remains blocked: ' + returnStatus);
+}
 const maintenance = await setup();
 assert.equal((await runAuthorizedOrder659Correction(maintenance.env)).complete, true);
 assert.deepEqual(await maintenance.stock(), [6,6,4]);
