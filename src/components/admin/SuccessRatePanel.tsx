@@ -26,8 +26,8 @@ export const SuccessRatePanel: React.FC<SuccessRatePanelProps> = ({ orders, prod
   const [sortBy, setSortBy] = useState<'orders' | 'success' | 'cancel'>('orders');
 
   const rows = useMemo<SuccessRow[]>(() => {
-    const productById = new Map(products.map((product) => [String(product.id), product] as const));
-    const productBySku = new Map(products.map((product) => [keyOf(product.sku), product] as const));
+    const productById = new Map<string, Product>(products.map((product) => [String(product.id), product] as const));
+    const productBySku = new Map<string, Product>(products.map((product) => [keyOf(product.sku), product] as const));
 
     type Working = {
       code: string;

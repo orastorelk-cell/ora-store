@@ -1,4 +1,6 @@
 import { returnOrderFilter } from '../../lib/returnSheets';
+import { OrderVariantCorrection } from './OrderVariantCorrection';
+import { downloadA5Invoices } from '../../lib/a5InvoiceDownload';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   LayoutDashboard,
@@ -4503,6 +4505,7 @@ Suitable For:
                       </button>
                     )}
 
+                    {adminUser?.role === 'admin' && order.invoice_locked && order.stock_allocated && order.dispatch_status !== 'Handed Over' && ['Processing','Packed','Confirmed'].includes(order.order_status) && !order.fardar_csv_exported_at && order.items.every(item => Boolean(item.variant_id) && item.product_type !== 'bundle') && <OrderVariantCorrection orderId={order.id} />}
                     {order.order_status !== 'Cancelled' && (
                       <button
                         type="button"
@@ -5059,7 +5062,7 @@ Suitable For:
                   <button type="button" onClick={()=>void generateOrderInvoicePDF(redispatchOrder,settings)} className="rounded-lg bg-blue-600 px-3 py-2 text-[10px] font-black text-white">
                     <Printer className="mr-1 inline h-3.5 w-3.5"/> Download A6
                   </button>
-                  <button type="button" onClick={()=>void generateA5SingleInvoicesPDF([redispatchOrder],settings,`O-RA_Redispatch_A5_${redispatchOrder.order_number}.pdf`)} className="rounded-lg bg-teal-600 px-3 py-2 text-[10px] font-black text-white">
+                  <button type="button" onClick={()=>void downloadA5Invoices([redispatchOrder],settings,`O-RA_Redispatch_A5_${redispatchOrder.order_number}.pdf`)} className="rounded-lg bg-teal-600 px-3 py-2 text-[10px] font-black text-white">
                     <Printer className="mr-1 inline h-3.5 w-3.5"/> Download A5
                   </button>
                   <button type="button" onClick={()=>void downloadFardarUploadCsv([redispatchOrder],'redispatch-'+redispatchOrder.order_number)} className="rounded-lg bg-emerald-600 px-3 py-2 text-[10px] font-black text-white">

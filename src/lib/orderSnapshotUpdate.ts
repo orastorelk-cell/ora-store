@@ -12,6 +12,7 @@ export const prepareOrderSnapshotUpdate = (existing: Row | undefined, incoming: 
       String(lock.assigned_order_number) !== String(order.order_number || ''))
     throw new OrderUpdateConflict('Waybill ' + requestedWaybill + ' is already locked/used by ' + String(lock.assigned_order_number) + '.');
   if (existing) {
+    if (existing.variant_correction_lock) return { order: existing, waybillPreserved: true };
     // Courier imports own these amounts. A stale order editor or browser mirror
     // cannot erase a confirmed invoice fee or turn a return back into a delivery.
     for (const field of ['fardar_delivery_fee','fardar_return_fee','fardar_return_fee_recorded_at','fardar_invoice_status','fardar_invoice_waybill'])
@@ -33,6 +34,13 @@ export const prepareOrderSnapshotUpdate = (existing: Row | undefined, incoming: 
       }
       if(!['Shipped','Delivered'].includes(String(order.order_status))||['Cancelled','Delivered'].includes(String(existing.order_status)))order.order_status=existing.order_status;
     }else delete order.sheet_confirm_import;
+    if (existing.variant_correction) {
+      for (const field of ['variant_correction','items','invoice_confirm_snapshot','product_change_history','notes',
+        'invoice_pack_downloaded_at','invoice_pack_downloaded_by','invoice_pack_download_set_date','invoice_pack_download_set_number']) {
+        if (existing[field] !== undefined) order[field] = existing[field]; else delete order[field];
+      }
+    } else delete order.variant_correction;
+    delete order.variant_correction_lock;
     delete order.sheet_confirm_hold;
     if(existing.return_packing_lock?.operation_id)return {order:existing,waybillPreserved:true};
     if(existing.return_packing_operation){

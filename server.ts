@@ -3541,6 +3541,8 @@ const assistantSafeOrder = (order:any) => {
     tracking_status: order.tracking_status,
     waybill_number: order.waybill_number,
     invoice_generated: Boolean(order.invoice_locked || order.invoice_generated_at),
+    invoice_number: order.invoice_number,
+    invoice_pack_batch_id: order.invoice_pack_batch_id,
     packing_pdf_downloaded: Boolean(order.invoice_pack_downloaded_at),
     packing_pdf_downloaded_at: order.invoice_pack_downloaded_at ? String(order.invoice_pack_downloaded_at) : undefined,
     subtotal: Number(order.subtotal || 0),

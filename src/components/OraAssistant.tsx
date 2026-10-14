@@ -28,6 +28,7 @@ type VerifiedOrder = {
   advance_percentage?: number;
   receipt_received?: boolean;
   delivery_status?: string;
+  dispatch_status?: string;
   tracking_status?: string;
   waybill_number?: string;
   invoice_generated?: boolean;
