@@ -18,9 +18,22 @@ const orderAt = (rows: readonly Row[], id: string) => {
 };
 const eligible = (order: Row) => {
   if (!order.invoice_locked || !order.stock_allocated || !order.waybill_number || !order.invoice_number) fail('An existing invoice and allocated stock are required.');
-  if (!['Processing','Packed','Confirmed'].includes(order.order_status) || order.dispatch_status === 'Handed Over' || order.cod_payment_received ||
-    (order.return_status && order.return_status !== 'None') || order.return_sheet_id || order.return_tracking_waybill || order.cancel_stock_restore || order.return_packing_lock ||
-    order.fardar_csv_exported_at || order.fardar_csv_exported_waybill) fail('This parcel has courier/export, payment, cancellation or return history. Its colors cannot be changed here.');
+  const blockedHistory: Record<string, unknown> = {
+    order_status: !['Processing','Packed','Confirmed'].includes(order.order_status),
+    dispatch_status: order.dispatch_status === 'Handed Over',
+    cod_payment_received: order.cod_payment_received,
+    return_status: order.return_status && order.return_status !== 'None',
+    return_sheet_id: order.return_sheet_id,
+    return_tracking_waybill: order.return_tracking_waybill,
+    cancel_stock_restore: order.cancel_stock_restore,
+    return_packing_lock: order.return_packing_lock,
+    fardar_csv_exported_at: order.fardar_csv_exported_at,
+    // A matching waybill marker alone is not proof that a CSV was exported.
+    // The timestamp is the export acknowledgement used by the dashboard.
+    fardar_csv_exported_waybill: order.fardar_csv_exported_waybill && String(order.fardar_csv_exported_waybill) !== String(order.waybill_number),
+  };
+  const blocked = Object.keys(blockedHistory).filter(key => Boolean(blockedHistory[key]));
+  if (blocked.length) fail('This parcel has courier/export, payment, cancellation or return history. Its colors cannot be changed here. (' + blocked.join(', ') + ')');
   if (!Array.isArray(order.items) || !order.items.length || order.items.length > 30 ||
     order.items.some((item: Row) => item.product_type === 'bundle' || !item.variant_id || !Number.isSafeInteger(item.quantity) || item.quantity < 1))
     fail('This correction supports exact variant items with unchanged quantities.');

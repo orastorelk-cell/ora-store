@@ -26,7 +26,7 @@ const setup = async () => {
     quantity: 1, unit_price: 900, buying_price: 500, subtotal: 900 }));
   const order = { id: 'order-659', order_number: 'FB-000659', customer_name: 'Synthetic fixture', created_at: '2026-10-14T00:29:27Z',
     order_status: 'Processing', return_status: 'None', call_center_status: 'Confirmed', stock_allocated: true, stock_status: 'Allocated', stock_allocated_at: '2026-10-14T14:21:21Z',
-    waybill_number: '18160741', invoice_number: 'INV-FB-000659', invoice_locked: true, invoice_generated_at: '2026-10-14T14:21:33Z',
+    waybill_number: '18160741', fardar_csv_exported_waybill: '18160741', invoice_number: 'INV-FB-000659', invoice_locked: true, invoice_generated_at: '2026-10-14T14:21:33Z',
     invoice_pack_batch_id: 'PACK-SHEET-fixture', invoice_pack_downloaded_at: '2026-10-14T14:22:00Z', subtotal: 2700, total_amount: 2450,
     special_offer_discount: 500, delivery_fee: 250, payment_method: 'COD', items, sheet_confirm_import: { operation_id: 'sheet-fixture' },
     invoice_confirm_snapshot: { final_total: 2450, normal_total: 2700, discount: 500, delivery_fee: 250, items: items.map(item => ({ item_code: item.sku, variant: item.variant_name, qty: 1, unit_price: 900, line_total: 900 })) } };
@@ -102,6 +102,12 @@ for (const returnStatus of ['Pending Verification','Verified','Issue Found']) {
   await mutateDataTable(returned.env, 'order_snapshots', rows => { rows.find(row => row.order_id === 'order-659')!.payload.return_status = returnStatus; });
   assert.equal((await returned.request('/api/orders/variant-correction?order_id=order-659')).status, 409, 'Actual return history remains blocked: ' + returnStatus);
 }
+const exported = await setup();
+await mutateDataTable(exported.env, 'order_snapshots', rows => { rows.find(row => row.order_id === 'order-659')!.payload.fardar_csv_exported_at = '2026-10-14T14:25:00Z'; });
+assert.equal((await exported.request('/api/orders/variant-correction?order_id=order-659')).status, 409, 'An acknowledged CSV export remains blocked');
+const mismatchedExport = await setup();
+await mutateDataTable(mismatchedExport.env, 'order_snapshots', rows => { rows.find(row => row.order_id === 'order-659')!.payload.fardar_csv_exported_waybill = '18169999'; });
+assert.equal((await mismatchedExport.request('/api/orders/variant-correction?order_id=order-659')).status, 409, 'A mismatched export waybill remains blocked');
 const maintenance = await setup();
 assert.equal((await runAuthorizedOrder659Correction(maintenance.env)).complete, true);
 assert.deepEqual(await maintenance.stock(), [6,6,4]);
