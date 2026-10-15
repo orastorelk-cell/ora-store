@@ -43,7 +43,7 @@ await importRecovery(dataBucket(env)!,{format:'ora-r2-recovery-v1',orders,
     {id:'mat',sku:'MAT',name_en:'Mat',stock_quantity:10},{id:'variant',sku:'VARIANT',name_en:'Colour item',product_type:'variant',stock_quantity:7,variants:[{id:'blue',sku:'BLUE',option_value:'Blue',stock_quantity:2},{id:'red',sku:'RED',option_value:'Red',stock_quantity:5}]},
     {id:'a',sku:'A',name_en:'Component A',stock_quantity:0},{id:'b',sku:'B',name_en:'Component B',stock_quantity:0},{id:'bundle',sku:'BUNDLE',product_type:'bundle',stock_quantity:0},
   ]}}],courier_waybills:orders.map(o=>({waybill_number:o.waybill_number,status:'Used',assigned_order_number:o.order_number})),tables:{}});
-const active=(await activeData(dataBucket(env)!))!, adminKey=active.prefix+'admin_data_store.json', orderKey=active.prefix+'order_snapshots.json';
+const active=(await activeData(dataBucket(env)!))!, adminKey=active.prefix+'admin_data_store.json', orderKey=active.prefix+'order-changes-v1.json';
 const token=(id:string)=>{const payload=Buffer.from(JSON.stringify({sub:id,exp:Date.now()+3600000})).toString('base64url');return payload+'.'+crypto.createHmac('sha256',env.STAFF_SESSION_SECRET).update(payload).digest('base64url');};
 const call=async(path:string,method='GET',body?:any,staff='admin')=>{
   const response=await withR2DataFallback(new Request('https://fixture'+path,{method,headers:{authorization:'Bearer '+token(staff),'content-type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})}),env,{},async()=>new Response('Unexpected Node bridge',{status:599}));

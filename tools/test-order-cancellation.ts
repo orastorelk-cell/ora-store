@@ -40,7 +40,7 @@ await importRecovery(bucket,{format:'ora-r2-recovery-v1',orders:originals,
     {id:'component',sku:'SYN-COMPONENT',name_en:'Synthetic Component',stock_quantity:0},
     {id:'bundle',sku:'SYN-BUNDLE',product_type:'bundle',stock_quantity:0,bundle_components:[{product_id:'component',quantity_per_bundle:2}]},
   ]}}],courier_waybills:originals.map(o=>({waybill_number:o.waybill_number,status:'Assigned',assigned_order_id:o.id,assigned_order_number:o.id==='conflict-order'?'OTHER-ORDER':o.order_number})),tables:{}});
-const active=(await activeData(bucket))!,adminKey=active.prefix+'admin_data_store.json',orderKey=active.prefix+'order_snapshots.json';
+const active=(await activeData(bucket))!,adminKey=active.prefix+'admin_data_store.json',orderKey=active.prefix+'order-changes-v1.json';
 const token=(id:string)=>{const payload=Buffer.from(JSON.stringify({sub:id,exp:Date.now()+3_600_000})).toString('base64url');return payload+'.'+crypto.createHmac('sha256',env.STAFF_SESSION_SECRET).update(payload).digest('base64url');};
 const call=async(path:string,method='GET',body?:any,auth=token(admin))=>{
   const response=await withR2DataFallback(new Request('https://test'+path,{method,headers:{authorization:'Bearer '+auth,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env,{},async()=>new Response('Unexpected Node bridge',{status:599}));

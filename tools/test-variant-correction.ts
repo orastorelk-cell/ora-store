@@ -13,7 +13,7 @@ class MemoryBucket {
     const current = this.objects.get(key);
     if (options.onlyIf?.etagMatches && options.onlyIf.etagMatches !== current?.etag) return null;
     if (options.onlyIf?.etagDoesNotMatch === '*' && current) return null;
-    if (key.endsWith('/order_snapshots.json')) { this.orderWrites++; if (this.failFinalOrder && this.orderWrites >= 3) throw new Error('Simulated lost order save after stock commit'); }
+    if (key.endsWith('/order-changes-v1.json')) { this.orderWrites++; if (this.failFinalOrder && this.orderWrites >= 2) throw new Error('Simulated lost order save after stock commit'); }
     const row = { value, etag: String(++this.revision) }; this.objects.set(key, row); return { etag: row.etag };
   }
 }

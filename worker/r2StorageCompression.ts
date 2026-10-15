@@ -16,7 +16,9 @@ export const compactR2StorageOnce=async(env:any)=>{
   if(progress.stage==='done')return;
   if(progress.stage==='live'){
     if(!Number.isInteger(progress.next_table)||progress.next_table<0||progress.next_table>=TABLES.length)throw new Error('Storage compression checkpoint is invalid.');
-    if(await bucket.compact(active.prefix+TABLES[progress.next_table]+'.json')==='conflict')return;
+    const table=TABLES[progress.next_table];
+    // Journal checkpoints keep the recovered history as an immutable base.
+    if(!(table==='order_snapshots'&&await bucket.get(active.prefix+'order-changes-v1.json'))&&await bucket.compact(active.prefix+table+'.json')==='conflict')return;
     progress.next_table++;
     if(progress.next_table>=TABLES.length)progress.stage='backups';
   }else if(progress.stage==='backups'){

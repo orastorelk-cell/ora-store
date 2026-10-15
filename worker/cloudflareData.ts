@@ -5,6 +5,7 @@ import { Buffer } from 'node:buffer';
 import { prepareOrderSnapshotUpdate } from '../src/lib/orderSnapshotUpdate';
 import { constants as zlibConstants, gzip, gunzip } from 'node:zlib';
 import { pauseR2Conflict, retryR2Operation } from './r2Retry';
+import { readOrderJournal, readOrderJournalWire, writeOrderJournal } from './r2OrderJournal';
 type Row = Record<string, any>;
 export type DataBucket = {
   get(key: string): Promise<{ text(): Promise<string>; etag: string; customMetadata?: Record<string,string> } | null>;
@@ -217,7 +218,8 @@ export const importRecovery = async (bucket: DataBucket, bundle: any) => {
 const tableState = async (bucket: DataBucket, prefix: string, table: string) => {
   const state = await parsedObject(bucket,prefix+table+'.json');
   if (!state || !Array.isArray(state.value)) throw new DataError('Cloudflare table is missing or invalid: '+table);
-  return {rows:state.value as Row[],etag:state.object.etag,text:state.text};
+  if(table==='order_snapshots')return readOrderJournal(bucket,prefix,state,{read:key=>parsedObject(bucket,key),cache:(key,etag,text,value)=>cacheSaved(bucket,key,etag,text,value)});
+  return {rows:state.value as Row[],etag:state.object.etag,text:state.text,journal:undefined,customMetadata:state.object.customMetadata};
 };
 const preserveHourlyBackup = async (bucket:DataBucket,table:string,rows:Row[],serialized?:string) => {
   // Seven days of hourly slots, bounded independently of traffic and order count.
@@ -237,6 +239,11 @@ const mutateTable = async <T>(bucket:DataBucket,prefix:string,table:string,chang
     // A failed CAS or write must never modify a cached successful read.
     const rows=JSON.parse(before) as Row[];
     const result = change(rows);
+    if(state.journal){
+      if(await writeOrderJournal(bucket,prefix,state as Awaited<ReturnType<typeof readOrderJournal>>,rows))return result;
+      if(attempt<7)await pauseR2Conflict(attempt);
+      continue;
+    }
     const after=JSON.stringify(rows);
     if(before===after)return result;
     if (table !== '__sequences') await preserveHourlyBackup(bucket,table,state.rows,before);
@@ -257,10 +264,18 @@ export const readDataTable=async(env:unknown,table:string):Promise<Row[]>=>{
 };
 // Ship already-serialized snapshots to the browser instead of parsing and
 // serializing the full order history inside the Free Worker's CPU budget.
-export const readDataTableWire=async(env:unknown,table:string)=>{
+export const readDataTableWire=async(env:unknown,table:string,journalWire=false):Promise<{etag:string;customMetadata?:Record<string,string>;text:()=>Promise<string>;changes?:string;count?:number}>=>{
   if(!primaryKeys[table])throw new DataError('Unknown Cloudflare table.',400);
   const bucket=dataBucket(env);if(!bucket)throw new DataError('Cloudflare R2 binding is unavailable.');
   const active=await activeData(bucket);if(!active)throw new DataError('Cloudflare recovery is required.');
+  if(table==='order_snapshots'&&journalWire){
+    const object=await bucket.get(active.prefix+table+'.json');if(!object)throw new DataError('Cloudflare order history is missing.');
+    return readOrderJournalWire(bucket,active.prefix,object,{read:key=>parsedObject(bucket,key),cache:(key,etag,text,value)=>cacheSaved(bucket,key,etag,text,value)});
+  }
+  if(table==='order_snapshots'&&await bucket.get(active.prefix+'order-changes-v1.json')){
+    const state=await tableState(bucket,active.prefix,table);
+    return {etag:state.etag,customMetadata:state.customMetadata,text:async()=>state.text};
+  }
   const object=await bucket.get(active.prefix+table+'.json');
   if(!object)throw new DataError('Cloudflare table is missing: '+table);
   const cached=parsedCaches.get(bucket)?.get(active.prefix+table+'.json');
@@ -283,6 +298,11 @@ export const replaceDataTable=async<T>(env:unknown,table:string,change:(rows:rea
   for(let attempt=0;attempt<8;attempt++){
     const state=await tableState(bucket,active.prefix,table),next=change(state.rows);
     if(next.rows===state.rows)return next.result;
+    if(state.journal){
+      if(await writeOrderJournal(bucket,active.prefix,state as Awaited<ReturnType<typeof readOrderJournal>>,next.rows))return next.result;
+      if(attempt<7)await pauseR2Conflict(attempt);
+      continue;
+    }
     const after=JSON.stringify(next.rows);
     if(after===state.text)return next.result;
     await preserveHourlyBackup(bucket,table,state.rows,state.text);

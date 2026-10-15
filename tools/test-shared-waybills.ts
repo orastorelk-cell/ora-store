@@ -33,7 +33,7 @@ assert.equal((await request('/api/courier/waybills','GET',undefined,'invalid')).
 const wire:any=await (await request('/api/orders?format=snapshots')).json();assert.equal(wire.snapshots.length,7);assert.equal(wire.snapshots[4].payload.id,'431');
 const report:any=await (await request('/api/orders/fulfilment-status?orders=FB-431,FB-435,FB-432')).json();assert.equal(report.pool.available,2);assert.deepEqual(report.orders.map((o:any)=>o.reason),['Waiting for waybill','Waiting for waybill','Waiting for stock']);
 const manifest=(await activeData(dataBucket(env)!))!;
-raw.failKey=manifest.prefix+'order_snapshots.json';
+raw.failKey=manifest.prefix+'order-changes-v1.json';
 await assert.rejects(r2AssignWaybill(env,'431'),/interrupted order commit/);
 const reservation=(await readDataTable(env,'courier_waybills')).find(r=>r.assigned_order_number==='FB-431')!;
 assert.equal(reservation.waybill_number,'18160613');

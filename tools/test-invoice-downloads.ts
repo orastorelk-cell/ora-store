@@ -44,7 +44,7 @@ const orders = Array.from({ length: 511 }, (_, index) => ({ id: 'order-' + index
 await importRecovery(dataBucket(env)!, { format: 'ora-r2-recovery-v1', orders,
   admin_users: [{ id: 'admin-id', username: 'admin', role: 'admin', is_active: true }],
   admin_data_store: [{ key: 'storefront-state-v1', payload: { version: 1, products: [], categories: [], settings: {} } }], courier_waybills: [] });
-const active = (await activeData(dataBucket(env)!))!, orderKey = active.prefix + 'order_snapshots.json';
+const active = (await activeData(dataBucket(env)!))!, orderKey = active.prefix + 'order-changes-v1.json';
 const payload = Buffer.from(JSON.stringify({ sub: 'admin-id', role: 'admin', exp: Date.now() + 60000 })).toString('base64url');
 const token = payload + '.' + crypto.createHmac('sha256', secret).update(payload).digest('base64url');
 const post = (body: any, auth = token) => withR2DataFallback(new Request('https://test/api/orders/invoice-download-status', {

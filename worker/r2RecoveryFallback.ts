@@ -121,9 +121,10 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
       const wire=await readDataTableWire(env,'order_snapshots'),meta=wire.customMetadata||{};
       if(/^\d+$/.test(meta.oraCount||'')&&Number.isFinite(Date.parse(meta.oraUpdatedAt||'')))return json({count:Number(meta.oraCount),updated_at:meta.oraUpdatedAt,revision:wire.etag});
     }else if(new URL(request.url).searchParams.get('format')==='snapshots'){
-      const wire=await readDataTableWire(env,'order_snapshots'),text=await wire.text();
+      const wire=await readDataTableWire(env,'order_snapshots',request.headers.get('x-ora-order-journal')==='1'),text=await wire.text();
       if(!text.startsWith('[')||!text.endsWith(']'))throw new Error('Invalid Cloudflare order data.');
-      return new Response('{"revision":'+JSON.stringify(wire.etag)+',"snapshots":'+text+'}',{headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-ora-storage':'cloudflare-r2'}});
+      const changes=wire.changes===undefined?'':',"snapshot_changes":'+wire.changes+(wire.count===undefined?'':',"snapshot_count":'+wire.count);
+      return new Response('{"revision":'+JSON.stringify(wire.etag)+',"snapshots":'+text+changes+'}',{headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-ora-storage':'cloudflare-r2'}});
     }
     const rows=await readDataTable(env,'order_snapshots');
     if(path.endsWith('/version')){
@@ -206,7 +207,7 @@ const recoveryHandler=async(request:Request,envValue:unknown):Promise<Response|n
     if(!active)return json({ok:true,active:false});
     const users=JSON.parse(await (await bucket.get(active.prefix+'admin_users.json'))!.text());
     if(!users.some((u:any)=>String(u.id)===session.sub && u.is_active!==false))return json({error:'Account is disabled or missing.'},401);
-    const orders=JSON.parse(await (await bucket.get(active.prefix+'order_snapshots.json'))!.text());
+    const orders=await readDataTable(envValue,'order_snapshots');
     return json({ok:true,active:true,mode:'cloudflare-r2',orders:orders.length,restored_at:active.restored_at,counts:active.counts});
   }
 

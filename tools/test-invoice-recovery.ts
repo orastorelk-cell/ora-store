@@ -15,13 +15,13 @@ import { staffJsonRequest } from '../src/lib/staffRequest';
 import { markR2SheetSynced } from '../worker/r2SheetSyncStatus';
 
 class MemoryBucket{
-  objects=new Map<string,{value:string;etag:string;customMetadata:any}>();revision=0;bodyReads=0;failKey='';failAfter=false;
+  objects=new Map<string,{value:string;etag:string;customMetadata:any}>();revision=0;orderCommits=0;bodyReads=0;failKey='';failAfter=false;
   async get(key:string){const object=this.objects.get(key);await Promise.resolve();return object?{etag:object.etag,customMetadata:object.customMetadata,text:async()=>{this.bodyReads++;return object.value;}}:null;}
   async put(key:string,value:string,options:any={}){
     const old=this.objects.get(key);if(options.onlyIf?.etagMatches&&options.onlyIf.etagMatches!==old?.etag)return null;
     if(options.onlyIf?.etagDoesNotMatch==='*'&&old)return null;
     const fail=key===this.failKey;if(fail&&!this.failAfter){this.failKey='';throw new Error('Synthetic storage failure before commit');}
-    const next={value,etag:String(++this.revision),customMetadata:options.customMetadata};this.objects.set(key,next);
+    const next={value,etag:String(++this.revision),customMetadata:options.customMetadata};this.objects.set(key,next);if(key.endsWith('/order-changes-v1.json'))this.orderCommits++;
     if(fail){this.failKey='';throw new Error('Synthetic response lost after commit');}return {etag:next.etag};
   }
 }
@@ -69,17 +69,17 @@ assert.equal((await f.call(invoiceRecoveryPath,{operation_id:id},'viewer')).stat
 assert.equal((await f.call(invoiceRecoveryPath,{operation_id:'invalid'})).status,400);
 const prepared=await f.request(invoiceRecoveryPath,{operation_id:id});assert.equal(prepared.phase,'prepared');assert.equal(await f.currentStock(),10);
 const protectedScan=await f.call('/api/returns/scan',{waybill:'WB-SHIPPED'});assert.equal(protectedScan.status,409,'A staged stock operation protects concurrent return receipt writes');
-f.raw.failKey=f.active.prefix+'order_snapshots.json';f.raw.failAfter=true;
+f.raw.failKey=f.active.prefix+'order-changes-v1.json';f.raw.failAfter=true;
 await assert.rejects(f.request(invoiceRecoveryPath,{operation_id:id,advance:true}),/Synthetic response lost/);
 assert.equal(await f.currentStock(),10,'An order-lock acknowledgment loss cannot deduct stock early');
 const savedStock=await f.request(invoiceRecoveryPath,{operation_id:id,advance:true});assert.equal(savedStock.phase,'stock_saved');assert.equal(await f.currentStock(),9);
-f.raw.failKey=f.active.prefix+'order_snapshots.json';f.raw.failAfter=true;
+f.raw.failKey=f.active.prefix+'order-changes-v1.json';f.raw.failAfter=true;
 await assert.rejects(f.request(invoiceRecoveryPath,{operation_id:id,advance:true}),/Synthetic response lost/);
 const finished=await finishInvoiceRecovery(id,f.request);assert.equal(finished.orders.length,3);assert(finished.orders.every(invoiceComplete));assert.equal(await f.currentStock(),9);
 const old=await f.currentOrders();assert.deepEqual(old.find(order=>order.id==='printed'),printed);assert.deepEqual(old.find(order=>order.id==='shipped'),shipped);
 assert.equal(finished.orders.find((order:any)=>order.id==='partial').invoice_number,'INV-PARTIAL');
-const snapshots=f.raw.objects.get(f.active.prefix+'order_snapshots.json')!.etag;
-await finishInvoiceRecovery(id,f.request);assert.equal(f.raw.objects.get(f.active.prefix+'order_snapshots.json')!.etag,snapshots);assert.equal(await f.currentStock(),9);
+const snapshots=f.raw.objects.get(f.active.prefix+'order-changes-v1.json')!.etag;
+await finishInvoiceRecovery(id,f.request);assert.equal(f.raw.objects.get(f.active.prefix+'order-changes-v1.json')!.etag,snapshots);assert.equal(await f.currentStock(),9);
 await f.request(invoiceRecoveryPath+'/'+id+'/downloaded',{});await f.request(invoiceRecoveryPath+'/'+id+'/downloaded',{});
 assert.equal((await f.request(invoiceRecoveryPath+'/'+id)).orders.length,3);
 assert.equal((await f.request(invoiceRecoveryPath)).batches.length,1);
@@ -106,13 +106,13 @@ const many=await fixture(Array.from({length:121},(_,i)=>waiting('many-'+i)),150)
 let count=0,next=true;const seen=new Set<string>();
 while(next){const batch=await finishInvoiceRecovery(crypto.randomUUID(),many.request);assert(batch.orders.length<=50);batch.orders.forEach((order:any)=>{assert(!seen.has(order.id));seen.add(order.id);});count+=batch.orders.length;next=batch.skipped.limit>0;}
 assert.equal(count,121);assert.equal(await many.currentStock(),29);
-const writeStart=many.raw.revision;
+const writeStart=many.raw.orderCommits;
 const mirrored=await markR2SheetSynced(await many.currentOrders(),many.env,true);
-assert.equal(many.raw.revision-writeStart,1,'A large Sheet verification writes one table revision');
+assert.equal(many.raw.orderCommits-writeStart,1,'A large Sheet verification publishes one atomic table revision');
 assert(mirrored.every(order=>invoiceComplete(order)&&order.is_synced_google_sheets&&order.sheet_sync_verified_at));
-const verifiedVersion=many.raw.objects.get(many.active.prefix+'order_snapshots.json')!.etag;
+const verifiedVersion=many.raw.objects.get(many.active.prefix+'order-changes-v1.json')!.etag;
 await markR2SheetSynced(mirrored,many.env,true);
-assert.equal(many.raw.objects.get(many.active.prefix+'order_snapshots.json')!.etag,verifiedVersion,'A repeated Sheet acknowledgment does not rewrite orders');
+assert.equal(many.raw.objects.get(many.active.prefix+'order-changes-v1.json')!.etag,verifiedVersion,'A repeated Sheet acknowledgment does not rewrite orders');
 
 const conflict=await fixture([waiting('conflict')],5),conflictId=crypto.randomUUID();
 await conflict.request(invoiceRecoveryPath,{operation_id:conflictId});

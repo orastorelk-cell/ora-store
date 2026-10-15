@@ -11,7 +11,7 @@ class MemoryBucket {
   objects=new Map<string,{value:string;etag:string;customMetadata:any}>();revision=0;failWrites=false;
   async get(key:string){const object=this.objects.get(key);return object?{...object,text:async()=>object.value}:null;}
   async put(key:string,value:string,options:any={}){
-    if(this.failWrites&&key.endsWith('/order_snapshots.json'))throw new Error('503 synthetic write failure');
+    if(this.failWrites&&key.endsWith('/order-changes-v1.json'))throw new Error('503 synthetic write failure');
     const previous=this.objects.get(key),condition=options.onlyIf;
     if(condition?.etagMatches&&condition.etagMatches!==previous?.etag||condition?.etagDoesNotMatch==='*'&&previous)return null;
     const etag=String(++this.revision);this.objects.set(key,{value,etag,customMetadata:options.customMetadata});return {etag};

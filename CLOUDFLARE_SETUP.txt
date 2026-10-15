@@ -100,6 +100,20 @@ LOSSLESS STORAGE COMPRESSION
 - Cron gradually re-encodes one current table/old backup per run. It verifies
   the exact decompressed string and uses ETag CAS so active staff edits win.
   Metadata and the 168 hourly slots stay intact; no business fields change.
+
+SMALL ORDER WRITES
+- The recovered order_snapshots.json is now an immutable base. Order changes
+  use encrypted order-changes-v1 shards and one ETag-guarded manifest commit.
+  Every native and server-adapter read merges them; interrupted uploads are
+  invisible. Packing, invoice, stock and waybill guards run on the merged state.
+- Updated staff browsers request x-ora-order-journal: 1 and merge the serialized
+  base plus changes locally, with a count check. Legacy reads remain supported.
+- Hourly order backups use ora-order-checkpoint-v1: the immutable base_key plus
+  that hour's shard manifest. Keep referenced shard objects for restore. Do not
+  roll back to a release that ignores the journal: it cannot see newer orders.
+- Legacy scrypt staff passwords verify natively and transparently migrate to
+  the existing Worker HMAC verifier after a successful sign-in. Passwords,
+  account IDs, roles, permissions and signed session format stay the same.
 - New identical product/branding uploads share a SHA-256 media key without
   changing any uploaded bytes. Existing media URLs keep working. Customer
   submissions/receipts keep separate random keys. This does not delete images.

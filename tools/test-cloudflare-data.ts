@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { createClient } from '@supabase/supabase-js';
-import { ACTIVE_KEY, activeData, configureCloudflareData, cloudflareDataFetch, dataBucket, importRecovery } from '../worker/cloudflareData';
+import { ACTIVE_KEY, activeData, configureCloudflareData, cloudflareDataFetch, dataBucket, importRecovery, mutateDataTable } from '../worker/cloudflareData';
 import { withR2DataFallback } from '../worker/r2RecoveryFallback';
 import { facebookLeadAuditHandler } from '../worker/facebookLeadAudit';
 import { compactR2StorageOnce } from '../worker/r2StorageCompression';
@@ -112,7 +112,7 @@ try {
   await sdk.from('admin_users').insert({id:legacyId,username:'legacy',role:'staff',password_hash:'salt:scrypt-verifier',is_active:true});
   const legacyRequest=new Request('https://test/api/staff/login',{method:'POST',body:JSON.stringify({username:'legacy',password:'test-password'})});
   const legacyResponse=await withR2DataFallback(legacyRequest,env,{},async()=>Response.json(await legacyRequest.json()));
-  assert.equal((await legacyResponse.json() as any).username,'legacy','Legacy login fallback retains the request body');
+  assert.equal(legacyResponse.status,401,'Malformed legacy verifiers never enter the Node login bridge');
   await sdk.from('admin_users').delete().eq('id',legacyId);
   assert.equal((await fast('/api/orders')).status,200);
   assert.equal((await (await fast('/api/orders/version')).json()).count,6);
@@ -255,7 +255,7 @@ try {
   const parserEnd=contextCode.indexOf('  const importWebsiteConfirmedCsv',parserStart);
   assert(parserStart>=0&&parserEnd>parserStart);
   let confirmRequests=0,readFailure=false,writeFailure=false,loseAcknowledgment=false,committedEtag='';
-  const currentOrderKey=active.prefix+'order_snapshots.json';
+  const currentOrderKey=active.prefix+'order-changes-v1.json';
   const confirmStaffRequest=async(path:string,options:any={})=>{
     if(path==='/api/orders'&&readFailure){readFailure=false;const error:any=new Error('simulated read 503');error.status=503;throw error;}
     if(path.endsWith('/confirm-csv')){confirmRequests++;if(writeFailure){writeFailure=false;rawBucket.failKey=currentOrderKey;}}
@@ -422,9 +422,9 @@ try {
   const originalPut=rawBucket.put.bind(rawBucket);let race=true;
   rawBucket.put=async(key,value,options)=>{
     if(key===currentOrderKey&&race){
-      race=false;const rows=JSON.parse(await (await bucket.get(key))!.text());
-      const row=rows.find((row:any)=>row.order_id===original.id);row.payload.invoice_locked=true;row.payload.stock_allocated=true;row.payload.waybill_number='STAFF-LOCK';
-      await bucket.put(key,JSON.stringify(rows),{onlyIf:{etagMatches:rawBucket.objects.get(key)!.etag}});
+      race=false;await mutateDataTable(env,'order_snapshots',rows=>{
+        const row=rows.find((row:any)=>row.order_id===original.id)!;row.payload.invoice_locked=true;row.payload.stock_allocated=true;row.payload.waybill_number='STAFF-LOCK';
+      });
     }
     return originalPut(key,value,options);
   };
@@ -624,7 +624,7 @@ try {
 
   const sourceFailure=await facebookLeadAuditHandler(auditRequest(token),{...env,META_PAGE_ACCESS_TOKEN:'synthetic-token'},async()=>{throw new Error('private details');});
   assert.equal(sourceFailure!.status,503);assert(!(await sourceFailure!.text()).includes('private details'));
-  rawBucket.failKey=active.prefix+'order_snapshots.json';
+  rawBucket.failKey=active.prefix+'order-changes-v1.json';
   const failed=await request('/api/orders/order-1','PUT',{order:fixture.orders[0]},token);
   assert.equal(failed.status,500,'A failed R2 write must never return success');rawBucket.failKey='';
   const saved=rawBucket.objects.get(active.prefix+'order_snapshots.json')!;

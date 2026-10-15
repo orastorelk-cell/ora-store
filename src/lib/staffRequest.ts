@@ -7,12 +7,24 @@ export const staffJsonRequest=async(url:string,options:RequestInit={},timeoutMs=
   if(options.signal?.aborted)cancel();
   const timer=setTimeout(cancel,timeoutMs);
   try{
-    const response=await fetch(url,{...options,cache:'no-store',signal:controller.signal});
+    const headers=new Headers(options.headers);
+    if(url.startsWith('/api/orders?')&&new URLSearchParams(url.split('?')[1]).get('format')==='snapshots')headers.set('x-ora-order-journal','1');
+    const response=await fetch(url,{...options,headers,cache:'no-store',signal:controller.signal});
     const data=await response.json().catch(()=>null);
     if(!response.ok||!data||typeof data!=='object'){
       const error:any=new Error(data?.error||(!response.ok?`Request failed (${response.status}, ${options.method||'GET'} ${url.split('?')[0]})`:'Server response was incomplete.'));
       error.status=response.ok?503:response.status;error.path=url.split('?')[0];
       error.retryAfterMs=Number(response.headers.get('Retry-After'))*1000;throw error;
+    }
+    if(data.snapshot_changes!==undefined){
+      const incomplete=()=>{const error:any=new Error('The server order history could not be verified.');error.status=503;throw error;};
+      if(!Array.isArray(data.snapshots)||!Array.isArray(data.snapshot_changes))incomplete();
+      const rows=new Map<string,any>();
+      for(const row of data.snapshots){if(!row?.order_id||rows.has(String(row.order_id)))incomplete();rows.set(String(row.order_id),row);}
+      const changed=new Set<string>();
+      for(const row of data.snapshot_changes){const id=String(row?.order_id||'');if(!id||changed.has(id)||row.deleted!==true&&!row.payload)incomplete();changed.add(id);if(row.deleted===true)rows.delete(id);else rows.set(id,row);}
+      if(data.snapshot_count!==undefined&&data.snapshot_count!==rows.size)incomplete();
+      data.snapshots=Array.from(rows.values());delete data.snapshot_changes;
     }
     return data;
   }catch(error:any){
