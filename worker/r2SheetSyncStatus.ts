@@ -13,7 +13,7 @@ export const markR2SheetSynced=async(orders:any[],env?:unknown,verified=false)=>
       if(!input)return row;
       if(!current||String(current.id)!==String(input.id)||String(current.order_number)!==String(input.order_number))throw new Error('Imported order identity changed before Sheet acknowledgment.');
       if(current.is_synced_google_sheets===true&&(!verified||current.sheet_sync_verified_at)){saved.set(String(input.id),current);return row;}
-      const order={...current,is_synced_google_sheets:true,synced_at:current.synced_at||now,...(verified?{sheet_sync_verified_at:now}:{})};
+      const order={...current,is_synced_google_sheets:true,synced_at:current.synced_at||now,...(verified?{sheet_sync_verified_at:now,website_sheet_error:undefined,website_sheet_next_retry_at:undefined}:{})};
       changed=true;saved.set(String(input.id),order);return {...row,payload:order,updated_at:now};
     });
     if(saved.size!==wanted.size)throw new Error('Some imported orders are missing from durable storage.');

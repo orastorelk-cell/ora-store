@@ -7,6 +7,7 @@ import { compactR2StorageOnce } from './r2StorageCompression';
 import { scheduleSheetConfirm } from './r2SheetConfirm';
 import { scheduleSheetDropdownRepair } from './sheetDropdownRepair';
 import { runAuthorizedOrder659Correction } from './authorizedOrder659Correction';
+import { scheduleWebsiteOrderSheets } from './websiteOrderSheetSync';
 
 export default {
   async fetch(request: Request, env: unknown, ctx: any) {
@@ -23,6 +24,7 @@ export default {
   },
   async scheduled(_controller: unknown, env: unknown, ctx: any) {
     configureCloudflareData(env);
+    scheduleWebsiteOrderSheets(env,ctx);
     await runAuthorizedOrder659Correction(env).then(result => {
       if (!result.already_saved) console.info('FB-000659 authorized color correction saved in ' + result.batch_id);
     }).catch(error => console.warn('FB-000659 authorized correction: ' + String(error?.message || error)));

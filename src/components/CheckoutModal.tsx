@@ -310,21 +310,6 @@ Amount to Pay: Rs. ${formatLkr(amount)}`;
       return;
     }
 
-    try {
-      const guardResponse = await fetch('/api/order-guard', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, whatsapp, items: cart.map((i) => ({ id: i.product.id, variant_id: i.variant?.id, qty: i.quantity })) }),
-      });
-      const guard = await guardResponse.json();
-      if (!guardResponse.ok || guard.allowed === false) {
-        alert(guard.message || 'This order was blocked as a duplicate or suspicious request.');
-        return;
-      }
-    } catch {
-      // Local duplicate and blacklist protection in StoreContext still applies if server guard is unavailable.
-    }
-
     // Orders above the admin-defined quantity threshold require the configured bank advance before confirmation.
     if (isAdvanceRequired && !hasSavedBankDetails) {
       alert(`⚠️ Bank Transfer is temporarily unavailable.\n\nThis order requires a ${advancePercentage}% advance payment, but the store has not published bank account details yet. Please use O-RA Assistant to contact a representative before placing this high-quantity order.\n\nමෙම ඇණවුම සඳහා ${advancePercentage}% අත්තිකාරම් ගෙවීමක් අවශ්‍යයි. නමුත් බැංකු ගිණුම් විස්තර තවම ප්‍රසිද්ධ කර නැත. කරුණාකර O-RA Assistant හරහා අපගේ නියෝජිතයෙකු සම්බන්ධ කරගන්න.`);
@@ -344,7 +329,6 @@ Amount to Pay: Rs. ${formatLkr(amount)}`;
     setIsSubmitting(true);
 
     try {
-      const customerSession = supabase ? (await supabase.auth.getSession()).data.session : null;
       const order = await placeOrder({
         customer_name: formData.customer_name,
         phone,

@@ -303,6 +303,10 @@ export interface Order {
   stock_allocated_at?: string;
   stock_allocated_by?: string;
   is_duplicate_order?: boolean;
+  duplicate_review_status?: 'Pending' | 'Approved';
+  duplicate_reviewed_at?: string;
+  duplicate_reviewed_by?: string;
+  duplicate_reviewed_by_name?: string;
   duplicate_of_order_id?: string;
   duplicate_fingerprint?: string;
   invoice_number?: string;

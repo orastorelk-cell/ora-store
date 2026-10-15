@@ -370,6 +370,14 @@ const rpc = async (request:Request,bucket:DataBucket,prefix:string,name:string) 
   return response(number);
 };
 
+export const reserveCloudflareOrderNumber = async (env: unknown, prefix: string) => {
+  const bucket=dataBucket(env);if(!bucket)throw new DataError('Cloudflare R2 binding is unavailable.');
+  const active=await activeData(bucket);if(!active)throw new DataError('Cloudflare recovery is required.');
+  const result=await rpc(new Request('https://internal/sequence',{method:'POST',body:JSON.stringify({p_prefix:prefix})}),bucket,active.prefix,'next_ora_order_number');
+  if(!result.ok)throw new DataError('Order number could not be reserved.');
+  return String(await result.json());
+};
+
 // Called ONLY from server-side clients with the configured service credential.
 // Never expose this adapter as an HTTP endpoint or intercept customer JWTs.
 export const cloudflareDataFetch: typeof fetch = async (input,init) => {

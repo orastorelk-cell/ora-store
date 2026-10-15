@@ -1,5 +1,6 @@
 import { creditReturnStock } from '../lib/returnSheets';
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { savePublicOrder } from '../lib/publicOrderSave';
 import { staffJsonRequest } from '../lib/staffRequest';
 import { createStaffMutationQueue } from '../lib/staffMutationQueue';
 import {
@@ -389,16 +390,7 @@ const refreshStaffSessionToken = async () => {
 };
 
 const publicOrderSave = async (order: Order, customerAccessToken?: string, deferSheetSync = false, waitForSheetSync = false): Promise<Order> => {
-  const headers: Record<string,string> = {'Content-Type':'application/json'};
-  if (customerAccessToken) headers.Authorization = `Bearer ${customerAccessToken}`;
-  const response = await fetch('/api/orders', {
-    method:'POST',
-    headers,
-    body:JSON.stringify({order,defer_sheet_sync:deferSheetSync,wait_sheet_sync:waitForSheetSync}),
-  });
-  const data=await response.json().catch(()=>({}));
-  if(!response.ok) throw new Error(data?.error || `Order server save failed (${response.status})`);
-  return (data?.order || order) as Order;
+  return savePublicOrder(order,customerAccessToken,deferSheetSync,waitForSheetSync);
 };
 
 const staffBulkOrderSaveAndSheetSync = async (orders: Order[]): Promise<{orders:Order[];sheetSync:any}> => {
@@ -1621,7 +1613,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const cartFingerprint = cart.map((i) => `${i.product.id}:${i.variant?.id || 'base'}:${i.quantity}`).sort().join('|');
     const duplicateCutoff = Date.now() - 10 * 60 * 1000;
     const duplicate = orders.some((o) => normalizePhone(o.phone) === normalizedPhone && new Date(o.created_at).getTime() >= duplicateCutoff && o.order_status !== 'Cancelled' && o.items.map((i) => `${i.product_id}:${i.variant_id || 'base'}:${i.quantity}`).sort().join('|') === cartFingerprint);
-    if (duplicate) throw new Error('A similar order was already placed recently from this phone number. Please wait before trying again.');
+    // Repeat purchases are saved for staff review; a failed request can safely retry.
     const priorFingerprint = makeOrderFingerprint(formData.phone, cart.map((i) => ({ product_id: i.product.id, variant_id:i.variant?.id, quantity: i.quantity })));
     const duplicateDayCutoff = Date.now() - 24 * 60 * 60 * 1000;
     const priorDuplicate = orders.find((o) => o.order_status !== 'Cancelled' && new Date(o.created_at).getTime() >= duplicateDayCutoff && (o.duplicate_fingerprint || makeOrderFingerprint(o.phone, o.items)) === priorFingerprint);
@@ -1746,7 +1738,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const savedOrder = await publicOrderSave(newOrder, formData.customer_access_token);
 
     setOrders((prev) => {
-      const next = [savedOrder, ...prev.filter(o => o.id !== savedOrder.id && o.order_number !== savedOrder.order_number)]
+      const next = [{...prev.find(order=>order.id===savedOrder.id),...savedOrder}, ...prev.filter(o => o.id !== savedOrder.id && o.order_number !== savedOrder.order_number)]
         .sort((a,b)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime());
       return next;
     });

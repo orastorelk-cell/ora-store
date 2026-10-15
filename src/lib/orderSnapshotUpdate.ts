@@ -12,6 +12,14 @@ export const prepareOrderSnapshotUpdate = (existing: Row | undefined, incoming: 
       String(lock.assigned_order_number) !== String(order.order_number || ''))
     throw new OrderUpdateConflict('Waybill ' + requestedWaybill + ' is already locked/used by ' + String(lock.assigned_order_number) + '.');
   if (existing) {
+    // Duplicate review owns its hold and approval. A stale browser mirror must
+    // neither release a pending repeat purchase nor restore a cleared hold.
+    if(existing.is_duplicate_order===true||existing.duplicate_review_status){
+      order.is_duplicate_order=existing.is_duplicate_order===true;
+      for(const field of ['duplicate_review_status','duplicate_reviewed_at','duplicate_reviewed_by','duplicate_reviewed_by_name','duplicate_of_order_id','duplicate_fingerprint']){
+        if(existing[field]!==undefined)order[field]=existing[field];else delete order[field];
+      }
+    }
     if (existing.variant_correction_lock) return { order: existing, waybillPreserved: true };
     // Courier imports own these amounts. A stale order editor or browser mirror
     // cannot erase a confirmed invoice fee or turn a return back into a delivery.

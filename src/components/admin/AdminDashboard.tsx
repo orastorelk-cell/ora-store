@@ -104,6 +104,7 @@ import { BannersPanel } from './BannersPanel';
 import { NotificationsPanel } from './NotificationsPanel';
 import { PackingExpensesPanel } from './PackingExpensesPanel';
 import { ReturnSheetsPanel } from './ReturnSheetsPanel';
+import { DuplicateOrdersPanel } from './DuplicateOrdersPanel';
 import { getCustomerMembership } from '../../lib/membership';
 import { slugifyCategory, suggestCategoryFields } from '../../lib/categoryAuto';
 import { suggestProductMetadata } from '../../lib/productAutoPopular';
@@ -226,6 +227,7 @@ export const AdminDashboard: React.FC = () => {
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<
+    'duplicate_orders' |
     'overview' | 'add_product' | 'combo_packs' | 'supplier_offer' | 'price_increase' | 'products' | 'categories' | 'banners' | 'notifications' | 'stock' | 'orders' | 'out_of_stock' | 'packing_expenses' | 'returns' | 'lead_import' | 'confirm_upload' | 'invoices' | 'packing' | 'invoice_design' | 'delivery' | 'dispatch' | 'cod_payments' | 'bank_transfer_check' | 'assistant_chats' | 'complaints' | 'reports' | 'profit_report' | 'success_rate' | 'reviews' | 'product_requests' | 'customers' | 'sheets' | 'activity' | 'branding' | 'website_info' | 'settings' | 'user_access' | 'deploy'
   >('overview');
   const [comboEditProductId, setComboEditProductId] = useState<string | undefined>(undefined);
@@ -3112,6 +3114,7 @@ Suitable For:
   type StaffAccessLevel = 'none' | 'view' | 'edit';
   const currentRole = adminUser?.role || 'staff';
   const accessLevelFromList = (list: string[] | undefined, tabId: string): StaffAccessLevel => {
+    if(tabId==='duplicate_orders')tabId='orders';
     const rows = list || [];
     if (!rows.includes(tabId)) return 'none';
     if (rows.includes(`level:${tabId}:view`)) return 'view';
@@ -3162,6 +3165,7 @@ Suitable For:
     ]},
     { id:'ORDERS', label:'ORDERS', items:[
       { id:'orders', label:newOrdersCount > 0 ? `Orders (${newOrdersCount} New)` : `Orders (${orders.length})`, icon:ShoppingBag },
+      { id:'duplicate_orders', label:`Duplicate Orders (${orders.filter(order=>order.is_duplicate_order&&order.order_status!=='Cancelled').length})`, icon:ShieldAlert },
       { id:'lead_import', label:'FB / TikTok Lead Import', icon:FileSpreadsheet },
       { id:'confirm_upload', label:'FINALIZE • Confirm / Cancel Upload', icon:Upload },
       { id:'packing', label:`Packing Downloads (${new Set(orders.filter(o=>o.invoice_pack_batch_id && !o.invoice_pack_downloaded_at).map(o=>o.invoice_pack_batch_id)).size})`, icon:Package },
@@ -5255,6 +5259,7 @@ Suitable For:
         />
       )}
 
+      {activeTab === 'duplicate_orders' && <DuplicateOrdersPanel canEdit={canEditTab('duplicate_orders')} />}
       {activeTab === 'returns' && <ReturnSheetsPanel canEdit={canEditTab('returns') || canUseSpecialAction('return_process')} />}
 
       {activeTab === 'lead_import' && (
