@@ -31,7 +31,7 @@ await bucket.put(prefix+'admin_data_store.json',JSON.stringify([{key:'storefront
 const request=(path:string,body?:any,token='')=>withR2DataFallback(new Request('https://store.test'+path,{method:body?'POST':'GET',headers:{'content-type':'application/json',authorization:token?'Bearer '+token:'','cf-connecting-ip':'192.0.2.1'},...(body?{body:JSON.stringify(body)}:{})}),env,{},async()=>{throw new Error('Website submit must not depend on the Node/Supabase bridge');});
 const order=(id=crypto.randomUUID(),extra:any={})=>({id:'ord-'+id,order_number:'WEB-000001',order_source:'Website',customer_name:'Test Buyer',phone:'0770000000',whatsapp:'0770000000',address:'Test Road No 10',city:'Naiwala',district:'Gampaha',payment_method:'COD',subtotal:100,delivery_fee:250,total_amount:350,items:[{product_id:'p1',product_name:'Fixture item',sku:'P1',main_sku:'P1',quantity:1,unit_price:100,subtotal:100}],created_at:new Date().toISOString(),...extra});
 const beforeCatalog=JSON.stringify(await readDataTable(env,'admin_data_store'));
-const original=order();
+const original=order(undefined,{duplicate_review_status:'Approved'});
 for(let i=0;i<3;i++)assert.equal((await request('/api/order-guard',{phone:original.phone,items:[{id:'p1',qty:1}]})).status,200,'Preflight must not reserve duplicate identity');
 raw.failWrites=true;
 assert.equal((await request('/api/orders',{order:original})).status,503);
@@ -39,6 +39,7 @@ assert.equal((await readDataTable(env,'order_snapshots')).length,0,'A failed wri
 raw.failWrites=false;
 const saved=await (await request('/api/orders',{order:original})).json();
 assert.equal(saved.ok,true);assert.equal(saved.order.is_duplicate_order,false);
+assert.equal(saved.order.duplicate_review_status,undefined,'A customer cannot forge staff approval history');
 const replay=await (await request('/api/orders',{order:original})).json();
 assert.equal(replay.order.order_number,saved.order.order_number);
 assert.equal((await readDataTable(env,'order_snapshots')).length,1,'Response-loss retries must not create a second order');

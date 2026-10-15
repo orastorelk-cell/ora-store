@@ -73,7 +73,7 @@ export const r2WebsiteOrdersHandler=async(request:Request,env:any,ctx:any):Promi
       order_source:'Website',payment_status:'Pending',order_status:input.payment_method==='Bank Payment'?'Pending Payment':'New Orders',
       payment_verification_status:input.payment_method==='Bank Payment'?'Awaiting Receipt':'Not Required',bank_receipt_url:'',advance_confirmed:false,
       call_center_status:'Pending',is_synced_google_sheets:false,stock_status:'Waiting for Stock',stock_allocated:false,dispatch_status:'Not Scanned',delivery_status:'Pending',tracking_status:'Not Shipped',
-      is_duplicate_order:Boolean(prior),duplicate_of_order_id:prior?.id,duplicate_fingerprint:fingerprint(input),...(prior?{duplicate_review_status:'Pending'}:{}),
+      is_duplicate_order:Boolean(prior),duplicate_of_order_id:prior?.id,duplicate_fingerprint:fingerprint(input),duplicate_review_status:prior?'Pending':undefined,
       notes:String(input.notes||'').slice(0,4000),created_at:new Date().toISOString()};
     if(customer){order.customer_auth_id=customer.id;order.customer_email=String(customer.email||'');}
     // Keep the saved pricing snapshots; Apps Script receives the final payable values.
