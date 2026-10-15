@@ -4,6 +4,7 @@ import { activeData, configureCloudflareData, dataBucket, readDataTable, readDat
 import { applyDeliveredReport, type DeliveredEntry } from '../src/lib/deliveredOrders';
 import { applyConfirmCsvDecisions, validConfirmCsvEntries } from '../src/lib/confirmCsvSave';
 import { r2StorefrontHandler } from './r2Storefront';
+import { r2CitySearchHandler } from './r2CitySearch';
 import { Buffer } from 'node:buffer';
 import { auditConfirmCsvOrders, validConfirmAuditOrders } from '../src/lib/confirmCsvAudit';
 import { r2InvoiceQueueHandler } from './r2InvoiceQueue';
@@ -213,6 +214,8 @@ const recoveryHandler=async(request:Request,envValue:unknown):Promise<Response|n
 export const withR2DataFallback=async(request:Request,env:unknown,_ctx:any,next:()=>Promise<Response>):Promise<Response>=>{
   configureCloudflareData(env);
   try {
+    const cities=await r2CitySearchHandler(request,env);
+    if(cities)return cities;
     const recovery=await recoveryHandler(request,env);
     if(recovery)return recovery;
     const login=await r2StaffLoginHandler(request,env);

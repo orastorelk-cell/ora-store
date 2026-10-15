@@ -28,6 +28,7 @@ import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { analyzeReceiptLocally } from '../lib/receiptOcr';
 import { compressImageFile, uploadPublicImage } from '../lib/imageUpload';
 import { formatLkr, roundLkr } from '../lib/currency';
+import { CityAutocomplete } from './CityAutocomplete';
 
 export const CheckoutModal: React.FC = () => {
   const {
@@ -49,7 +50,7 @@ export const CheckoutModal: React.FC = () => {
     updateCartQuantity,
   } = useStore();
 
-  const [citySuggestions, setCitySuggestions] = useState<{ city: string; district: string }[]>([]); const [citySearchTimer, setCitySearchTimer] = useState<any>(null); const handleCityChange = (value: string) => { setFormData((prev) => ({ ...prev, city: value })); if (citySearchTimer) clearTimeout(citySearchTimer); const q = value.trim(); if (q.length < 3) { setCitySuggestions([]); return; } setCitySearchTimer(setTimeout(async () => { try { const res = await fetch(`/api/courier/fardar/search?q=${encodeURIComponent(q)}`); const data = await res.json(); setCitySuggestions(Array.isArray(data.cities) ? data.cities : []); } catch { setCitySuggestions([]); } }, 300)); }; const pickCity = (c: { city: string; district: string }) => { setFormData((prev) => ({ ...prev, city: c.city, district: c.district })); setCitySuggestions([]); }; const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('COD');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('COD');
   const [formData, setFormData] = useState({
     customer_name: '',
     phone: '',
@@ -783,20 +784,18 @@ Amount to Pay: Rs. ${formatLkr(amount)}`;
               </div>
 
               <div>
-                <label className="block text-gray-700 font-bold mb-1">
+                <label htmlFor="checkout-city" className="block text-gray-700 font-bold mb-1">
                   {getTranslation(language, 'city')} *
                 </label>
-                <input
-                  type="text"
-                  required
+                <CityAutocomplete
                   value={formData.city}
-                  onChange={(e) => handleCityChange(e.target.value)}
-                  placeholder="e.g. Colombo, Kandy, Galle..."
-                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-gray-900 focus:outline-none focus:border-orange-500"
+                  language={language}
+                  onChange={(city) => setFormData((prev) => ({ ...prev, city, district: '' }))}
+                  onSelect={(city) => setFormData((prev) => ({ ...prev, city: city.city, district: city.district }))}
                 />
               </div>
 
-              {citySuggestions.length > 0 && (<div className="mt-1 rounded-xl border border-gray-200 bg-white shadow-lg">{citySuggestions.map((c, i) => (<button key={i} type="button" onClick={() => pickCity(c)} className="block w-full px-3 py-2 text-left text-xs hover:bg-orange-50"><span className="font-bold text-gray-900">{c.city}</span>{c.district && (<span className="ml-2 text-gray-500">• {c.district}</span>)}</button>))}</div>)}<div><label className="block text-gray-700 font-bold mb-1">District</label><input type="text" readOnly value={formData.district} placeholder="Auto-filled from city" className="w-full bg-gray-100 border border-gray-200 rounded-xl px-3 py-2 text-gray-600 focus:outline-none" /></div> <div className="sm:col-span-2">
+              <div><label className="block text-gray-700 font-bold mb-1">District</label><input type="text" readOnly value={formData.district} placeholder="Auto-filled from city" className="w-full bg-gray-100 border border-gray-200 rounded-xl px-3 py-2 text-gray-600 focus:outline-none" /></div> <div className="sm:col-span-2">
                 <label className="block text-gray-700 font-bold mb-1">
                   {getTranslation(language, 'address')} *
                 </label>
