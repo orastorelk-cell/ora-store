@@ -38,6 +38,7 @@ import { syncOrderToGoogleSheets, syncOrdersBatchToGoogleSheets, syncProductCata
 import { buildOrderItemSnapshot, deliverySplitForSettings, displayUnitPrice, effectiveBuyingPrice, findProductSelection, normalizeProductForStorage, normalizedProductType, productDisplayStock, variantById, variantBySku, repriceAfterBuyingCostChange } from '../lib/productVariants';
 import { canonicalJson, confirmCsvRequestWithRetry, saveConfirmCsvDecisions } from '../lib/confirmCsvSave';
 import { saveInvoiceDownloadStatus } from '../lib/invoiceDownloadStatus';
+import { saveFardarExportStatus } from '../lib/fardarExportStatus';
 import { storefrontSaveBody } from '../lib/storefrontProductSave';
 import { publicStorefrontRequest } from '../lib/publicStorefrontRequest';
 import { validCodPaymentEntries, type CodPaymentEntry } from '../lib/codPaymentImport';
@@ -2868,7 +2869,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     downloadedBy = adminUser?.name || 'Packing Staff',
     downloadSet?: { date: string; number: number }
   ): Promise<void> => {
-    const uniqueIds=Array.from(new Set(orderIds.map(String).filter(Boolean))).slice(0,50);
+    const uniqueIds=Array.from(new Set(orderIds.map(String).filter(Boolean)));
     if(!uniqueIds.length) return;
 
     // One current-data metadata transaction replaces a full order PUT per PDF.
@@ -2894,38 +2895,24 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     orderIds: string[],
     exportedBy = adminUser?.name || 'Admin'
   ): Promise<void> => {
-    const uniqueIds=Array.from(new Set(orderIds.map(String).filter(Boolean))).slice(0,500);
+    const uniqueIds=Array.from(new Set(orderIds.map(String).filter(Boolean)));
     if(!uniqueIds.length) return;
 
     const idSet=new Set(uniqueIds);
     const now=new Date();
-    const nowIso=now.toISOString();
     const batchId=`FARDAR-${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}-${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`;
 
-    const updatedOrders=orders
-      .filter((order)=>idSet.has(String(order.id)))
-      .map((order)=>({
-        ...order,
-        fardar_csv_exported_at:nowIso,
-        fardar_csv_exported_by:exportedBy,
-        fardar_csv_export_batch_id:batchId,
-        fardar_csv_exported_waybill:String(order.waybill_number || ''),
-      }));
+    const selectedOrders=orders.filter((order)=>idSet.has(String(order.id)));
 
-    if(updatedOrders.length!==uniqueIds.length){
-      const foundIds=new Set(updatedOrders.map((order)=>String(order.id)));
+    if(selectedOrders.length!==uniqueIds.length){
+      const foundIds=new Set(selectedOrders.map((order)=>String(order.id)));
       const missing=uniqueIds.filter((id)=>!foundIds.has(id));
       throw new Error(`Could not find ${missing.length} Fardar order(s) in the current order list.`);
     }
 
-    // Persist first so a successful CSV download cannot silently reappear in the
-    // next "new Fardar orders" file after refresh / another Staff login.
-    for(const order of updatedOrders){
-      await sharedStaffRequest(`/api/orders/${encodeURIComponent(order.id)}`,{
-        method:'PUT',
-        body:JSON.stringify({order}),
-      });
-    }
+    // Save only export metadata in retry-safe groups. Full order PUTs made a
+    // download rewrite each parcel and its courier locks, causing 503 failures.
+    const updatedOrders=await saveFardarExportStatus(selectedOrders,exportedBy,batchId,sharedStaffRequest) as Order[];
 
     const updatedMap=new Map(updatedOrders.map((order)=>[String(order.id),order] as [string,Order]));
     setOrders((prev)=>prev.map((order)=>updatedMap.get(String(order.id)) || order));

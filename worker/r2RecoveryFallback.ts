@@ -11,7 +11,7 @@ import { r2DuplicateReviewHandler } from './r2DuplicateReview';
 import { Buffer } from 'node:buffer';
 import { auditConfirmCsvOrders, validConfirmAuditOrders } from '../src/lib/confirmCsvAudit';
 import { r2InvoiceQueueHandler } from './r2InvoiceQueue';
-import { r2InvoiceDownloadsHandler } from './r2InvoiceDownloads';
+import { r2InvoiceDownloadsHandler, r2FardarExportStatusHandler } from './r2InvoiceDownloads';
 import { r2PackingBatchMergeHandler } from './r2PackingBatchMerge';
 import { r2OrderUpdateHandler } from './r2OrderUpdate';
 import { r2OrderCancellationHandler } from './r2OrderCancellation';
@@ -61,6 +61,7 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   const mergeBatches=request.method==='POST'&&path==='/api/orders/invoices/merge-batches';
   const invoiceRecovery=['GET','POST'].includes(request.method)&&/^\/api\/orders\/invoices\/recovery(?:\/[A-Za-z0-9_-]{16,100}(?:\/downloaded)?)?$/.test(path);
   const downloads=request.method==='POST'&&path==='/api/orders/invoice-download-status';
+  const fardarExport=request.method==='POST'&&path==='/api/orders/fardar-export-status';
   const cancellation=['GET','POST'].includes(request.method)&&path==='/api/orders/cancel-before-dispatch';
   const stockCorrection=['GET','POST'].includes(request.method)&&path==='/api/orders/stock-quantity';
   const variantCorrection=['GET','POST'].includes(request.method)&&path==='/api/orders/variant-correction';
@@ -70,9 +71,10 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   const orderPut=['PUT','DELETE'].includes(request.method)&&/^\/api\/orders\/[^/]+$/.test(path);
   const returns=path.startsWith('/api/returns/');
   const redispatch=request.method==='POST'&&path==='/api/orders/redispatch-waybill';
-  if(!read&&!delivered&&!courierPayments&&!confirmed&&!refresh&&!audit&&!invoices&&!mergeBatches&&!invoiceRecovery&&!downloads&&!cancellation&&!variantCorrection&&!stockCorrection&&!orderPut&&!pool&&!assignment&&!fulfilment&&!returns&&!redispatch)return null;
+  if(!read&&!delivered&&!courierPayments&&!confirmed&&!refresh&&!audit&&!invoices&&!mergeBatches&&!invoiceRecovery&&!downloads&&!fardarExport&&!cancellation&&!variantCorrection&&!stockCorrection&&!orderPut&&!pool&&!assignment&&!fulfilment&&!returns&&!redispatch)return null;
   const user=await verifyActiveStaff(request,env);
   if(!user)return json({error:'Login session required.'},401);
+  if(fardarExport)return r2FardarExportStatusHandler(request,env);
   if(stockCorrection)return r2OrderStockCorrectionHandler(request,env,user);
   if(variantCorrection)return r2VariantCorrectionHandler(request,env,user);
   if(courierPayments)return r2CourierPaymentsHandler(request,env,user);

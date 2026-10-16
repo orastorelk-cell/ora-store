@@ -1,5 +1,26 @@
 import { replaceDataTable } from './cloudflareData';
 import { applyInvoiceDownloadStatus, invoiceDownloadRequest, InvoiceDownloadError } from '../src/lib/invoiceDownloadStatus';
+import { applyFardarExportStatus, fardarExportRequest, FardarExportError } from '../src/lib/fardarExportStatus';
+
+export const r2FardarExportStatusHandler = async (request: Request, env: unknown) => {
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {status,
+    headers: {'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-ora-storage': 'cloudflare-r2'}});
+  const body = fardarExportRequest(await request.json().catch(() => null));
+  if (!body) return json({error: 'Send 1 to 50 exact Fardar parcel IDs and export details.'}, 400);
+  try {
+    const saved = await replaceDataTable(env, 'order_snapshots', rows => {
+      const result = applyFardarExportStatus(rows.map(row => row.payload).filter(Boolean), body);
+      const changed = new Map(result.updatedOrders.map(order => [String(order.id), order]));
+      const now = new Date().toISOString();
+      return {rows: changed.size ? rows.map(row => changed.has(String(row.order_id))
+        ? {...row, payload: changed.get(String(row.order_id)), updated_at: now} : row) : rows, result: result.orders};
+    });
+    return json({ok: true, orders: saved});
+  } catch (error) {
+    if (error instanceof FardarExportError) return json({error: error.message}, error.status);
+    throw error;
+  }
+};
 
 export const r2InvoiceDownloadsHandler = async (request: Request, env: unknown) => {
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status,

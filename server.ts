@@ -97,6 +97,7 @@ import { applyDeliveredReport } from './src/lib/deliveredOrders';
 import { applyConfirmCsvDecisions, validConfirmCsvEntries } from './src/lib/confirmCsvSave';
 import { applyInvoiceQueue, validInvoiceQueueRequest } from './src/lib/invoiceQueue';
 import { applyInvoiceDownloadStatus, invoiceDownloadRequest } from './src/lib/invoiceDownloadStatus';
+import { applyFardarExportStatus, fardarExportRequest } from './src/lib/fardarExportStatus';
 import { validateProductBackup } from "./src/lib/productBackup";
 
 dotenv.config();
@@ -2218,6 +2219,16 @@ app.delete('/api/test-orders/:source', requireSuperAdmin, async (req,res)=>{
   }catch(e:any){
     return res.status(500).json({error:e?.message||`${source} test-order cleanup failed.`});
   }
+});
+
+app.post('/api/orders/fardar-export-status', requireAdminSession, async (req,res)=>{
+  try{
+    const body=fardarExportRequest(req.body);
+    if(!body)return res.status(400).json({error:'Send 1 to 50 exact Fardar parcel IDs and export details.'});
+    const result=applyFardarExportStatus(await getOrderSnapshots(),body);
+    await saveOrderSnapshotsBatch(result.updatedOrders);
+    return res.json({ok:true,orders:result.orders});
+  }catch(error:any){return res.status([404,409].includes(error.status)?error.status:503).json({error:error.message||'Fardar export status could not be saved.'});}
 });
 
 app.post('/api/orders/invoice-download-status', requireAdminSession, async (req,res)=>{
