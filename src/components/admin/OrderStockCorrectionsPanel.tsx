@@ -57,14 +57,14 @@ export const OrderStockCorrectionsPanel: React.FC = () => {
   const valid = preview && quantities.every((value, index) => value.trim() !== '' && Number.isSafeInteger(Number(value)) && Number(value) >= 0 && Number(value) <= preview.order.items[index].quantity);
   const changed = preview && quantities.some((value, index) => Number(value) !== preview.item_quantities[index]);
   return <section className="mx-auto max-w-5xl space-y-5 text-white">
-    <div><h2 className="flex items-center gap-2 text-2xl font-black"><PackageCheck className="text-orange-400"/>Order Stock Corrections</h2>
-      <p className="mt-2 text-sm text-neutral-400">යවපු ප්‍රමාණය අනුව stock හදන්න, නැත්නම් නොයවපු printed order එක cancel කරන්න.</p></div>
+    <div><h2 className="flex items-center gap-2 text-2xl font-black text-gray-900"><PackageCheck className="text-orange-400"/>Order Stock Corrections</h2>
+      <p className="mt-2 text-sm text-gray-600">යවපු ප්‍රමාණය අනුව stock හදන්න, නැත්නම් නොයවපු printed order එක cancel කරන්න.</p></div>
     <form onSubmit={event => {event.preventDefault(); void lookup();}} className="flex flex-wrap gap-3 rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
       <label className="min-w-48 flex-1 text-xs font-bold text-neutral-300">Order ID or waybill
         <input aria-label="Order ID or waybill" placeholder="FB-000657 or 18160739" value={search} onChange={event => setSearch(event.target.value)} disabled={busy || !!pending} className={field + ' mt-2 w-full'}/></label>
       <button type="submit" disabled={busy || !!pending || !search.trim()} className="mt-auto flex items-center gap-2 rounded-xl bg-orange-500 px-5 py-2.5 text-sm font-black text-black disabled:opacity-40"><Search size={16}/>{busy ? 'Loading…' : 'Search Order'}</button>
     </form>
-    {pending && <div className="space-y-3 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-5">
+    {pending && <div className="space-y-3 rounded-2xl border border-amber-500/40 bg-neutral-900 p-5">
       <b>Saved action needs confirmation from the server</b><p className="text-sm">Order {pending.input.order_id} • waybill {pending.input.waybill_number}. Retry this same action to finish safely.</p>
       <button type="button" disabled={busy} onClick={() => execute(pending)} className="rounded-xl bg-amber-400 px-4 py-2 font-bold text-black disabled:opacity-40">{busy ? 'Finishing…' : 'Retry Saved Action'}</button>
     </div>}
@@ -94,12 +94,12 @@ export const OrderStockCorrectionsPanel: React.FC = () => {
       <label className="flex items-start gap-3 text-sm text-neutral-300"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} disabled={busy}/>{mode === 'quantity' ? 'I checked the actual quantities sent and the stock change above.' : 'This parcel was not dispatched. Cancel it, restore its stock and permanently block its waybill.'}</label>
       <button type="button" onClick={save} disabled={busy || !confirmed || !reason.trim() || (mode === 'quantity' ? !preview.can_correct || !valid || !changed : !preview.cancellation.can_cancel || preview.cancellation.complete)} className={'flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-black disabled:opacity-40 ' + (mode === 'quantity' ? 'bg-orange-500 text-black' : 'bg-red-600 text-white')}><RotateCcw size={16}/>{busy ? 'Saving…' : mode === 'quantity' ? 'Save Quantity & Adjust Stock' : 'Cancel Order, Restore Stock & Block Waybill'}</button>
     </div>}
-    {saved && <div role="status" className="space-y-2 rounded-2xl border border-emerald-500/40 bg-emerald-500/10 p-5">
+    {saved && <div role="status" className="space-y-2 rounded-2xl border border-emerald-500/40 bg-neutral-900 p-5">
       <h3 className="font-black text-emerald-300">{saved.mode === 'quantity' ? 'Stock quantity saved' : 'Order cancelled, stock restored and waybill blocked'} • {saved.result.order?.order_number || saved.result.order_number}</h3>
       {(saved.result.stock_history || saved.result.stock_restored || []).map((row: any) => <p key={row.id} className="text-sm">{row.sku || row.product_name}: {row.previous_stock} → {row.new_stock} available</p>)}
       <p className="text-sm">Waybill {saved.result.order?.waybill_number || saved.result.waybill_number} • Invoice {saved.result.order?.invoice_number || saved.result.invoice_number} preserved.</p>
       <p className="text-xs text-neutral-400">No new invoice was created.</p>
     </div>}
-    {error && <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">{error}</p>}
+    {error && <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700">{error}</p>}
   </section>;
 };
