@@ -1,3 +1,4 @@
+import { stockConsumedItems, stockItemQuantities } from '../lib/orderStockQuantities';
 import { creditReturnStock } from '../lib/returnSheets';
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { savePublicOrder } from '../lib/publicOrderSave';
@@ -1794,15 +1795,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       throw new Error(`A replacement for this item already exists: ${existingReplacement.order_number}.`);
     }
 
+    const needsAllocation = Boolean(original.stock_quantity_correction);
+    if (needsAllocation && quantity > orderedQty - stockItemQuantities(original)[itemIndex]) throw new Error('Replacement quantity exceeds the warehouse-left quantity.');
     const now = new Date().toISOString();
     const actor = adminUser?.name || 'Admin';
     const reason = String(input.reason || 'Packing shortage - item missing from original parcel').trim();
     if (!reason) throw new Error('Replacement reason is required.');
 
-    // IMPORTANT: the original order already deducted this physical unit.
-    // Do NOT add it back to catalog stock and do NOT let FIFO deduct it again.
-    // The replacement starts as Allocated so shipping the warehouse-left unit
-    // changes physical stock 1 -> 0 while system stock correctly remains 0.
+    // Reuse the original allocation unless a quantity correction released it.
+    // Released units must be allocated once through the normal FIFO flow.
     const replacementItem: Order['items'][number] = {
       ...sourceItem,
       quantity,
@@ -1849,10 +1850,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       courier_name: original.courier_name || settings.courier_provider || 'Fardar',
       tracking_status: 'Not Shipped',
       delivery_status: 'Pending',
-      stock_status: 'Allocated',
-      stock_allocated: true,
-      stock_allocated_at: now,
-      stock_allocated_by: `Missing-item replacement • ${actor}`,
+      stock_status: needsAllocation ? 'Waiting for Stock' : 'Allocated',
+      stock_allocated: !needsAllocation,
+      stock_allocated_at: needsAllocation ? undefined : now,
+      stock_allocated_by: needsAllocation ? undefined : `Missing-item replacement • ${actor}`,
       is_duplicate_order: false,
       dispatch_status: 'Not Scanned',
       is_replacement_order: true,
@@ -1870,7 +1871,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         `${sourceItem.sku} x${quantity}`,
         'COD Rs. 0',
         'Delivery Rs. 0',
-        'Stock already deducted by original order - no additional stock movement',
+        needsAllocation ? 'Original unused stock was released; deduct this replacement through normal allocation' : 'Stock already deducted by original order - no additional stock movement',
         reason,
       ].filter(Boolean).join(' | '),
       created_at: now,
@@ -1890,7 +1891,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       module: 'Orders',
       target_id: savedOrder.id,
       target_label: savedOrder.order_number,
-      details: `Original ${original.order_number}${original.waybill_number ? ` / WB ${original.waybill_number}` : ''} • ${sourceItem.sku} x${quantity} • COD Rs. 0 • stock unchanged`,
+      details: `Original ${original.order_number}${original.waybill_number ? ` / WB ${original.waybill_number}` : ''} • ${sourceItem.sku} x${quantity} • COD Rs. 0 • ${needsAllocation ? 'normal stock allocation required' : 'stock unchanged'}`,
     });
 
     return savedOrder;
@@ -2113,7 +2114,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     for(const order of waiting){
       const groupedReq=new Map<string,InventoryRequirement>();
-      for(const item of order.items){
+      for(const item of stockConsumedItems(order)){
         for(const req of inventoryRequirementsForOrderItem(item)){
           const key=`${req.product_id}::${req.variant_id||'base'}`;
           const prev=groupedReq.get(key);
@@ -3212,7 +3213,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     const inventoryMap=new Map(cloneInventoryProducts(products).map(p=>[p.id,p] as [string,Product]));
-    testOrders.filter(o=>o.stock_allocated).forEach(o=>o.items.forEach(item=>inventoryRequirementsForOrderItem(item).forEach(req=>{
+    testOrders.filter(o=>o.stock_allocated).forEach(o=>stockConsumedItems(o).forEach(item=>inventoryRequirementsForOrderItem(item).forEach(req=>{
       const product=inventoryMap.get(req.product_id); if(!product)return;
       if(req.variant_id){
         const v=variantById(product,req.variant_id); if(!v)return; const after=Number(v.stock_quantity||0)+req.quantity;
@@ -3268,7 +3269,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // Restore the exact variant/component stock only when this order consumed physical stock.
     if (order.stock_allocated) {
       const deletedAt=new Date().toISOString(); const map=new Map(cloneInventoryProducts(products).map(p=>[p.id,p] as [string,Product])); const logs:StockHistory[]=[];
-      for(const item of order.items){
+      for(const item of stockConsumedItems(order)){
         for(const req of inventoryRequirementsForOrderItem(item)){
           const product=map.get(req.product_id); if(!product)continue;
           if(req.variant_id){

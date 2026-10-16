@@ -1,3 +1,4 @@
+import { stockConsumedItems } from '../src/lib/orderStockQuantities';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -62,7 +63,7 @@ for(const plugin of config.plugins.flat(Infinity))if(plugin?.name?.startsWith('o
 const start=source.indexOf('  type InventoryRequirement='),end=source.indexOf('  const updateOrderStatus',start);assert.ok(start>=0&&end>start);
 const effects:Function[]=[],tasks:Promise<any>[]=[];let history:any[]=received.return_inventory.stockHistory;
 const track=(task:Promise<any>)=>{tasks.push(task);return task;};
-const context:any={Date,Math,console,orders:await savedOrders(),products:received.products,adminUser:{id:'admin'},sharedStoreReady:true,sharedOrdersReady:true,sharedWaybillPoolReady:true,
+const context:any={Date,Math,console,stockConsumedItems,orders:await savedOrders(),products:received.products,adminUser:{id:'admin'},sharedStoreReady:true,sharedOrdersReady:true,sharedWaybillPoolReady:true,
   returnPackingPending:true,returnStockTransactionPending:false,waybillRecords:(await checked('/api/courier/waybills')).records,waybillPoolRetry:0,
   purchaseOrders:[{sku:'R',quantity_added:3},{sku:'O',quantity_added:2},{sku:'A',quantity_added:2},{sku:'B',quantity_added:1}],stockHistory:history,
   fifoAllocatorSignatureRef:{current:''},automaticWaybillRunRef:{current:false},automaticWaybillRetryTimerRef:{current:null},autoInvoiceReadyRef:{current:new Set()},invoiceQueueBusyRef:{current:false},invoiceQueueRetryTimerRef:{current:null},invoiceQueueRetry:0,setWaybillPoolRetry:()=>{},

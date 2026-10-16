@@ -5,6 +5,7 @@ export class OrderUpdateConflict extends Error { readonly status = 409; }
 // One-way stock, invoice and courier guards for order snapshot updates.
 export const prepareOrderSnapshotUpdate = (existing: Row | undefined, incoming: Row, locks: readonly Row[]) => {
   const order = { ...incoming };
+  if(!existing){delete order.stock_quantity_correction;delete order.stock_quantity_correction_lock;}
   let waybillPreserved = false;
   const requestedWaybill = String(order.waybill_number || '').trim();
   const lock = locks.find(row => String(row.waybill_number) === requestedWaybill);
@@ -20,7 +21,13 @@ export const prepareOrderSnapshotUpdate = (existing: Row | undefined, incoming: 
         if(existing[field]!==undefined)order[field]=existing[field];else delete order[field];
       }
     }
-    if (existing.variant_correction_lock) return { order: existing, waybillPreserved: true };
+    if (existing.variant_correction_lock || existing.stock_quantity_correction_lock) return { order: existing, waybillPreserved: true };
+    if (existing.stock_quantity_correction) {
+      for (const field of ['stock_quantity_correction','items','invoice_confirm_snapshot']) {
+        if (existing[field] !== undefined) order[field] = existing[field]; else delete order[field];
+      }
+    } else delete order.stock_quantity_correction;
+    delete order.stock_quantity_correction_lock;
     // Courier imports own these amounts. A stale order editor or browser mirror
     // cannot erase a confirmed invoice fee or turn a return back into a delivery.
     for (const field of ['fardar_delivery_fee','fardar_return_fee','fardar_return_fee_recorded_at','fardar_invoice_status','fardar_invoice_waybill'])

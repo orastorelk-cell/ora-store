@@ -302,6 +302,15 @@ export interface Order {
   stock_allocated?: boolean;
   stock_allocated_at?: string;
   stock_allocated_by?: string;
+  stock_quantity_correction_lock?: string;
+  stock_quantity_correction?: {
+    operation_id: string;
+    revision: number;
+    item_quantities: number[];
+    corrected_at: string;
+    corrected_by: string;
+    reason: string;
+  };
   is_duplicate_order?: boolean;
   duplicate_review_status?: 'Pending' | 'Approved';
   duplicate_reviewed_at?: string;

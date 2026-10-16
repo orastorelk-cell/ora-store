@@ -1,3 +1,4 @@
+import { activeOrderPackingLock } from '../src/lib/orderStockQuantities';
 import { readDataTable, mutateDataTable } from './cloudflareData';
 import { canonicalJson } from '../src/lib/confirmCsvSave';
 import { returnPackingInProgress, VARIANT_CORRECTION_PREFIX, RETURN_PACKING_PREFIX } from '../src/lib/returnSheets';
@@ -16,18 +17,6 @@ const orderAt = (rows: readonly Row[], id: string) => {
   if (matches.length !== 1) fail('Order not uniquely found.', 404);
   return matches[0];
 };
-const packingLockActive = (order: Row, adminRows: readonly Row[]) => {
-  const lock = order.return_packing_lock;
-  if (!lock || (typeof lock === 'object' && !Array.isArray(lock) && Object.keys(lock).length === 0)) return false;
-  const operationId = String(lock.operation_id || '');
-  if (!operationId) return true;
-  const journal = adminRows.find(row => row.key === RETURN_PACKING_PREFIX + operationId)?.payload;
-  // Release only this order's proven, completed allocation. Unknown and active
-  // transactions stay locked, and their stock can never be allocated twice.
-  return !(journal?.phase === 'complete' && order.return_packing_operation === operationId &&
-    journal.batch_id === order.invoice_pack_batch_id && journal.order_ids?.includes(String(order.id)) &&
-    journal.plans?.some((plan: Row) => String(plan.id) === String(order.id) && String(plan.waybill) === String(order.waybill_number)));
-};
 const eligible = (order: Row, adminRows: readonly Row[]) => {
   if (!order.invoice_locked || !order.stock_allocated || !order.waybill_number || !order.invoice_number) fail('An existing invoice and allocated stock are required.');
   const blockedHistory: Record<string, unknown> = {
@@ -38,7 +27,8 @@ const eligible = (order: Row, adminRows: readonly Row[]) => {
     return_sheet_id: order.return_sheet_id,
     return_tracking_waybill: order.return_tracking_waybill,
     cancel_stock_restore: order.cancel_stock_restore,
-    return_packing_lock: packingLockActive(order, adminRows),
+    stock_quantity_correction: order.stock_quantity_correction || order.stock_quantity_correction_lock,
+    return_packing_lock: activeOrderPackingLock(order, adminRows),
     fardar_csv_exported_at: order.fardar_csv_exported_at,
     // A matching waybill marker alone is not proof that a CSV was exported.
     // The timestamp is the export acknowledgement used by the dashboard.

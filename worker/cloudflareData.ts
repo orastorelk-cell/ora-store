@@ -461,7 +461,7 @@ export const cloudflareDataFetch: typeof fetch = async (input,init) => {
             if(resource==='order_snapshots'&&at>=0&&current[at].payload?.cancel_stock_restore?.operation_id){
               saved.payload=current[at].payload;
             }
-            if(resource==='order_snapshots'&&at>=0&&(current[at].payload?.return_sheet_id||current[at].payload?.return_tracking_waybill||current[at].payload?.return_packing_lock||current[at].payload?.return_packing_operation||current[at].payload?.variant_correction||current[at].payload?.variant_correction_lock)){
+            if(resource==='order_snapshots'&&at>=0&&(current[at].payload?.return_sheet_id||current[at].payload?.return_tracking_waybill||current[at].payload?.return_packing_lock||current[at].payload?.return_packing_operation||current[at].payload?.variant_correction||current[at].payload?.variant_correction_lock||current[at].payload?.stock_quantity_correction||current[at].payload?.stock_quantity_correction_lock||saved.payload?.stock_quantity_correction||saved.payload?.stock_quantity_correction_lock)){
               saved.payload=prepareOrderSnapshotUpdate(current[at].payload,saved.payload,[]).order;
             }
             if(resource==='courier_waybills'&&at>=0&&current[at].status==='Cancelled'&&current[at].permanently_retired===true){
@@ -472,7 +472,7 @@ export const cloudflareDataFetch: typeof fetch = async (input,init) => {
           }
         } else if(request.method==='PATCH' || request.method==='DELETE') {
           for(let i=current.length-1;i>=0;i--) if(matches(current[i],url.searchParams)) {
-            if((resource==='order_snapshots'&&(current[i].payload?.cancel_stock_restore?.operation_id||current[i].payload?.return_sheet_id||current[i].payload?.return_tracking_waybill||current[i].payload?.return_packing_lock||current[i].payload?.return_packing_operation))||
+            if((resource==='order_snapshots'&&(current[i].payload?.cancel_stock_restore?.operation_id||current[i].payload?.return_sheet_id||current[i].payload?.return_tracking_waybill||current[i].payload?.return_packing_lock||current[i].payload?.return_packing_operation||current[i].payload?.stock_quantity_correction||current[i].payload?.stock_quantity_correction_lock))||
               (resource==='courier_waybills'&&current[i].status==='Cancelled'&&current[i].permanently_retired===true)){
               throw new DataError('The cancelled order and retired waybill must remain locked in history.',409);
             }

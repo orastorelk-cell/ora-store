@@ -1,12 +1,13 @@
 import type { ReturnRecord, StockHistory } from '../types';
 import { sheetConfirmInProgress } from './sheetConfirmState';
+import { stockConsumedItems, STOCK_QUANTITY_PREFIX } from './orderStockQuantities';
 
 export const RETURN_SHEET_PREFIX = 'return-sheet-v1:';
 export const RETURN_UNLISTED_PREFIX = 'return-unlisted-v1:';
 export const RETURN_CONTROL_KEY = 'return-controls-v1';
 export const RETURN_PACKING_PREFIX = 'return-packing-v1:';
 export const VARIANT_CORRECTION_PREFIX = 'order-variant-correction-v1:';
-export const returnPackingInProgress = (rows: readonly any[],sheetOwner?:string) => sheetConfirmInProgress(rows,sheetOwner) || rows.some(row => [RETURN_PACKING_PREFIX,VARIANT_CORRECTION_PREFIX].some(prefix => String(row.key).startsWith(prefix)) && !['complete','failed'].includes(row.payload?.phase));
+export const returnPackingInProgress = (rows: readonly any[],sheetOwner?:string) => sheetConfirmInProgress(rows,sheetOwner) || rows.some(row => [RETURN_PACKING_PREFIX,VARIANT_CORRECTION_PREFIX,STOCK_QUANTITY_PREFIX].some(prefix => String(row.key).startsWith(prefix)) && !['complete','failed'].includes(row.payload?.phase));
 export const returnPackingPending = (rows: readonly any[]) => !!rows.find(row => row.key === RETURN_CONTROL_KEY)?.payload?.packing_pending || returnPackingInProgress(rows);
 export const parcelFullyReceived = (parcel: ReturnParcel) => !parcel.review_reason && parcel.items.length > 0 && parcel.items.every(item => !pendingReturnQty(item));
 export type ReturnReceivedItem = {
@@ -96,7 +97,7 @@ export const physicalReturnItems = (order: any): ReturnItem[] => {
       sku: String(item.sku || ''), name: String(item.product_name || item.sku || product) + (item.variant_name ? ' - ' + item.variant_name : ''),
       ...(bundle ? { bundle_name: bundle } : {}), expected_qty: quantity, good_qty: 0, damaged_qty: 0, not_received: false });
   };
-  for (const item of order.items) {
+  for (const item of stockConsumedItems(order)) {
     const qty = integer(item.quantity, 'order quantity', 1);
     if (item.product_type === 'bundle') {
       if (!Array.isArray(item.bundle_components) || !item.bundle_components.length) returnFail('Bundle component details are missing.');
@@ -202,7 +203,7 @@ export const sheetsFromRows = (rows: readonly any[]): ReturnSheet[] => rows.filt
 export const returnContainersFromRows = (rows: readonly any[]): ReturnSheet[] => rows.filter(row => [RETURN_SHEET_PREFIX,RETURN_UNLISTED_PREFIX].some(prefix => String(row.key).startsWith(prefix))).map(row => row.payload);
 export const sharedReturnInventory = (rows: readonly any[]) => {
   const sheets = returnContainersFromRows(rows);
-  const stockHistory = [...sheets.flatMap(sheet => sheet.receipts.flatMap(receipt => receipt.stock_history)),...rows.filter(row => [RETURN_PACKING_PREFIX,VARIANT_CORRECTION_PREFIX].some(prefix => String(row.key).startsWith(prefix)) && ['stock_saved','complete'].includes(row.payload?.phase)).flatMap(row => row.payload.stock_history || [])];
+  const stockHistory = [...sheets.flatMap(sheet => sheet.receipts.flatMap(receipt => receipt.stock_history)),...rows.filter(row => [RETURN_PACKING_PREFIX,VARIANT_CORRECTION_PREFIX,STOCK_QUANTITY_PREFIX,'order-cancel-stock-v1:'].some(prefix => String(row.key).startsWith(prefix)) && ['stock_saved','complete'].includes(row.payload?.phase)).flatMap(row => row.payload.stock_history || row.payload.history || [])];
   const returnRecords: ReturnRecord[] = sheets.flatMap(sheet => sheet.parcels.filter(parcel => parcel.checked_at && parcel.order_id).map(parcel => ({
     id: 'return-record:' + parcel.waybill, order_id: parcel.order_id!, order_number: parcel.order_number!, waybill_number: parcel.waybill,
     checked_at: parcel.checked_at!, checked_by: parcel.checked_by || '', status: parcel.items.every(item => !pendingReturnQty(item) && !item.damaged_qty && !wrongReturnQty(item)) ? 'Verified' : 'Issue Found',

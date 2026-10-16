@@ -1,3 +1,5 @@
+import { stockConsumedItems, stockItemQuantities } from '../../lib/orderStockQuantities';
+import { OrderStockCorrectionsPanel } from './OrderStockCorrectionsPanel';
 import { returnOrderFilter } from '../../lib/returnSheets';
 import { OrderVariantCorrection } from './OrderVariantCorrection';
 import { downloadA5Invoices } from '../../lib/a5InvoiceDownload';
@@ -5,6 +7,7 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   LayoutDashboard,
   Package,
+  PackageCheck,
   FolderTree,
   ShoppingBag,
   Users,
@@ -227,7 +230,7 @@ export const AdminDashboard: React.FC = () => {
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<
-    'duplicate_orders' |
+    'order_stock_corrections' | 'duplicate_orders' |
     'overview' | 'add_product' | 'combo_packs' | 'supplier_offer' | 'price_increase' | 'products' | 'categories' | 'banners' | 'notifications' | 'stock' | 'orders' | 'out_of_stock' | 'packing_expenses' | 'returns' | 'lead_import' | 'confirm_upload' | 'invoices' | 'packing' | 'invoice_design' | 'delivery' | 'dispatch' | 'cod_payments' | 'bank_transfer_check' | 'assistant_chats' | 'complaints' | 'reports' | 'profit_report' | 'success_rate' | 'reviews' | 'product_requests' | 'customers' | 'sheets' | 'activity' | 'branding' | 'website_info' | 'settings' | 'user_access' | 'deploy'
   >('overview');
   const [comboEditProductId, setComboEditProductId] = useState<string | undefined>(undefined);
@@ -2015,7 +2018,7 @@ Suitable For:
         !order.is_test_order
       )
       .forEach((order) => {
-        (order.items || []).forEach((item) => {
+        stockConsumedItems(order).forEach((item) => {
           const orderQty = Math.max(1, Number(item.quantity || 1));
           addPacking(item.sku || item.main_sku, orderQty);
 
@@ -2116,7 +2119,7 @@ Suitable For:
       )
       .forEach((order)=>{
         const isToday=stockLocalDayKey(order.stock_allocated_at)===todayKey;
-        (order.items||[]).forEach((item)=>{
+        stockConsumedItems(order).forEach((item) => {
           const orderQty=Math.max(1,Number(item.quantity||1));
           addPacked(item.sku||item.main_sku,orderQty,isToday);
           if(item.product_type==='bundle' && Array.isArray(item.bundle_components)){
@@ -2223,7 +2226,7 @@ Suitable For:
       .filter((order)=>order.stock_allocated && Boolean(order.stock_allocated_at) && order.order_status!=='Cancelled' && !order.is_duplicate_order && !order.is_test_order)
       .forEach((order)=>{
         const day=stockLocalDayKey(order.stock_allocated_at);
-        (order.items||[]).forEach((item)=>{
+        stockConsumedItems(order).forEach((item) => {
           const orderQty=Math.max(1,Number(item.quantity||1));
           const directSku=String(item.sku||item.main_sku||'').trim().toUpperCase();
           if(directSku===selectedStockReportSku) add(packedByDay,day,orderQty);
@@ -3134,7 +3137,7 @@ Suitable For:
   ] as const;
   const canAccessTab = (tabId: string) => {
     if (adminUser?.role === 'admin') return true;
-    if (tabId === 'user_access') return false;
+    if (tabId === 'user_access' || tabId === 'order_stock_corrections') return false;
     return accessLevelFromList(adminUser?.permissions, tabId) !== 'none';
   };
   const canEditTab = (tabId: string) => adminUser?.role === 'admin' || accessLevelFromList(adminUser?.permissions, tabId) === 'edit';
@@ -3165,6 +3168,7 @@ Suitable For:
     ]},
     { id:'ORDERS', label:'ORDERS', items:[
       { id:'orders', label:newOrdersCount > 0 ? `Orders (${newOrdersCount} New)` : `Orders (${orders.length})`, icon:ShoppingBag },
+      { id:'order_stock_corrections', label:'Order Stock Corrections', icon:PackageCheck },
       { id:'duplicate_orders', label:`Duplicate Orders (${orders.filter(order=>order.is_duplicate_order&&order.order_status!=='Cancelled').length})`, icon:ShieldAlert },
       { id:'lead_import', label:'FB / TikTok Lead Import', icon:FileSpreadsheet },
       { id:'confirm_upload', label:'FINALIZE • Confirm / Cancel Upload', icon:Upload },
@@ -5259,6 +5263,7 @@ Suitable For:
         />
       )}
 
+      {activeTab === 'order_stock_corrections' && adminUser?.role === 'admin' && <OrderStockCorrectionsPanel />}
       {activeTab === 'duplicate_orders' && <DuplicateOrdersPanel canEdit={canEditTab('duplicate_orders')} />}
       {activeTab === 'returns' && <ReturnSheetsPanel canEdit={canEditTab('returns') || canUseSpecialAction('return_process')} />}
 
@@ -7320,7 +7325,7 @@ Suitable For:
         const original = orders.find((order) => order.id === replacementOrderId);
         if (!original) return null;
         const item = original.items?.[replacementItemIndex];
-        const maxQty = Math.max(1, Number(item?.quantity || 1));
+        const maxQty = original.stock_quantity_correction ? Math.max(0, Number(item?.quantity || 0) - stockItemQuantities(original)[replacementItemIndex]) : Math.max(1, Number(item?.quantity || 1));
         const existingReplacement = item
           ? orders.find((order) =>
               order.is_replacement_order === true &&
@@ -7352,7 +7357,7 @@ Suitable For:
               </div>
 
               <div className="mt-4 rounded-xl border border-emerald-500/25 bg-emerald-500/10 p-3 text-[11px] text-emerald-100">
-                <b>Safe stock handling:</b> original order already deducted this unit. The re-delivery is marked Stock Allocated, so system stock is not increased or deducted again. Original order and old waybill remain unchanged.
+                <b>Stock handling:</b> {original.stock_quantity_correction ? 'Unused units were released to available stock. This re-delivery will deduct its quantity through normal stock allocation.' : 'The original order already deducted these units. The re-delivery uses that allocation.'} Original order and old waybill remain unchanged.
               </div>
 
               <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -7405,7 +7410,7 @@ Suitable For:
                   Delivery<br/><span className="text-base text-emerald-400">Rs. 0</span>
                 </div>
                 <div className="rounded-xl border border-neutral-700 bg-neutral-950 p-3 text-neutral-300">
-                  Stock Change<br/><span className="text-base text-emerald-400">0</span>
+                  Stock Change<br/><span className="text-base text-emerald-400">{original.stock_quantity_correction ? `-${replacementQty}` : 0}</span>
                 </div>
               </div>
 
@@ -7430,11 +7435,11 @@ Suitable For:
                 </button>
                 <button
                   type="button"
-                  disabled={replacementBusy || !item || !replacementReason.trim() || Boolean(existingReplacement)}
+                  disabled={replacementBusy || !item || maxQty < 1 || !replacementReason.trim() || Boolean(existingReplacement)}
                   onClick={async () => {
                     if (!item) return;
                     if (!window.confirm(
-                      `Create Rs.0 re-delivery?\n\nOriginal: ${original.order_number}\nOld Waybill: ${original.waybill_number || '-'}\nItem: ${item.sku} x${replacementQty}\nCOD: Rs. 0\nStock change: 0`
+                      `Create Rs.0 re-delivery?\n\nOriginal: ${original.order_number}\nOld Waybill: ${original.waybill_number || '-'}\nItem: ${item.sku} x${replacementQty}\nCOD: Rs. 0\nStock change: ${original.stock_quantity_correction ? -replacementQty : 0}`
                     )) return;
                     setReplacementBusy(true);
                     try {

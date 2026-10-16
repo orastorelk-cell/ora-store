@@ -1,3 +1,4 @@
+import { r2OrderStockCorrectionHandler } from './r2OrderStockCorrection';
 import { returnPackingInProgress } from '../src/lib/returnSheets';
 import { returnPackingHandler } from './r2ReturnPacking';
 import { activeData, configureCloudflareData, dataBucket, readDataTable, readDataTableWire, mutateDataTable, replaceDataTable } from './cloudflareData';
@@ -61,6 +62,7 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   const invoiceRecovery=['GET','POST'].includes(request.method)&&/^\/api\/orders\/invoices\/recovery(?:\/[A-Za-z0-9_-]{16,100}(?:\/downloaded)?)?$/.test(path);
   const downloads=request.method==='POST'&&path==='/api/orders/invoice-download-status';
   const cancellation=['GET','POST'].includes(request.method)&&path==='/api/orders/cancel-before-dispatch';
+  const stockCorrection=['GET','POST'].includes(request.method)&&path==='/api/orders/stock-quantity';
   const variantCorrection=['GET','POST'].includes(request.method)&&path==='/api/orders/variant-correction';
   const pool=(request.method==='GET'&&path==='/api/courier/waybills')||(request.method==='POST'&&path==='/api/courier/waybills/import');
   const assignment=request.method==='POST'&&path==='/api/orders/waybill/assign';
@@ -68,9 +70,10 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   const orderPut=['PUT','DELETE'].includes(request.method)&&/^\/api\/orders\/[^/]+$/.test(path);
   const returns=path.startsWith('/api/returns/');
   const redispatch=request.method==='POST'&&path==='/api/orders/redispatch-waybill';
-  if(!read&&!delivered&&!courierPayments&&!confirmed&&!refresh&&!audit&&!invoices&&!mergeBatches&&!invoiceRecovery&&!downloads&&!cancellation&&!variantCorrection&&!orderPut&&!pool&&!assignment&&!fulfilment&&!returns&&!redispatch)return null;
+  if(!read&&!delivered&&!courierPayments&&!confirmed&&!refresh&&!audit&&!invoices&&!mergeBatches&&!invoiceRecovery&&!downloads&&!cancellation&&!variantCorrection&&!stockCorrection&&!orderPut&&!pool&&!assignment&&!fulfilment&&!returns&&!redispatch)return null;
   const user=await verifyActiveStaff(request,env);
   if(!user)return json({error:'Login session required.'},401);
+  if(stockCorrection)return r2OrderStockCorrectionHandler(request,env,user);
   if(variantCorrection)return r2VariantCorrectionHandler(request,env,user);
   if(courierPayments)return r2CourierPaymentsHandler(request,env,user);
   if((confirmed||delivered||downloads||redispatch||(orderPut&&request.method==='DELETE'))&&returnPackingInProgress(await readDataTable(env,'admin_data_store')))return json({error:'A packing batch is finishing. Retry its saved operation first.'},409);
@@ -89,6 +92,7 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
     const id=decodeURIComponent(path.slice('/api/orders/'.length));
     if(request.method==='PUT')return r2OrderUpdateHandler(request,env,id);
     const current=(await readDataTable(env,'order_snapshots')).find(row=>String(row.order_id)===id)?.payload;
+    if(current?.stock_quantity_correction||current?.stock_quantity_correction_lock)return json({error:'Keep this corrected order in history. Use Order Stock Corrections to cancel it and retire its waybill.'},409);
     if(current?.return_sheet_id||current?.return_tracking_waybill)return json({error:'Orders linked to a return sheet must remain in history.'},409);
     if(current?.cancel_stock_restore?.operation_id){
       if(request.method==='DELETE')return json({error:'The cancelled order and its retired waybill must remain in history.'},409);

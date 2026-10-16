@@ -76,7 +76,7 @@ export const stockHistoryDateFiltersPatch = () => ({
         "          !order.is_test_order",
         "        )",
         "        .forEach((order) => {",
-        "          (order.items || []).forEach((item) => {",
+        "          stockConsumedItems(order).forEach((item) => {",
         "            const orderQty = Math.max(1, Number(item.quantity || 1));",
         "            add(packedBySku, item.sku || item.main_sku, orderQty);",
         "            if (item.product_type === 'bundle' && Array.isArray(item.bundle_components)) {",

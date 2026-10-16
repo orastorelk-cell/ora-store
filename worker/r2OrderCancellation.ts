@@ -1,3 +1,4 @@
+import { stockConsumedItems, activeOrderPackingLock } from '../src/lib/orderStockQuantities';
 import { returnPackingInProgress } from '../src/lib/returnSheets';
 import { readDataTable, mutateDataTable } from './cloudflareData';
 import { canonicalJson } from '../src/lib/confirmCsvSave';
@@ -19,7 +20,7 @@ const requirementsFor=(order:Row):Requirement[]=>{
     const key=id+'\0'+variant,old=amounts.get(key);
     if(old)old.quantity+=qty;else amounts.set(key,{product_id:id,...(variant?{variant_id:variant}:{}),quantity:qty,label:String(label||id)});
   };
-  for(const item of order.items){
+  for(const item of stockConsumedItems(order)){
     const qty=Number(item.quantity);
     if(!Number.isSafeInteger(qty)||qty<=0)fail('The allocated item quantity is invalid.');
     if(item.product_type==='bundle'){
@@ -51,11 +52,11 @@ const currentOrder=(rows:Row[],id:string,waybill:string)=>{
   if(waybill&&rows.some(other=>other!==row&&String(other.payload?.waybill_number||'').trim()===waybill))fail('The waybill is also attached to another order.');
   return {row,order};
 };
-const canCancel=(order:Row)=>{
-  if(order.return_packing_lock?.operation_id)fail('Finish the return packing batch before cancelling this order.');
+const canCancel=(order:Row,adminRows:Row[])=>{
+  if(activeOrderPackingLock(order,adminRows)||order.stock_quantity_correction_lock||order.variant_correction_lock)fail('Finish the stock operation before cancelling this order.');
   if(order.cancel_stock_restore?.operation_id)return;
   if(order.order_status==='Cancelled')fail('This order was cancelled by an older flow. Its stock must be checked before any restoration.');
-  if(order.dispatch_status==='Handed Over'||['Shipped','Delivered'].includes(order.order_status)||order.return_received_at||order.return_status||order.cod_payment_received)fail('This parcel has dispatch, delivery, return or COD history. Use the verified return flow.');
+  if(order.dispatch_status==='Handed Over'||['Shipped','Delivered'].includes(order.order_status)||order.return_received_at||(order.return_status&&order.return_status!=='None')||order.return_sheet_id||order.return_tracking_waybill||order.cod_payment_received)fail('This parcel has dispatch, delivery, return or COD history. Use the verified return flow.');
 };
 const assertOwner=(locks:Row[],order:Row)=>{
   const waybill=String(order.waybill_number||'').trim();
@@ -71,7 +72,8 @@ const assertOwner=(locks:Row[],order:Row)=>{
 // a retry or lost response can never add stock a second time.
 export const cancelBeforeDispatch=async(env:unknown,id:string,waybill:string,reason:string,actor:string)=>{
   const initial=currentOrder(await readDataTable(env,'order_snapshots'),id,waybill).order;
-  canCancel(initial);assertOwner(await readDataTable(env,'courier_waybills'),initial);
+  const adminBefore=await readDataTable(env,'admin_data_store');
+  canCancel(initial,adminBefore);assertOwner(await readDataTable(env,'courier_waybills'),initial);
   let requirements:Requirement[]=initial.cancel_stock_restore?.requirements||requirementsFor(initial);
   const op=operationKey(id),now=new Date().toISOString();
   const journal=await mutateDataTable(env,'admin_data_store',rows=>{
@@ -88,7 +90,7 @@ export const cancelBeforeDispatch=async(env:unknown,id:string,waybill:string,rea
   reason=journal.reason;actor=journal.actor;
   let prepared:Row;
   try{prepared=await mutateDataTable(env,'order_snapshots',rows=>{
-    const {row,order}=currentOrder(rows,id,waybill);canCancel(order);
+    const {row,order}=currentOrder(rows,id,waybill);canCancel(order,adminBefore);
     if(order.cancel_stock_restore?.operation_id){if(order.cancel_stock_restore.operation_id!==op)fail('Another cancellation operation owns this order.');return order;}
     if(canonicalJson(requirementsFor(order))!==canonicalJson(requirements))fail('The allocated items changed. Check the order again.');
     row.payload={...order,order_status:'Cancelled',call_center_status:'Cancelled',call_center_updated_at:now,
@@ -157,6 +159,7 @@ export const cancellationSummary=async(env:unknown,id:string,waybill:string)=>{
   const adminRows=await readDataTable(env,'admin_data_store'),state=adminRows.find(row=>row.key===KEY)?.payload;
   const ledger=adminRows.find(row=>row.key===operationKey(id))?.payload;
   const lock=waybill?(await readDataTable(env,'courier_waybills')).find(row=>String(row.waybill_number||'').trim()===waybill):null;
+  let cancelError='';try{canCancel(order,adminRows);assertOwner(waybill?(await readDataTable(env,'courier_waybills')):[],order);}catch(error:any){cancelError=error.message;}
   const requirements=order.cancel_stock_restore?.requirements||requirementsFor(order);
   const items=stockTargets(state?.products||[],requirements).map(({req,sku,label,before})=>({sku,item:label,quantity:req.quantity,current_stock:before}));
   return {ok:true,storage:'cloudflare-r2',order_id:String(order.id),order_number:order.order_number,order_status:order.order_status,
@@ -166,7 +169,7 @@ export const cancellationSummary=async(env:unknown,id:string,waybill:string)=>{
     cancellation_state:order.cancel_stock_restore?.state||null,
     complete:order.order_status==='Cancelled'&&order.cancel_stock_restore?.state==='complete'&&ledger?.phase==='complete'&&(!waybill||lock?.permanently_retired===true&&lock?.status==='Cancelled'&&lock?.assigned_order_number===order.order_number),
     allocated_stock:order.stock_allocated===true,items,stock_restored:ledger?.history||[],
-    can_cancel:(order.order_status!=='Cancelled'||Boolean(order.cancel_stock_restore?.operation_id))&&!['Shipped','Delivered'].includes(order.order_status)&&order.dispatch_status!=='Handed Over'&&!order.return_received_at&&!order.return_status&&!order.cod_payment_received,
+    can_cancel:!cancelError,cancellation_error:cancelError,
     checked_at:new Date().toISOString()};
 };
 
@@ -175,11 +178,11 @@ export const r2OrderCancellationHandler=async(request:Request,env:unknown,user:R
   if(user.role!=='admin')return json({error:'Super Admin access is required.'},403);
   try{
     if(request.method==='GET'){
-      const waybill=String(new URL(request.url).searchParams.get('waybill')||'').trim();
-      if(!waybill||waybill.length>100)return json({error:'Enter the exact waybill number.'},400);
-      const matches=(await readDataTable(env,'order_snapshots')).filter(row=>String(row.payload?.waybill_number||'').trim()===waybill);
+      const search=String(new URL(request.url).searchParams.get('waybill')||new URL(request.url).searchParams.get('order_number')||'').trim();
+      if(!search||search.length>150)return json({error:'Enter the exact order ID or waybill number.'},400);
+      const matches=(await readDataTable(env,'order_snapshots')).filter(row=>[row.order_id,row.payload?.order_number,row.payload?.waybill_number].some(value=>String(value||'').toUpperCase()===search.toUpperCase()));
       if(matches.length!==1)return json({error:'The waybill must belong to exactly one existing order.'},409);
-      return json(await cancellationSummary(env,String(matches[0].payload.id),waybill));
+      return json(await cancellationSummary(env,String(matches[0].payload.id),String(matches[0].payload.waybill_number||'').trim()));
     }
     const body:any=await request.json().catch(()=>null),id=String(body?.order_id||''),waybill=String(body?.waybill_number||'').trim(),reason=String(body?.reason||'').trim();
     if(!id||id.length>150||waybill.length>100||!reason||reason.length>2000)return json({error:'A current order ID, waybill and cancellation reason are required.'},400);
