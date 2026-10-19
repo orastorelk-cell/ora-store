@@ -268,6 +268,19 @@ export const readDataTable=async(env:unknown,table:string):Promise<Row[]>=>{
   const active=await activeData(bucket);if(!active)throw new DataError('Cloudflare recovery is required.');
   return (await tableState(bucket,active.prefix,table)).rows;
 };
+// Download/confirm guards need the current transaction lock, not every saved
+// return receipt, invoice logo and packing history. Publish it in the SAME CAS.
+export const readPackingInProgress=async(env:unknown):Promise<boolean>=>{
+  const bucket=dataBucket(env);if(!bucket)throw new DataError('Cloudflare R2 binding is unavailable.');
+  const active=await activeData(bucket);if(!active)throw new DataError('Cloudflare recovery is required.');
+  const saved=await parsedObject(bucket,active.prefix+'admin-changes-v1.json');
+  if(saved){
+    const manifest=saved.value,base=await bucket.get(active.prefix+'admin_data_store.json');
+    if(manifest?.format!=='ora-admin-changes-v1'||!base||base.etag!==manifest.base_etag)throw new DataError('Cloudflare admin journal is missing or invalid.');
+    if(typeof manifest.packing_in_progress==='boolean')return manifest.packing_in_progress;
+  }
+  return returnPackingInProgress((await tableState(bucket,active.prefix,'admin_data_store')).rows);
+};
 // Customer freshness polling only needs the catalog revision. Do not decrypt and
 // parse return receipts and old packing operations on every thirty-second poll.
 export const readStorefrontVersion=async(env:unknown)=>{

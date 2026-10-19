@@ -47,7 +47,7 @@ export const OrderVariantCorrection: React.FC<{orderId: string}> = ({orderId}) =
       <p>New batch: {saved.order.invoice_pack_batch_id}</p>
       {saved.order.items.map((item: any, index: number) => <p key={index}>{item.variant_name} × {item.quantity}</p>)}
       {saved.stock_history.map((row: any) => <p key={row.id}>{row.sku}: {row.previous_stock} → {row.new_stock}</p>)}
-      <button type="button" disabled={busy} onClick={async () => { setBusy(true); setError(''); try { await generateOrderInvoicePDF(saved.order, settings); await markInvoiceBatchDownloaded([saved.order.id]); } catch (error: any) { setError(error.message); } finally { setBusy(false); } }} className="rounded-lg bg-blue-700 px-4 py-2 font-bold text-white disabled:opacity-40">Download Corrected Invoice</button>
+      <button type="button" disabled={busy} onClick={async () => { setBusy(true); setError(''); try { await generateOrderInvoicePDF(saved.order, settings); await markInvoiceBatchDownloaded([saved.order.id],undefined,undefined,[saved.order]); } catch (error: any) { setError(error.message); } finally { setBusy(false); } }} className="rounded-lg bg-blue-700 px-4 py-2 font-bold text-white disabled:opacity-40">Download Corrected Invoice</button>
       <button type="button" disabled={busy} onClick={async () => { setBusy(true); setError(''); try {
         await markFardarCsvExported([saved.order.id]);
         downloadReturnBlob(new Blob([returnPackingCsv([saved.order], settings)], {type: 'text/csv;charset=utf-8;'}), saved.order.order_number + '_Fardar_Corrected.csv');

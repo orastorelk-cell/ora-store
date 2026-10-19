@@ -94,6 +94,15 @@ shards together when restoring a checkpoint; do not overwrite the base alone.
 concurrent edits, cold reads and browser draft recovery. `/connection-check.html`
 also checks full/compact/patch saves unchanged and staff session renewal.
 
+Invoice PDF download receipts are retained per staff account in the browser
+until the server confirms them. Status saves touch one order shard per request;
+reload, online/focus and the retry control resume the original event without
+generating another PDF. Pending receipt set numbers remain reserved. The packing
+guard is published atomically in the admin manifest, so status saves do not load
+all old packing history. A pending receipt also verifies its original invoice,
+batch and waybill before updating status. `npm run test:invoice-downloads` covers durable receipt
+recovery, large batches, interrupted acknowledgments and exact unrelated data.
+
 Check these in order:
 
 1. `/api/health`

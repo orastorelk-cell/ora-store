@@ -1,10 +1,11 @@
 import type { DataBucket } from './cloudflareData';
+import { returnPackingInProgress } from '../src/lib/returnSheets';
 
 type Row = Record<string, any>;
 type ObjectState = { value: any; text: string; object: { etag: string; customMetadata?: Record<string, string> } };
 type Access = { read: (key: string) => Promise<ObjectState | null>; cache: (key: string, etag: string, text: string, value: any) => void };
 type Cell = { id: string; value?: any; deleted?: true };
-type Manifest = { format: 'ora-admin-changes-v1'; base_etag: string; count: number; keys: string[]; updated_at: string; shards: Record<string, string>; catalog: {initialized:boolean;updated_at:string} };
+type Manifest = { format: 'ora-admin-changes-v1'; base_etag: string; count: number; keys: string[]; updated_at: string; shards: Record<string, string>; catalog: {initialized:boolean;updated_at:string}; packing_in_progress:boolean };
 const CATALOG = 'storefront-state-v1';
 const options = { httpMetadata: { contentType: 'application/json', cacheControl: 'no-store' }, customMetadata: { oraData: '1' } };
 const caches = new WeakMap<DataBucket, Map<string, { revision: string; rows: Row[]; shards: Map<string, Cell[]>; text?: string }>>();
@@ -146,7 +147,7 @@ export const writeAdminJournal = async (bucket: DataBucket, prefix: string, stat
   if (old?.customMetadata?.hour !== String(hour)) await bucket.put(backup, JSON.stringify({ format: 'ora-admin-checkpoint-v1', base_key: prefix + 'admin_data_store.json', base_etag: journal.base.object.etag, changes: journal.manifest, count: state.rows.length, created_at: now }),
     { ...options, customMetadata: { oraData: '1', hour: String(hour), createdAt: now }, onlyIf: old ? { etagMatches: old.etag } : { etagDoesNotMatch: '*' } });
   const catalog=rows.find(row=>row.key===CATALOG);
-  const manifest: Manifest = { format: 'ora-admin-changes-v1', base_etag: journal.base.object.etag, count: rows.length, keys: rows.map(row=>String(row.key)), updated_at: now, shards,
+  const manifest: Manifest = { format: 'ora-admin-changes-v1', base_etag: journal.base.object.etag, count: rows.length, keys: rows.map(row=>String(row.key)), updated_at: now, shards, packing_in_progress:returnPackingInProgress(rows),
     catalog:{initialized:Boolean(catalog),updated_at:String(catalog?.updated_at||catalog?.payload?.updated_at||'')} }, text = JSON.stringify(manifest);
   const saved = await bucket.put(journal.path, text, { ...options, customMetadata: { oraData: '1', oraCount: String(rows.length), oraUpdatedAt: now }, onlyIf: journal.saved ? { etagMatches: journal.saved.object.etag } : { etagDoesNotMatch: '*' } });
   if (!saved) return false;

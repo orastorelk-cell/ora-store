@@ -180,6 +180,10 @@ export const AdminDashboard: React.FC = () => {
     settings,
     orderLoadError,
     storefrontSyncMessage,
+    invoiceDownloadSyncMessage,
+    invoiceDownloadCanRetry,
+    retryInvoiceDownloadSave,
+    getPendingInvoiceDownloadSets,
     retryStorefrontSave,
     addProduct,
     updateProduct,
@@ -3280,6 +3284,10 @@ Suitable For:
               {storefrontSyncMessage}
               {!['Website changes saved.','Saving website changes…'].includes(storefrontSyncMessage)&&<button type="button" className="ml-3 underline font-bold" onClick={retryStorefrontSave}>Retry Save</button>}
             </div>}
+            {invoiceDownloadSyncMessage && <div role="status" className={`mt-2 rounded-xl px-3 py-2 text-sm ${invoiceDownloadSyncMessage==='Invoice download status saved.'?'bg-green-100 text-green-950':'bg-amber-100 text-amber-950'}`}>
+              {invoiceDownloadSyncMessage}
+              {invoiceDownloadCanRetry&&<button type="button" className="ml-3 underline font-bold" onClick={retryInvoiceDownloadSave}>Retry Status Save</button>}
+            </div>}
 
             {adminUser && (
               <span
@@ -4900,12 +4908,14 @@ Suitable For:
 
               const resolveDownloadSet = () => {
                 const localDate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-                const existingDate = batchOrders.map(o=>o.invoice_pack_download_set_date).find(Boolean);
-                const existingNumber = batchOrders.map(o=>o.invoice_pack_download_set_number).find((n)=>Number(n)>0);
+                const pendingSets=getPendingInvoiceDownloadSets();
+                const pendingSet=pendingSets.find(set=>batchOrders.some(order=>set.orderIds.includes(order.id)));
+                const existingDate = batchOrders.map(o=>o.invoice_pack_download_set_date).find(Boolean)||pendingSet?.date;
+                const existingNumber = batchOrders.map(o=>o.invoice_pack_download_set_number).find((n)=>Number(n)>0)||pendingSet?.number;
                 const setDate = existingDate || localDate(new Date());
                 const usedNumbers = orders
                   .filter(o=>o.invoice_pack_download_set_date===setDate && Number(o.invoice_pack_download_set_number)>0)
-                  .map(o=>Number(o.invoice_pack_download_set_number));
+                  .map(o=>Number(o.invoice_pack_download_set_number)).concat(pendingSets.filter(set=>set.date===setDate).map(set=>set.number));
                 const setNumber = Number(existingNumber || ((usedNumbers.length ? Math.max(...usedNumbers) : 0) + 1));
                 return { setDate, setNumber, stem:`${setDate}_Set-${String(setNumber).padStart(2,'0')}` };
               };
@@ -4915,7 +4925,8 @@ Suitable For:
                   await markInvoiceBatchDownloaded(
                     targets.map(o=>o.id),
                     adminUser?.name || 'Packing Staff',
-                    { date: setDate, number: setNumber }
+                    { date: setDate, number: setNumber },
+                    targets
                   );
                 } catch(e:any) {
                   alert(`PDF was downloaded, but the Downloaded status could not be saved.\n\n${e?.message || 'Please try again before reloading.'}`);

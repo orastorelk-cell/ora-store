@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { ACTIVE_KEY, activeData, configureCloudflareData, dataBucket, importRecovery, mutateDataTable, readDataTable, readDataTableWire, readStorefrontVersion, replaceDataTable } from '../worker/cloudflareData';
+import { ACTIVE_KEY, activeData, configureCloudflareData, dataBucket, importRecovery, mutateDataTable, readDataTable, readDataTableWire, readPackingInProgress, readStorefrontVersion, replaceDataTable } from '../worker/cloudflareData';
 import { withR2DataFallback } from '../worker/r2RecoveryFallback';
 import { rebaseStorefrontEdit, storefrontSaveBody, validStorefrontPatch } from '../src/lib/storefrontProductSave';
 import { acknowledgeStorefrontDraft, readStorefrontDraft, rememberStorefrontDraft } from '../src/lib/storefrontDraft';
@@ -82,6 +82,11 @@ const noFullRead={...env,ORA_MEDIA_R2:{put:raw.put.bind(raw),get:async(key:strin
   return key===baseKey&&object?{...object,text:async()=>{throw new Error('Version polling must not decrypt the full history');}}:object;
 }}};
 assert.deepEqual(await readStorefrontVersion(noFullRead),{initialized:true,updated_at:(await state()).updated_at});
+assert.equal(await readPackingInProgress(noFullRead),false,'An invoice download guard must not decrypt the full admin history');
+await replaceDataTable(env,'admin_data_store',rows=>({rows:[...rows,{key:'return-packing-v1:active-test',payload:{phase:'orders'}}],result:null}));
+assert.equal(await readPackingInProgress(noFullRead),true,'The small guard changes in the same atomic commit as the packing operation');
+await replaceDataTable(env,'admin_data_store',rows=>({rows:rows.map(row=>row.key==='return-packing-v1:active-test'?{...row,payload:{phase:'complete'}}:row),result:null}));
+assert.equal(await readPackingInProgress(noFullRead),false,'A completed operation releases the guard without loading its old history');
 assert.equal((await withR2DataFallback(new Request('https://fixture/api/health'),noFullRead,{},async()=>{throw new Error('Health must not start the Node bridge');})).status,200);
 const checkpointKey = raw.writes.find(write => write.key.startsWith('ora-data/backups-v2/admin_data_store/'))!.key;
 assert.equal(JSON.parse(await (await dataBucket(env)!.get(checkpointKey))!.text()).format, 'ora-admin-checkpoint-v1');

@@ -6,7 +6,8 @@ import { transformSync } from 'esbuild';
 import { loadConfigFromFile } from 'vite';
 import { activeData, dataBucket, importRecovery, readDataTable, replaceDataTable } from '../worker/cloudflareData';
 import { withR2DataFallback } from '../worker/r2RecoveryFallback';
-import { applyInvoiceDownloadStatus, invoiceDownloadRequest, saveInvoiceDownloadStatus } from '../src/lib/invoiceDownloadStatus';
+import { applyInvoiceDownloadStatus, invoiceDownloadBatches, invoiceDownloadRequest, saveInvoiceDownloadRequest, saveInvoiceDownloadStatus } from '../src/lib/invoiceDownloadStatus';
+import { createInvoiceDownloadQueue } from '../src/lib/invoiceDownloadQueue';
 import { confirmCsvRequestWithRetry } from '../src/lib/confirmCsvSave';
 import { FARDAR_EXPORT_STATUS_API, fardarExportRequest, saveFardarExportStatus } from '../src/lib/fardarExportStatus';
 
@@ -56,6 +57,13 @@ assert.equal((await post(body, 'invalid')).status, 401);
 assert.equal((await post({ ...body, orderIds: [...body.orderIds, 'order-50'] })).status, 400);
 assert.equal(invoiceDownloadRequest({ ...body, downloadedAt: 'invalid' }), null);
 assert.equal(invoiceDownloadRequest({ ...body, downloadSet: { date: 'bad', number: 0 } }), null);
+const invoiceIdentity={id:orders[0].id,invoiceNumber:orders[0].invoice_number,batchId:orders[0].invoice_pack_batch_id,waybill:orders[0].waybill_number};
+const guardedDownload={...body,orderIds:[orders[0].id],invoices:[invoiceIdentity]};
+assert(invoiceDownloadRequest(guardedDownload));
+assert.equal(invoiceDownloadRequest({...guardedDownload,invoices:[]}),null);
+assert.throws(()=>applyInvoiceDownloadStatus([{...orders[0],invoice_pack_batch_id:'NEW-BATCH'}],guardedDownload),
+  (error:any)=>error.status===422,'A recovered receipt for an old PDF cannot mark a different invoice batch Downloaded');
+assert.equal(applyInvoiceDownloadStatus([{...orders[0],invoice_generated_at:'2030-01-01T00:00:00Z'}],guardedDownload).orders.length,1,'Exact invoice identity does not depend on the browser clock');
 const before = await readDataTable(env, 'order_snapshots');
 const original = JSON.stringify(before);
 raw.writes = [];
@@ -77,6 +85,12 @@ assert.deepEqual(after.slice(50), before.slice(50), 'Every unselected durable re
 raw.writes = [];
 assert.equal((await post(body)).status, 200);
 assert.equal(raw.writes.length, 0, 'Lost-response replays are completely write-free');
+assert.equal((await post(guardedDownload)).status,200,'The exact original invoice can acknowledge its durable receipt');
+assert.equal((await post({...guardedDownload,invoices:[{...invoiceIdentity,waybill:'CHANGED-WB'}]})).status,422);
+assert.equal(raw.writes.length,0,'A stale parcel receipt never writes any order');
+await assert.rejects(saveInvoiceDownloadRequest(guardedDownload,async()=>({ok:true,orders:[{...orders[0],invoice_pack_downloaded_at:body.downloadedAt,
+  invoice_pack_downloaded_by:body.downloadedBy,invoice_pack_download_set_date:body.downloadSet.date,invoice_pack_download_set_number:body.downloadSet.number,
+  waybill_number:'WRONG-RECEIPT-WB'}]}),async()=>{}),/did not confirm/,'The browser verifies the exact invoice in the server receipt');
 const missingBefore = JSON.stringify(await readDataTable(env, 'order_snapshots'));
 assert.equal((await post({ ...body, orderIds: ['order-0', 'missing'] })).status, 404);
 assert.equal(JSON.stringify(await readDataTable(env, 'order_snapshots')), missingBefore, 'A missing group member cannot partially change downloads');
@@ -112,8 +126,9 @@ const client = async (_path: string, options?: RequestInit) => {
 };
 raw.writes = [];
 const clientSaved = await saveInvoiceDownloadStatus(['order-100', 'order-101'], ' Packing Staff ', { date: '2026-10-07', number: 3 }, client, async () => {});
-assert.equal(clientSaved.length, 2); assert.equal(attempts, 2);
-assert.equal(raw.writes.filter(key => key === orderKey).length, 1, 'A lost acknowledgment does not create another download write');
+const clientGroups=invoiceDownloadBatches(['order-100','order-101'],'Packing Staff').length;
+assert.equal(clientSaved.length, 2); assert.equal(attempts, clientGroups+1);
+assert.equal(raw.writes.filter(key => key === orderKey).length, clientGroups, 'A lost acknowledgment does not create another download write');
 raw.failKey = orderKey;
 const failed = await post({ ...nextBody, orderIds: ['order-102'] });
 assert.equal(failed.status, 503, 'A real storage failure is never acknowledged');
@@ -300,11 +315,18 @@ const exportScope: any = {orders: contextOrders, adminUser: {name: 'Packing Staf
     if (!response.ok) {const error: any = new Error(result.error); error.status = response.status; throw error;}
     return result;
   }, setOrders: (update: Function) => {exportScope.orders = update(exportScope.orders);}, logActivity: () => {}};
+const receiptValues=new Map<string,string>();
+const receiptStorage={get length(){return receiptValues.size;},key:(index:number)=>[...receiptValues.keys()][index]||null,
+  getItem:(key:string)=>receiptValues.get(key)||null,setItem:(key:string,value:string)=>{receiptValues.set(key,value);},removeItem:(key:string)=>{receiptValues.delete(key);},clear:()=>receiptValues.clear()};
+exportScope.invoiceDownloadQueueRef={current:createInvoiceDownloadQueue({storage:receiptStorage,user:'admin-id',request:exportScope.sharedStaffRequest,
+  pause:async()=>{},onState:()=>{},onSaved:updated=>{const saved=new Map(updated.map(order=>[order.id,order]));exportScope.setOrders((previous:any[])=>previous.map(order=>saved.get(order.id)||order));}})};
 vm.runInNewContext(transformSync(patched.slice(invoiceStart, statusEnd) + '\nglobalThis.exportCsv=markFardarCsvExported;globalThis.downloadPdf=markInvoiceBatchDownloaded;', {loader: 'ts'}).code, exportScope);
 await exportScope.exportCsv(contextOrders.map(order => order.id));
 assert(exportScope.orders.every((order: any) => order.fardar_csv_exported_waybill === order.waybill_number));
 await exportScope.downloadPdf(contextOrders.map(order => order.id), 'Packing Staff', {date: '2026-10-16', number: 8});
+await exportScope.invoiceDownloadQueueRef.current.flush();
 assert.equal(exportScope.orders.filter((order: any) => order.invoice_pack_download_set_number === 8).length, 137, 'Large PDF download status covers every saved invoice');
+assert.equal(receiptValues.size,0,'Only verified download status clears the pending receipts');
 console.log('PASS: CSV 503 regression; metadata-only atomic exports; large 137-order PDF/CSV batches; exact parcel guards; preserved stock/invoices/waybills/money; lost acknowledgments and repeat clicks; strict server receipts; production context uses no order PUT for downloads.');
 
 console.log('PASS: 511-order download fixture; one write per 50 invoices; exact unrelated data; auth/validation; CAS edits; lost acknowledgments; older retries; failed storage; strict client confirmation; hydration without redundant publishing; native order mirrors/locks/cancellation; 17 serialized mirrors with 503 retry.');

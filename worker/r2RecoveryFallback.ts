@@ -1,7 +1,6 @@
 import { r2OrderStockCorrectionHandler } from './r2OrderStockCorrection';
-import { returnPackingInProgress } from '../src/lib/returnSheets';
 import { returnPackingHandler } from './r2ReturnPacking';
-import { activeData, configureCloudflareData, dataBucket, readDataTable, readDataTableWire, mutateDataTable, replaceDataTable } from './cloudflareData';
+import { activeData, configureCloudflareData, dataBucket, readDataTable, readDataTableWire, readPackingInProgress, mutateDataTable, replaceDataTable } from './cloudflareData';
 import { applyDeliveredReport, type DeliveredEntry } from '../src/lib/deliveredOrders';
 import { applyConfirmCsvDecisions, validConfirmCsvEntries } from '../src/lib/confirmCsvSave';
 import { r2StorefrontHandler } from './r2Storefront';
@@ -46,7 +45,7 @@ const hmac=async(secret:string,payload:string)=>{
 export const verifyActiveStaff=async(request:Request,env:unknown)=>{
   const session=await verifySession(request,env);if(!session)return null;
   const users=await readDataTable(env,'admin_users');
-  return users.find(user=>String(user.id)===session.sub&&user.is_active!==false)||null;
+  return (users.find(user=>String(user.id)===session.sub&&user.is_active!==false)||null) as (Record<string,any>&{role:string})|null;
 };
 
 const operationalHandler=async(request:Request,env:unknown):Promise<Response|null>=>{
@@ -78,7 +77,7 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   if(stockCorrection)return r2OrderStockCorrectionHandler(request,env,user);
   if(variantCorrection)return r2VariantCorrectionHandler(request,env,user);
   if(courierPayments)return r2CourierPaymentsHandler(request,env,user);
-  if((confirmed||delivered||downloads||redispatch||(orderPut&&request.method==='DELETE'))&&returnPackingInProgress(await readDataTable(env,'admin_data_store')))return json({error:'A packing batch is finishing. Retry its saved operation first.'},409);
+  if((confirmed||delivered||downloads||redispatch||(orderPut&&request.method==='DELETE'))&&await readPackingInProgress(env))return json({error:'A packing batch is finishing. Retry its saved operation first.'},409);
   if(returns)return returnSheetsHandler(request,r2ReturnStorage(env),user);
   if(redispatch){
     const body:any=await request.clone().json().catch(()=>null);

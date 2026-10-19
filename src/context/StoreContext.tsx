@@ -37,7 +37,8 @@ import {
 import { syncOrderToGoogleSheets, syncOrdersBatchToGoogleSheets, syncProductCatalogToGoogleSheets, clearGoogleSheetTestData, clearGoogleSheetLiveStartData, deleteOrderFromGoogleSheets } from '../lib/googleSheetRequests';
 import { buildOrderItemSnapshot, deliverySplitForSettings, displayUnitPrice, effectiveBuyingPrice, findProductSelection, normalizeProductForStorage, normalizedProductType, productDisplayStock, variantById, variantBySku, repriceAfterBuyingCostChange } from '../lib/productVariants';
 import { canonicalJson, confirmCsvRequestWithRetry, saveConfirmCsvDecisions } from '../lib/confirmCsvSave';
-import { saveInvoiceDownloadStatus } from '../lib/invoiceDownloadStatus';
+import { createInvoiceDownloadQueue } from '../lib/invoiceDownloadQueue';
+import { mergeInvoiceDownloadReceipt } from '../lib/invoiceDownloadStatus';
 import { saveFardarExportStatus } from '../lib/fardarExportStatus';
 import { storefrontSaveBody, rebaseStorefrontEdit, sameStorefrontValue } from '../lib/storefrontProductSave';
 import { readStorefrontDraft, rememberStorefrontDraft, acknowledgeStorefrontDraft, archiveStorefrontDraft } from '../lib/storefrontDraft';
@@ -113,6 +114,10 @@ interface StoreContextType {
   sharedOrdersReady: boolean;
   orderLoadError: string;
   storefrontSyncMessage: string;
+  invoiceDownloadSyncMessage: string;
+  invoiceDownloadCanRetry: boolean;
+  retryInvoiceDownloadSave: () => void;
+  getPendingInvoiceDownloadSets: () => {date:string;number:number;orderIds:string[]}[];
   retryStorefrontSave: () => void;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
@@ -219,7 +224,7 @@ interface StoreContextType {
   redispatchReturnedParcel: (oldWaybill: string) => Promise<{ success: boolean; message: string; order?: Order; oldWaybill?: string; newWaybill?: string }>;
   unassignWaybill: (orderId: string) => void;
   markInvoicesGenerated: (orderIds: string[], generatedBy?: string) => Order[];
-  markInvoiceBatchDownloaded: (orderIds: string[], downloadedBy?: string, downloadSet?: { date: string; number: number }) => Promise<void>;
+  markInvoiceBatchDownloaded: (orderIds: string[], downloadedBy?: string, downloadSet?: { date: string; number: number }, downloadedInvoices?: Order[]) => Promise<void>;
   markFardarCsvExported: (orderIds: string[], exportedBy?: string) => Promise<void>;
   scanDispatchBarcode: (barcode: string, scannedBy?: string) => Promise<{ success: boolean; message: string; order?: Order }>;
   recordCodPayments: (entries: CodPaymentEntry[], recordedBy?: string) => Promise<{ updatedCount: number; unchangedCount: number; payments: number; returns: number; notFound: string[] }>;
@@ -360,8 +365,8 @@ const localStorefrontRequest = async (body: any) => {
 };
 const staffMutationQueue = createStaffMutationQueue();
 const sharedStaffRequest = async (url: string, options: RequestInit = {}) => {
+  const token = getStaffSessionToken();
   const send = () => {
-    const token = getStaffSessionToken();
     const headers = new Headers(options.headers || {});
     headers.set('Content-Type', 'application/json');
     if (token) headers.set('Authorization', `Bearer ${token}`);
@@ -599,6 +604,35 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const orderServerVersionRef = useRef('');
   const orderRefreshRef=useRef<{user:string;promise:Promise<void>}|null>(null);
   const adminIdentityRef=useRef('');adminIdentityRef.current=adminUser?.id||'';
+  const [invoiceDownloadSyncMessage,setInvoiceDownloadSyncMessage]=useState('');
+  const [invoiceDownloadCanRetry,setInvoiceDownloadCanRetry]=useState(false);
+  const invoiceDownloadQueueRef=useRef<ReturnType<typeof createInvoiceDownloadQueue>|null>(null);
+  const invoiceDownloadReceiptsRef=useRef(new Map<string,Order>());
+  const retryInvoiceDownloadSave=()=>{void invoiceDownloadQueueRef.current?.flush(true);};
+  const getPendingInvoiceDownloadSets=()=>invoiceDownloadQueueRef.current?.pendingSets()||[];
+  useEffect(()=>{
+    setInvoiceDownloadSyncMessage('');setInvoiceDownloadCanRetry(false);
+    invoiceDownloadReceiptsRef.current.clear();
+    const user=adminUser?.id;if(!user)return;
+    const queue=createInvoiceDownloadQueue({storage:localStorage,user,request:sharedStaffRequest,
+      onSaved:updated=>{
+        if(adminIdentityRef.current!==user)return;
+        const saved=new Map(updated.map(order=>[String(order.id),order as Order]));
+        for(const [id,receipt] of saved)invoiceDownloadReceiptsRef.current.set(id,receipt);
+        setOrders(previous=>previous.map(order=>{const receipt=saved.get(String(order.id));return receipt?mergeInvoiceDownloadReceipt(order,receipt):order;}));
+      },onState:state=>{
+        if(adminIdentityRef.current!==user)return;
+        setInvoiceDownloadSyncMessage(state.message);setInvoiceDownloadCanRetry(state.canRetry);
+      }});
+    invoiceDownloadQueueRef.current=queue;
+    const retry=()=>{if(adminIdentityRef.current===user&&getStaffSessionToken())void queue.flush();};
+    retry();
+    const timer=window.setInterval(retry,30_000);
+    window.addEventListener('online',retry);window.addEventListener('focus',retry);
+    return ()=>{queue.dispose();if(invoiceDownloadQueueRef.current===queue)invoiceDownloadQueueRef.current=null;
+      window.clearInterval(timer);window.removeEventListener('online',retry);window.removeEventListener('focus',retry);};
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[adminUser?.id]);
   // Serialize full storefront publishes. Rapid Admin edits used to start overlapping
   // PUT requests for the ~shared catalog payload, so an older transient failure could
   // raise "Website sync failed" even when a newer save was already succeeding.
@@ -1083,7 +1117,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if(adminIdentityRef.current!==user||!getStaffSessionToken())return;
     const serverOrders: Order[] = Array.isArray(data?.snapshots) ? data.snapshots.map((row:any)=>row?.payload) : data?.orders;
     if(!Array.isArray(serverOrders)||serverOrders.some(order=>!order||!order.id||!order.order_number||!Array.isArray(order.items))){setOrderLoadError('The server returned an incomplete order list. Automatic retry is active.');throw new Error('Order loading did not finish. The previous order list has been kept; retrying the server.');}
-    const sortedServerOrders = [...serverOrders].sort((a,b)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime());
+    const sortedServerOrders = [...serverOrders].sort((a,b)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime())
+      .map(order=>{const receipt=invoiceDownloadReceiptsRef.current.get(String(order.id));return receipt?mergeInvoiceDownloadReceipt(order,receipt):order;});
 
     // Customer DB is derived from the same durable order snapshots for every
     // authenticated Admin/Staff browser. Local browser demo data is never authoritative.
@@ -2899,25 +2934,23 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const markInvoiceBatchDownloaded = async (
     orderIds: string[],
     downloadedBy = adminUser?.name || 'Packing Staff',
-    downloadSet?: { date: string; number: number }
+    downloadSet?: { date: string; number: number },
+    downloadedInvoices?: Order[]
   ): Promise<void> => {
     const uniqueIds=Array.from(new Set(orderIds.map(String).filter(Boolean)));
     if(!uniqueIds.length) return;
 
-    // One current-data metadata transaction replaces a full order PUT per PDF.
-    const updatedOrders=await saveInvoiceDownloadStatus(uniqueIds,downloadedBy,downloadSet,sharedStaffRequest) as Order[];
-
-    const updatedMap=new Map(updatedOrders.map(o=>[String(o.id),o] as [string,Order]));
-    setOrders(prev=>prev.map(o=>updatedMap.get(String(o.id)) || o));
-
-    const batchIds=Array.from(new Set(
-      updatedOrders.map(o=>o.invoice_pack_batch_id).filter(Boolean)
-    ));
-
+    const queue=invoiceDownloadQueueRef.current;
+    if(!adminUser||!queue)throw new Error('Sign in again to save this PDF download status.');
+    const invoices=(downloadedInvoices||orders.filter(order=>uniqueIds.includes(order.id))).map(order=>({
+      id:order.id,invoiceNumber:String(order.invoice_number||''),batchId:String(order.invoice_pack_batch_id||''),waybill:String(order.waybill_number||'')
+    }));
+    queue.enqueue(uniqueIds,downloadedBy,downloadSet,invoices);
+    // The PDF exists now. Only a verified receipt marks its orders Downloaded.
     logActivity({
-      action:'Packing Invoice Batch Downloaded',
+      action:'Packing Invoice PDF Downloaded',
       module:'Invoices',
-      details:`${updatedOrders.length} invoice(s) • ${batchIds.join(', ') || 'Legacy Batch'} • ${downloadedBy}`
+      details:`${uniqueIds.length} invoice(s) • ${downloadedBy} • Download status queued for server confirmation`
     });
   };
 
@@ -3545,6 +3578,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         sharedOrdersReady,
         orderLoadError,
         storefrontSyncMessage,
+        invoiceDownloadSyncMessage,
+        invoiceDownloadCanRetry,
+        retryInvoiceDownloadSave,
+        getPendingInvoiceDownloadSets,
         retryStorefrontSave,
         searchQuery,
         setSearchQuery,
