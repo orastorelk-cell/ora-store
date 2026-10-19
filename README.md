@@ -84,7 +84,9 @@ Non-secret browser values (`VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`)
 ## Verification after deployment
 
 Website saves use `ora-storefront-patch-v1` for changed products, categories and
-setting fields. Admin records are persisted as encrypted immutable change shards
+setting fields. `ora-storefront-catalog-v1` adds/removes products and changes their
+order using only changed records and ID lists; unrelated stock and concurrent
+additions are retained, with item-code and bundle-dependency checks. Admin records are persisted as encrypted immutable change shards
 under `admin-changes-v1/`, published by one ETag-guarded manifest. The restored
 `admin_data_store.json` remains intact; hourly `ora-admin-checkpoint-v1` backups
 reference that base and the committed manifest. Read through `readDataTable` or

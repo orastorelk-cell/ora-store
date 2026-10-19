@@ -1,14 +1,14 @@
 import { readDataTable, replaceDataTable, resolveKnownBrandImages, readStorefrontVersion } from './cloudflareData';
 import { cancellationInProgress } from './r2OrderCancellation';
 import { returnPackingInProgress, sharedReturnInventory } from '../src/lib/returnSheets';
-import { validProductSave, validStorefrontPatch, sameStorefrontValue } from '../src/lib/storefrontProductSave';
+import { validProductSave, validStorefrontPatch, validCatalogSave, rebaseCatalogProducts, sameStorefrontValue } from '../src/lib/storefrontProductSave';
 
 type VerifyStaff=(request:Request,env:unknown)=>Promise<Record<string,any>|null>;
 const KEY='storefront-state-v1';
 export { sameStorefrontValue } from '../src/lib/storefrontProductSave';
 const json=(data:unknown,status=200)=>new Response(JSON.stringify(data),{status,headers:{
   'content-type':'application/json; charset=utf-8','cache-control':'no-store, no-cache, must-revalidate',
-  pragma:'no-cache','x-ora-storage':'cloudflare-r2','x-ora-storefront-protocol':'patch-v1',
+  pragma:'no-cache','x-ora-storage':'cloudflare-r2','x-ora-storefront-protocol':'patch-v1','x-ora-catalog-protocol':'catalog-v1',
 }});
 const stateFrom=(row:any)=>{
   if(!row)return null;
@@ -51,22 +51,25 @@ export const r2StorefrontHandler=async(request:Request,env:unknown,ctx:any,verif
   const raw=await request.clone().text();
   if(raw.length>15000000)return json({error:'Storefront catalog is too large. Use public image URLs instead of embedded image data.'},413);
   let body:any;try{body=JSON.parse(raw);}catch{return json({error:'Invalid website save request.'},400);}
-  const patchSave=body?.format==='ora-storefront-patch-v1';
+  const catalogSave=body?.format==='ora-storefront-catalog-v1';
+  const patchSave=catalogSave||body?.format==='ora-storefront-patch-v1';
   const productSave=patchSave||body?.format==='ora-storefront-products-v1';
-  if(patchSave?!validStorefrontPatch(body):productSave?!validProductSave(body):(!Array.isArray(body?.products)||!Array.isArray(body?.categories)||!body?.settings||typeof body.settings!=='object'||Array.isArray(body.settings))){
+  if(catalogSave?!validCatalogSave(body):patchSave?!validStorefrontPatch(body):productSave?!validProductSave(body):(!Array.isArray(body?.products)||!Array.isArray(body?.categories)||!body?.settings||typeof body.settings!=='object'||Array.isArray(body.settings))){
     return json({error:'Products, categories and settings are required.'},400);
   }
   if(body.expected_version!==undefined&&(!Number.isSafeInteger(body.expected_version)||body.expected_version<0))return json({error:'Invalid website version.'},400);
   const incomingWebhook=String(body.settings?.google_sheet_webhook_url||'').trim();
-  const updates=productSave?new Map<string,any>(body.product_updates.map((product:any)=>[product.id,product])):null;
-  const expected=productSave&&body.product_expected?new Map<string,any>(body.product_expected.map((product:any)=>[product.id,product])):null;
+  const updates=productSave&&!catalogSave?new Map<string,any>(body.product_updates.map((product:any)=>[product.id,product])):null;
+  const expected=productSave&&!catalogSave&&body.product_expected?new Map<string,any>(body.product_expected.map((product:any)=>[product.id,product])):null;
   const saved=await replaceDataTable<any>(env,'admin_data_store',rows=>{
     if(cancellationInProgress(rows as any[])||returnPackingInProgress(rows))return {rows,result:{cancellationPending:true}};
     const row=rows.find(row=>row.key===KEY);const current=stateFrom(row);
-    if(productSave&&(!current||body.product_updates.some((product:any)=>!current.products.some(existing=>existing.id===product.id))))return {rows,result:{conflict:true}};
+    const currentProducts=new Map<string,any>((current?.products||[]).map(product=>[product.id,product] as const));
+    if(productSave&&(!current||!catalogSave&&body.product_updates.some((product:any)=>!currentProducts.has(product.id))))return {rows,result:{conflict:true}};
     if(!productSave&&!current?.settings?.google_sheet_webhook_url&&incomingWebhook)return {rows,result:{serverTransition:true}};
-    let products=productSave?current!.products.map(product=>updates!.get(product.id)||product):body.products.slice(0,5000);
-    products=products.map((product:any)=>{const old=current?.products.find((item:any)=>item.id===product.id);if(!old||old===product)return product;const next={...product};if(next.return_stock_debt===undefined&&old.return_stock_debt)next.return_stock_debt=old.return_stock_debt;if(next.variants)next.variants=next.variants.map((variant:any)=>{const saved=old.variants?.find((item:any)=>item.id===variant.id);return variant.return_stock_debt===undefined&&saved?.return_stock_debt?{...variant,return_stock_debt:saved.return_stock_debt}:variant;});return next;});
+    let products=catalogSave?rebaseCatalogProducts(current!.products,body):productSave?current!.products.map(product=>updates!.get(product.id)||product):body.products.slice(0,5000);
+    if(!products)return {rows,result:{conflict:true}};
+    products=products.map((product:any)=>{const old=currentProducts.get(product.id);if(!old||old===product)return product;const next={...product};if(next.return_stock_debt===undefined&&old.return_stock_debt)next.return_stock_debt=old.return_stock_debt;if(next.variants){const variants=new Map<string,any>((old.variants||[]).map((variant:any)=>[variant.id,variant]));next.variants=next.variants.map((variant:any)=>{const saved=variants.get(variant.id);return variant.return_stock_debt===undefined&&saved?.return_stock_debt?{...variant,return_stock_debt:saved.return_stock_debt}:variant;});}return next;});
     const categories=patchSave&&body.category_change?body.category_change.after:productSave?current!.categories:body.categories.slice(0,1000);
     let settings=productSave?current!.settings:resolveKnownBrandImages({...body.settings,google_sheet_webhook_url:incomingWebhook||String(current?.settings.google_sheet_webhook_url||'').trim()});
     if(patchSave){
@@ -84,10 +87,10 @@ export const r2StorefrontHandler=async(request:Request,env:unknown,ctx:any,verif
     const unchanged=current&&sameStorefrontValue(products,current.products)&&sameStorefrontValue(categories,current.categories)&&sameStorefrontValue(settings,current.settings);
     // A partial replay may acknowledge a newer catalog version. Guard each
     // changed product against the browser baseline before the next edit too.
-    if(productSave&&!expected&&Number(body.expected_version)!==Number(current?.version||0))return {rows,result:{conflict:true}};
+    if(productSave&&!catalogSave&&!expected&&Number(body.expected_version)!==Number(current?.version||0))return {rows,result:{conflict:true}};
     if(unchanged)return {rows,result:{state:current,changed:false}};
     if(expected&&current!.products.some(product=>updates!.has(product.id)&&!sameStorefrontValue(expected.get(product.id),product)&&!sameStorefrontValue(updates!.get(product.id),product)))return {rows,result:{conflict:true}};
-    if(!expected&&body.expected_version!==undefined&&Number(body.expected_version)!==Number(current?.version||0))return {rows,result:{conflict:true}};
+    if(!catalogSave&&!expected&&body.expected_version!==undefined&&Number(body.expected_version)!==Number(current?.version||0))return {rows,result:{conflict:true}};
     const state={products,categories,settings,version:Math.max(1,Number(current?.version||0)+1),updated_at:new Date().toISOString()};
     const replacement={...row,key:KEY,payload:state,updated_at:state.updated_at};
     return {rows:row?rows.map(item=>item===row?replacement:item):[...rows,replacement],result:{state,changed:true}};

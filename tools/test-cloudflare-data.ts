@@ -205,7 +205,7 @@ try {
   assert.equal((await fast('/api/admin/storefront/state','PUT',{...stockBody,product_updates:[stockNext.products[0],stockNext.products[0]]})).status,400);
   assert.equal((await fast('/api/admin/storefront/state','PUT',{format:'ora-storefront-products-v1',product_updates:[]})).status,400);
   assert.equal((storefrontSaveBody(stockBase,{...stockNext,categories:[{id:'new'}]},stockBase.version) as any).format,'ora-storefront-patch-v1');
-  assert.equal(storefrontSaveBody(stockBase,{...stockNext,products:[...stockNext.products,{id:'new'}]},stockBase.version).format,undefined);
+  assert.equal(storefrontSaveBody(stockBase,{...stockNext,products:[...stockNext.products,{id:'new'}]},stockBase.version).format,'ora-storefront-catalog-v1');
   assert.deepEqual((await readDataTable(env,'admin_data_store')).filter((row:any)=>row.key!=='storefront-state-v1'),unrelatedBefore);
 
   // Binding throttles and an ambiguous successful CAS write must be retry-safe.

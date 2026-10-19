@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { ACTIVE_KEY, activeData, configureCloudflareData, dataBucket, importRecovery, mutateDataTable, readDataTable, readDataTableWire, readPackingInProgress, readStorefrontVersion, replaceDataTable } from '../worker/cloudflareData';
 import { withR2DataFallback } from '../worker/r2RecoveryFallback';
-import { rebaseStorefrontEdit, storefrontSaveBody, validStorefrontPatch } from '../src/lib/storefrontProductSave';
+import { rebaseStorefrontEdit, rebaseCatalogProducts, storefrontSaveBody, validCatalogSave, validStorefrontPatch } from '../src/lib/storefrontProductSave';
 import { acknowledgeStorefrontDraft, readStorefrontDraft, rememberStorefrontDraft } from '../src/lib/storefrontDraft';
 import { staffJsonRequest } from '../src/lib/staffRequest';
 
@@ -67,6 +67,61 @@ const removed = await state(); delete removed.settings.old_field;
 assert.equal((await call(storefrontSaveBody(await state(), removed, removed.version))).status, 200);
 assert.equal(Object.hasOwn((await state()).settings, 'old_field'), false);
 
+// Product creation must not fall back to sending all products and invoice art.
+const createBase=await state(), created={id:'new-product',sku:'NEW-1',name_en:'Couple Watch',name_si:'ඔරලෝසු',stock_quantity:12,image:'/api/media/watch.jpg'};
+const createNext={...createBase,products:[created,...createBase.products]}, createBody:any=storefrontSaveBody(createBase,createNext,createBase.version);
+assert(validCatalogSave(createBody));assert(JSON.stringify(createBody).length<3000,'Adding one product sends only that product and ID order');
+assert(!JSON.stringify(createBody).includes(logo));assert.equal(createBody.product_changes.length,1);
+assert.equal((await call({...createBody,product_order:{...createBody.product_order,after:[...createBody.product_order.after,created.id]}})).status,400);
+assert.equal((await call({...createBody,product_changes:[]})).status,400,'Every new ID requires a complete baseline-checked addition');
+assert.equal((await call({...createBody,product_changes:[{...createBody.product_changes[0],after:{present:true,value:{...created,variants:{}}}}]})).status,400);
+raw.fail=commitKey;
+assert.equal((await call(createBody)).status,503);
+assert(!(await state()).products.some((product:any)=>product.id===created.id),'A failed manifest cannot publish a partially added product');
+raw.fail='';raw.lost=true;raw.writes=[];
+assert.equal((await call(createBody)).status,200);
+assert(raw.writes.reduce((sum,write)=>sum+write.bytes,0)<25000,'Product creation writes only small encrypted changes');
+const createdState=await state();assert.deepEqual(createdState.products[0],created);
+assert.deepEqual(createdState.products.slice(1),createBase.products);assert.equal(createdState.settings.invoice_logo,logo);
+assert.equal((await call(createBody)).body.unchanged,true);
+assert.equal((await state()).version,createdState.version,'Lost-response retries cannot add the product twice');
+
+const sharedBase=await state(), addedA={...created,id:'new-a',sku:'NEW-A'}, addedB={...created,id:'new-b',sku:'NEW-B'};
+const nextA={...sharedBase,products:[addedA,...sharedBase.products]}, nextB={...sharedBase,products:[addedB,...sharedBase.products]};
+const stockDuringAdd={...sharedBase,products:sharedBase.products.map((product:any)=>product.id==='p10'?{...product,stock_quantity:4}:product)};
+assert.equal((await call(storefrontSaveBody(sharedBase,stockDuringAdd,sharedBase.version))).status,200);
+const concurrentAdds=await Promise.all([call(storefrontSaveBody(sharedBase,nextA,sharedBase.version)),call(storefrontSaveBody(sharedBase,nextB,sharedBase.version))]);
+assert(concurrentAdds.every(result=>result.status===200));
+const bothAdded=await state();
+assert(bothAdded.products.some((product:any)=>product.id===addedA.id)&&bothAdded.products.some((product:any)=>product.id===addedB.id));
+assert.equal(bothAdded.products.find((product:any)=>product.id==='p10').stock_quantity,4,'A product add cannot revert another staff member\'s stock allocation');
+assert.equal((await call(storefrontSaveBody(sharedBase,{...sharedBase,products:[{...created,id:'sku-collision',sku:'new-a'},...sharedBase.products]},sharedBase.version))).status,409,'Concurrent additions cannot reuse another item code');
+assert.equal((await call({...createBody,product_changes:[{...createBody.product_changes[0],after:{present:true,value:{...created,stock_quantity:99}}}]})).status,409,'An occupied product identity cannot be overwritten');
+
+const recoveredAdd=rebaseStorefrontEdit(sharedBase,nextA,stockDuringAdd)!;
+assert.equal(recoveredAdd.products[0].id,addedA.id);assert.equal(recoveredAdd.products.find(product=>product.id==='p10').stock_quantity,4);
+assert.equal(rebaseStorefrontEdit(sharedBase,nextA,bothAdded)!.products.filter(product=>product.id===addedA.id).length,1,'Reload recovery acknowledges an already added product');
+assert.equal(rebaseStorefrontEdit(sharedBase,nextA,{...sharedBase,products:[{...addedA,stock_quantity:99},...sharedBase.products]}),null);
+assert(validCatalogSave(JSON.parse(JSON.stringify(storefrontSaveBody(sharedBase,{...nextA,settings:{...sharedBase.settings,unused:undefined}},sharedBase.version)))),'Undefined browser fields are omitted before sending a catalog patch');
+const mixedBase=await state(), mixedProduct={...created,id:'mixed-new',sku:'MIXED-NEW'};
+const mixed={...mixedBase,products:[mixedProduct,...mixedBase.products],categories:[...mixedBase.categories,{id:'new-category',name:'New'}],settings:{...mixedBase.settings,store_name:'Product add with settings'}};
+assert.equal((await call(storefrontSaveBody(mixedBase,mixed,mixedBase.version))).status,200);
+assert.equal((await state()).settings.store_name,mixed.settings.store_name);assert.deepEqual((await state()).categories,mixed.categories);
+
+const reorderBase=await state(), reordered={...reorderBase,products:[...reorderBase.products].reverse()};
+assert.equal((await call(storefrontSaveBody(reorderBase,reordered,reorderBase.version))).status,200);
+assert.deepEqual((await state()).products,reordered.products,'Reordering changes IDs without resending every product');
+const deleteBase=await state(), deleted={...deleteBase,products:deleteBase.products.filter((product:any)=>product.id!==created.id)};
+const deleteBody:any=storefrontSaveBody(deleteBase,deleted,deleteBase.version);
+assert.equal(rebaseCatalogProducts([...deleteBase.products,{id:'concurrent-bundle',sku:'BUNDLE-NEW',bundle_components:[{product_id:created.id,quantity:1}]}],deleteBody),null,'A new bundle prevents deleting its component');
+const stockBeforeDelete={...deleteBase,products:deleteBase.products.map((product:any)=>product.id===created.id?{...product,stock_quantity:11}:product)};
+assert.equal((await call(storefrontSaveBody(deleteBase,stockBeforeDelete,deleteBase.version))).status,200);
+assert.equal((await call(deleteBody)).status,409,'A stale delete cannot remove newly changed stock');
+const freshDelete=await state();assert.equal((await call(storefrontSaveBody(freshDelete,{...freshDelete,products:freshDelete.products.filter((product:any)=>product.id!==created.id)},freshDelete.version))).status,200);
+assert(!(await state()).products.some((product:any)=>product.id===created.id));
+assert.equal(raw.objects.get(baseKey),original);assert.equal(raw.objects.get(active.prefix+'order_snapshots.json'),originalOrders);
+console.log('PASS: compact product additions/deletions/order; atomic failure/lost response; concurrent additions and stock; SKU, ID, bundle and stale-delete guards; reload recovery; unchanged logos/history/orders.');
+
 const add = (key: string) => replaceDataTable(env, 'admin_data_store', rows => ({rows: [...rows, {key, payload: {zero: 0, flag: false, text: 'සිංහල'}}], result: key}));
 await Promise.all([add('concurrent:a'), add('concurrent:b')]);
 assert((await readDataTable(env, 'admin_data_store')).some(row => row.key === 'concurrent:a'));
@@ -88,7 +143,7 @@ assert.equal(await readPackingInProgress(noFullRead),true,'The small guard chang
 await replaceDataTable(env,'admin_data_store',rows=>({rows:rows.map(row=>row.key==='return-packing-v1:active-test'?{...row,payload:{phase:'complete'}}:row),result:null}));
 assert.equal(await readPackingInProgress(noFullRead),false,'A completed operation releases the guard without loading its old history');
 assert.equal((await withR2DataFallback(new Request('https://fixture/api/health'),noFullRead,{},async()=>{throw new Error('Health must not start the Node bridge');})).status,200);
-const checkpointKey = raw.writes.find(write => write.key.startsWith('ora-data/backups-v2/admin_data_store/'))!.key;
+const checkpointKey = [...raw.objects.keys()].find(key => key.startsWith('ora-data/backups-v2/admin_data_store/'))!;
 assert.equal(JSON.parse(await (await dataBucket(env)!.get(checkpointKey))!.text()).format, 'ora-admin-checkpoint-v1');
 assert([...raw.objects.values()].every(row => ['ora-aes-gcm-v1', 'ora-aes-gcm-v2'].includes(JSON.parse(row.value).format)));
 const manifest = JSON.parse(await (await dataBucket(env)!.get(commitKey))!.text()), shard = Object.values(manifest.shards)[0] as string;
