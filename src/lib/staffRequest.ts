@@ -10,10 +10,14 @@ export const staffJsonRequest=async(url:string,options:RequestInit={},timeoutMs=
     const headers=new Headers(options.headers);
     if(url.startsWith('/api/orders?')&&new URLSearchParams(url.split('?')[1]).get('format')==='snapshots')headers.set('x-ora-order-journal','1');
     const response=await fetch(url,{...options,headers,cache:'no-store',signal:controller.signal});
-    const data=await response.json().catch(()=>null);
+    const raw=await response.text();
+    let data:any;try{data=JSON.parse(raw);}catch{data=null;}
     if(!response.ok||!data||typeof data!=='object'){
-      const error:any=new Error(data?.error||(!response.ok?`Request failed (${response.status}, ${options.method||'GET'} ${url.split('?')[0]})`:'Server response was incomplete.'));
+      const resourceLimit=/\berror(?: code)?:?\s*1102\b/i.test(raw)||response.headers.get('cf-error-code')==='1102';
+      const error:any=new Error(data?.error||(resourceLimit?'The website server reached its processing limit. The save has not been confirmed.':!response.ok?`Request failed (${response.status}, ${options.method||'GET'} ${url.split('?')[0]})`:'Server response was incomplete.'));
       error.status=response.ok?503:response.status;error.path=url.split('?')[0];
+      error.requestId=response.headers.get('cf-ray')||'';
+      if(resourceLimit)error.code='WORKER_RESOURCE_LIMIT';
       error.retryAfterMs=Number(response.headers.get('Retry-After'))*1000;throw error;
     }
     if(data.snapshot_changes!==undefined){

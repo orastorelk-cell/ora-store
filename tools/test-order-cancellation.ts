@@ -40,7 +40,7 @@ await importRecovery(bucket,{format:'ora-r2-recovery-v1',orders:originals,
     {id:'component',sku:'SYN-COMPONENT',name_en:'Synthetic Component',stock_quantity:0},
     {id:'bundle',sku:'SYN-BUNDLE',product_type:'bundle',stock_quantity:0,bundle_components:[{product_id:'component',quantity_per_bundle:2}]},
   ]}}],courier_waybills:originals.map(o=>({waybill_number:o.waybill_number,status:'Assigned',assigned_order_id:o.id,assigned_order_number:o.id==='conflict-order'?'OTHER-ORDER':o.order_number})),tables:{}});
-const active=(await activeData(bucket))!,adminKey=active.prefix+'admin_data_store.json',orderKey=active.prefix+'order-changes-v1.json';
+const active=(await activeData(bucket))!,adminKey=active.prefix+'admin-changes-v1.json',orderKey=active.prefix+'order-changes-v1.json';
 const token=(id:string)=>{const payload=Buffer.from(JSON.stringify({sub:id,exp:Date.now()+3_600_000})).toString('base64url');return payload+'.'+crypto.createHmac('sha256',env.STAFF_SESSION_SECRET).update(payload).digest('base64url');};
 const call=async(path:string,method='GET',body?:any,auth=token(admin))=>{
   const response=await withR2DataFallback(new Request('https://test'+path,{method,headers:{authorization:'Bearer '+auth,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{})}),env,{},async()=>new Response('Unexpected Node bridge',{status:599}));
@@ -53,10 +53,10 @@ assert.equal((await call(cancelPath+'?waybill=SYN-WB-1','GET',undefined,'invalid
 assert.equal((await call(cancelPath+'?waybill=SYN-WB-1','GET',undefined,token(staff))).status,403);
 assert.equal((await call(cancelPath,'POST',input(0),token(staff))).status,403);
 const old=(await call(cancelPath+'?waybill=SYN-WB-1')).body;assert.equal(old.order_number,'TEST-mat-order');assert.equal(old.items[0].quantity,3);assert.equal(old.complete,false);
-const deniedEtag=raw.objects.get(adminKey)!.etag;
+const deniedEtag=raw.objects.get(adminKey)?.etag;
 for(const index of [3,5,6])assert.equal((await call(cancelPath,'POST',input(index))).status,409);
 assert.equal((await call(cancelPath,'POST',{...input(0),waybill_number:'OTHER'})).status,409);
-assert.equal(raw.objects.get(adminKey)!.etag,deniedEtag,'Invalid cancellations must not modify the catalog or create journals');
+assert.equal(raw.objects.get(adminKey)?.etag,deniedEtag,'Invalid cancellations must not modify the catalog or create journals');
 
 // Catalog save failure: status and waybill retirement are durable; stock has not
 // changed. The pending journal prevents a browser from racing the stock release.

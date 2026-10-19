@@ -1,20 +1,14 @@
-import { readDataTable, replaceDataTable, resolveKnownBrandImages } from './cloudflareData';
+import { readDataTable, replaceDataTable, resolveKnownBrandImages, readStorefrontVersion } from './cloudflareData';
 import { cancellationInProgress } from './r2OrderCancellation';
 import { returnPackingInProgress, sharedReturnInventory } from '../src/lib/returnSheets';
-import { validProductSave } from '../src/lib/storefrontProductSave';
+import { validProductSave, validStorefrontPatch, sameStorefrontValue } from '../src/lib/storefrontProductSave';
 
 type VerifyStaff=(request:Request,env:unknown)=>Promise<Record<string,any>|null>;
 const KEY='storefront-state-v1';
-export const sameStorefrontValue=(a:any,b:any):boolean=>{
-  if(a===b)return true;
-  if(a===null||b===null||typeof a!=='object'||typeof b!=='object')return false;
-  if(Array.isArray(a)!==Array.isArray(b))return false;
-  const keys=Object.keys(a);
-  return keys.length===Object.keys(b).length&&keys.every(key=>Object.prototype.hasOwnProperty.call(b,key)&&sameStorefrontValue(a[key],b[key]));
-};
+export { sameStorefrontValue } from '../src/lib/storefrontProductSave';
 const json=(data:unknown,status=200)=>new Response(JSON.stringify(data),{status,headers:{
   'content-type':'application/json; charset=utf-8','cache-control':'no-store, no-cache, must-revalidate',
-  pragma:'no-cache','x-ora-storage':'cloudflare-r2',
+  pragma:'no-cache','x-ora-storage':'cloudflare-r2','x-ora-storefront-protocol':'patch-v1',
 }});
 const stateFrom=(row:any)=>{
   if(!row)return null;
@@ -46,10 +40,10 @@ export const r2StorefrontHandler=async(request:Request,env:unknown,ctx:any,verif
   if(!read&&!save)return null;
   if(admin&&!await verifyStaff(request,env))return json({error:'Login session required.'},401);
   if(read){
+    if(path.endsWith('/version'))return json(await readStorefrontVersion(env));
     const rows=await readDataTable(env,'admin_data_store');
     const row=rows.find(row=>row.key===KEY);
     const state=stateFrom(row);
-    if(path.endsWith('/version'))return json({initialized:Boolean(row?.updated_at),updated_at:String(row?.updated_at||'')});
     return json({initialized:Boolean(state),state:state?(admin?{...state,return_inventory:sharedReturnInventory(rows)}:{...state,settings:publicStorefrontSettings(state.settings)}):null});
   }
   // Clone keeps the existing webhook-restoration/recovery route able to consume
@@ -57,8 +51,9 @@ export const r2StorefrontHandler=async(request:Request,env:unknown,ctx:any,verif
   const raw=await request.clone().text();
   if(raw.length>15000000)return json({error:'Storefront catalog is too large. Use public image URLs instead of embedded image data.'},413);
   let body:any;try{body=JSON.parse(raw);}catch{return json({error:'Invalid website save request.'},400);}
-  const productSave=body?.format==='ora-storefront-products-v1';
-  if(productSave?!validProductSave(body):(!Array.isArray(body?.products)||!Array.isArray(body?.categories)||!body?.settings||typeof body.settings!=='object'||Array.isArray(body.settings))){
+  const patchSave=body?.format==='ora-storefront-patch-v1';
+  const productSave=patchSave||body?.format==='ora-storefront-products-v1';
+  if(patchSave?!validStorefrontPatch(body):productSave?!validProductSave(body):(!Array.isArray(body?.products)||!Array.isArray(body?.categories)||!body?.settings||typeof body.settings!=='object'||Array.isArray(body.settings))){
     return json({error:'Products, categories and settings are required.'},400);
   }
   if(body.expected_version!==undefined&&(!Number.isSafeInteger(body.expected_version)||body.expected_version<0))return json({error:'Invalid website version.'},400);
@@ -71,16 +66,28 @@ export const r2StorefrontHandler=async(request:Request,env:unknown,ctx:any,verif
     if(productSave&&(!current||body.product_updates.some((product:any)=>!current.products.some(existing=>existing.id===product.id))))return {rows,result:{conflict:true}};
     if(!productSave&&!current?.settings?.google_sheet_webhook_url&&incomingWebhook)return {rows,result:{serverTransition:true}};
     let products=productSave?current!.products.map(product=>updates!.get(product.id)||product):body.products.slice(0,5000);
-    products=products.map((product:any)=>{const old=current?.products.find((item:any)=>item.id===product.id);if(!old)return product;const next={...product};if(next.return_stock_debt===undefined&&old.return_stock_debt)next.return_stock_debt=old.return_stock_debt;if(next.variants)next.variants=next.variants.map((variant:any)=>{const saved=old.variants?.find((item:any)=>item.id===variant.id);return variant.return_stock_debt===undefined&&saved?.return_stock_debt?{...variant,return_stock_debt:saved.return_stock_debt}:variant;});return next;});
-    const categories=productSave?current!.categories:body.categories.slice(0,1000);
-    const settings=productSave?current!.settings:resolveKnownBrandImages({...body.settings,google_sheet_webhook_url:incomingWebhook||String(current?.settings.google_sheet_webhook_url||'').trim()});
+    products=products.map((product:any)=>{const old=current?.products.find((item:any)=>item.id===product.id);if(!old||old===product)return product;const next={...product};if(next.return_stock_debt===undefined&&old.return_stock_debt)next.return_stock_debt=old.return_stock_debt;if(next.variants)next.variants=next.variants.map((variant:any)=>{const saved=old.variants?.find((item:any)=>item.id===variant.id);return variant.return_stock_debt===undefined&&saved?.return_stock_debt?{...variant,return_stock_debt:saved.return_stock_debt}:variant;});return next;});
+    const categories=patchSave&&body.category_change?body.category_change.after:productSave?current!.categories:body.categories.slice(0,1000);
+    let settings=productSave?current!.settings:resolveKnownBrandImages({...body.settings,google_sheet_webhook_url:incomingWebhook||String(current?.settings.google_sheet_webhook_url||'').trim()});
+    if(patchSave){
+      settings={...settings};
+      for(const change of body.setting_changes){
+        // Old browsers cannot accidentally clear a working Sheet connection.
+        if(change.key==='google_sheet_webhook_url'&&!String(change.after.value||'').trim()&&current!.settings.google_sheet_webhook_url)continue;
+        const present=Object.hasOwn(current!.settings,change.key),value=present?{present:true,value:current!.settings[change.key]}:{present:false};
+        if(!sameStorefrontValue(value,change.before)&&!sameStorefrontValue(value,change.after))return {rows,result:{conflict:true}};
+        if(change.after.present)Object.defineProperty(settings,change.key,{value:change.after.value,enumerable:true,writable:true,configurable:true});else delete settings[change.key];
+      }
+      settings=resolveKnownBrandImages(settings);
+      if(body.category_change&&!sameStorefrontValue(current!.categories,body.category_change.before)&&!sameStorefrontValue(current!.categories,body.category_change.after))return {rows,result:{conflict:true}};
+    }
     const unchanged=current&&sameStorefrontValue(products,current.products)&&sameStorefrontValue(categories,current.categories)&&sameStorefrontValue(settings,current.settings);
     // A partial replay may acknowledge a newer catalog version. Guard each
     // changed product against the browser baseline before the next edit too.
     if(productSave&&!expected&&Number(body.expected_version)!==Number(current?.version||0))return {rows,result:{conflict:true}};
     if(unchanged)return {rows,result:{state:current,changed:false}};
-    if(expected&&current!.products.some(product=>updates!.has(product.id)&&!sameStorefrontValue(expected.get(product.id),product)))return {rows,result:{conflict:true}};
-    if(body.expected_version!==undefined&&Number(body.expected_version)!==Number(current?.version||0))return {rows,result:{conflict:true}};
+    if(expected&&current!.products.some(product=>updates!.has(product.id)&&!sameStorefrontValue(expected.get(product.id),product)&&!sameStorefrontValue(updates!.get(product.id),product)))return {rows,result:{conflict:true}};
+    if(!expected&&body.expected_version!==undefined&&Number(body.expected_version)!==Number(current?.version||0))return {rows,result:{conflict:true}};
     const state={products,categories,settings,version:Math.max(1,Number(current?.version||0)+1),updated_at:new Date().toISOString()};
     const replacement={...row,key:KEY,payload:state,updated_at:state.updated_at};
     return {rows:row?rows.map(item=>item===row?replacement:item):[...rows,replacement],result:{state,changed:true}};

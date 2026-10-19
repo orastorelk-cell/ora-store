@@ -223,6 +223,10 @@ const recoveryHandler=async(request:Request,envValue:unknown):Promise<Response|n
 export const withR2DataFallback=async(request:Request,env:unknown,_ctx:any,next:()=>Promise<Response>):Promise<Response>=>{
   configureCloudflareData(env);
   try {
+    if(request.method==='GET'&&new URL(request.url).pathname==='/api/health'){
+      const bucket=dataBucket(env),active=bucket&&await activeData(bucket);
+      return json(active?{ok:true,runtime:'cloudflare-workers',storage:'cloudflare-r2',supabase:false}:{ok:false,error:'Cloudflare storage is not initialized.'},active?200:503);
+    }
     const websiteOrder=await r2WebsiteOrdersHandler(request,env,_ctx);
     if(websiteOrder)return websiteOrder;
     const duplicates=await r2DuplicateReviewHandler(request,env,verifyActiveStaff);

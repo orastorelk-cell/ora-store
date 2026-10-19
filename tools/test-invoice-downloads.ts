@@ -127,12 +127,13 @@ const source = fs.readFileSync('src/context/StoreContext.tsx', 'utf8');
 const hydrationStart = source.indexOf('  const applySharedStorefrontState =');
 const hydrationEnd = source.indexOf('\n  useEffect(', hydrationStart);
 const effectStart = source.indexOf('  useEffect(() => {', source.indexOf('// Publish catalog/category/store-setting edits'));
-const effectEnd = source.indexOf('\n  // Public storefront freshness:', effectStart);
+const effectEnd = source.indexOf('\n  useEffect(()=>{', effectStart);
 const scope: any = { products: [], categories: [], settings: { delivery_fee: 250 }, sharedStoreReady: true, adminUser: { id: 'admin-id' },
+  storefrontRetry:0,rememberStorefrontDraft:()=>true,
   sharedStoreSnapshotRef: { current: null }, sharedStoreVersionRef: { current: 0 }, normalizeProductForStorage: (p: any) => p,
   localStorage: { setItem: () => {} }, timers: 0, window: { setTimeout: () => { scope.timers++; return 1; } },
   useEffect: (callback: any) => callback(), setProducts: (p: any) => { scope.products = p; }, setCategories: (c: any) => { scope.categories = c; },
-  setSettings: (update: any) => { scope.settings = update(scope.settings); } };
+  setSettings: (update: any) => { scope.settings = typeof update==='function'?update(scope.settings):update; } };
 const hydration = transformSync(source.slice(hydrationStart, hydrationEnd) + '\nglobalThis.hydrate=applySharedStorefrontState;', { loader: 'ts' }).code;
 const effect = transformSync(source.slice(effectStart, effectEnd), { loader: 'ts' }).code;
 vm.runInNewContext(hydration, scope);

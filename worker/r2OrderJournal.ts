@@ -57,7 +57,7 @@ export const readOrderJournal=async(bucket:DataBucket,prefix:string,base:ObjectS
     if(cache.size>2)cache.delete(cache.keys().next().value!);
   }
   return {rows:merged!.rows,etag:revision,get text(){return merged!.text??(merged!.text=JSON.stringify(merged!.rows));},
-    journal:{path,saved,manifest,base,shards,access},customMetadata:manifest?{oraCount:String(manifest.count),oraUpdatedAt:manifest.updated_at}:base.object.customMetadata};
+    journal:{path,saved,manifest,base,shards,access},adminJournal:undefined,customMetadata:manifest?{oraCount:String(manifest.count),oraUpdatedAt:manifest.updated_at}:base.object.customMetadata};
 };
 
 export const writeOrderJournal=async(bucket:DataBucket,prefix:string,state:Awaited<ReturnType<typeof readOrderJournal>>,rows:readonly Row[])=>{

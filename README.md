@@ -83,6 +83,17 @@ Non-secret browser values (`VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`)
 
 ## Verification after deployment
 
+Website saves use `ora-storefront-patch-v1` for changed products, categories and
+setting fields. Admin records are persisted as encrypted immutable change shards
+under `admin-changes-v1/`, published by one ETag-guarded manifest. The restored
+`admin_data_store.json` remains intact; hourly `ora-admin-checkpoint-v1` backups
+reference that base and the committed manifest. Read through `readDataTable` or
+the server adapter so newer records are included. Keep the base and immutable
+shards together when restoring a checkpoint; do not overwrite the base alone.
+`npm run test:storefront-reliability` covers atomic writes, failed/lost responses,
+concurrent edits, cold reads and browser draft recovery. `/connection-check.html`
+also checks full/compact/patch saves unchanged and staff session renewal.
+
 Check these in order:
 
 1. `/api/health`

@@ -179,6 +179,8 @@ export const AdminDashboard: React.FC = () => {
     addPurchaseOrder,
     settings,
     orderLoadError,
+    storefrontSyncMessage,
+    retryStorefrontSave,
     addProduct,
     updateProduct,
     deleteProduct,
@@ -3274,6 +3276,10 @@ Suitable For:
             <Store className="w-5 h-5 text-orange-600" />
             <h1 className="text-xl font-extrabold text-gray-900">O-RA Admin Control Center</h1>
             {orderLoadError && <p role="status" className="mt-2 rounded-xl bg-amber-100 p-3 text-sm text-amber-950">{orderLoadError}</p>}
+            {storefrontSyncMessage && <div role="status" className={`mt-2 rounded-xl px-3 py-2 text-sm ${storefrontSyncMessage==='Website changes saved.'?'bg-green-100 text-green-950':'bg-amber-100 text-amber-950'}`}>
+              {storefrontSyncMessage}
+              {!['Website changes saved.','Saving website changes…'].includes(storefrontSyncMessage)&&<button type="button" className="ml-3 underline font-bold" onClick={retryStorefrontSave}>Retry Save</button>}
+            </div>}
 
             {adminUser && (
               <span
