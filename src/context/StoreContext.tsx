@@ -867,7 +867,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // A failed load must never publish stale cache; hydration is not a new edit.
     if(!saved||(saved.products===products&&saved.categories===categories&&saved.settings===settings))return;
 
-    rememberStorefrontDraft(localStorage,adminUser.id,saved,{products,categories,settings},sharedStoreVersionRef.current);
+    const draftPreserved=rememberStorefrontDraft(localStorage,adminUser.id,saved,{products,categories,settings},sharedStoreVersionRef.current);
 
     const timer = window.setTimeout(() => {
       const seq = ++storefrontPublishSeqRef.current;
@@ -949,9 +949,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
           console.warn('Shared storefront publish failed after retries:', lastError?.message || lastError);
           storefrontRetryableRef.current=![400,401,403,409,413].includes(status);
+          const retained=draftPreserved?'Your edit is preserved.':'Keep this page open; the browser could not store a recovery copy.';
           setStorefrontSyncMessage(status===409
-            ? 'Newer server data conflicts with this edit. Your edit is preserved; reload to review the latest values before saving again.'
-            : `Website changes are not saved yet: ${String(lastError?.message||'Connection unavailable')}. Your edit is preserved. ${storefrontRetryableRef.current?'Retrying automatically.':'Review this edit before retrying.'}`);
+            ? `Newer server data conflicts with this edit. ${retained} ${draftPreserved?'Reload to review the latest values.':'Copy your edit before reloading to review the latest values.'}`
+            : `Website changes are not saved yet: ${String(lastError?.message||'Connection unavailable')}. ${retained} ${storefrontRetryableRef.current?'Retrying automatically.':'Review this edit before retrying.'}`);
         });
     }, 900);
 
