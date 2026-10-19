@@ -97,7 +97,7 @@ assert.equal((await f.call('/api/orders/cancel-before-dispatch', {order_id: f.or
 assert.equal((await f.state()).products[0].stock_quantity, 5);
 
 // Every durable boundary is retry-safe, including after stock was committed.
-for (const [suffix, nth] of [['admin_data_store.json', 2], ['admin_data_store.json', 3], ['order-changes-v1.json', 2]] as const) {
+for (const [suffix, nth] of [['admin-changes-v1.json', 2], ['admin-changes-v1.json', 3], ['order-changes-v1.json', 2]] as const) {
   const retry = await setup(), body = await retry.input(); retry.raw.failSuffix = suffix; retry.raw.failNth = nth;
   assert.equal((await retry.call(path, body)).status, 503, suffix + ' boundary ' + nth);
   const pending = await readDataTable(retry.env, 'admin_data_store'); assert.equal(returnPackingInProgress(pending), true);

@@ -39,7 +39,7 @@ export const r2OrderUpdateHandler = async (request: Request, env: unknown, id: s
       });
       locks = await readDataTable(env, 'courier_waybills');
     }
-    const saved = await replaceDataTable(env, 'order_snapshots', rows => {
+    const saved = await replaceDataTable<{ok:boolean;order:Record<string,any>;waybill_preserved:boolean;cancellation_preserved?:boolean}>(env, 'order_snapshots', rows => {
       const row = rows.find(row => String(row.order_id) === id), existing = row?.payload;
       if (existing?.cancel_stock_restore?.operation_id) return { rows, result: { ok: true, order: existing, waybill_preserved: true, cancellation_preserved: true } };
       const result = prepareOrderSnapshotUpdate(existing, incoming, locks), order = result.order;

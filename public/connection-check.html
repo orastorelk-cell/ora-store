@@ -56,13 +56,18 @@ saveButton.onclick=async()=>{
    if(!legacy.ok||!legacy.unchanged||legacy.version!==before.version)throw new Error('The catalog changed during the check.');
    const compact=await call('Product save '+round,'/api/admin/storefront/state','PUT',{format:'ora-storefront-products-v1',product_updates:[],expected_version:before.version});
    if(!compact.ok||!compact.unchanged||compact.version!==before.version)throw new Error('The product save was not acknowledged unchanged.');
+   const patch=await call('Small website save '+round,'/api/admin/storefront/state','PUT',{format:'ora-storefront-patch-v1',product_updates:[],product_expected:[],setting_changes:[],expected_version:before.version});
+   if(!patch.ok||!patch.unchanged||patch.version!==before.version)throw new Error('The small website save was not acknowledged unchanged.');
+   const productIds=before.products.map(product=>product.id);
+   const catalog=await call('Catalog save '+round,'/api/admin/storefront/state','PUT',{format:'ora-storefront-catalog-v1',product_changes:[],product_order:{before:productIds,after:productIds},setting_changes:[],expected_version:before.version});
+   if(!catalog.ok||!catalog.unchanged||catalog.version!==before.version)throw new Error('The product-add save protocol was not acknowledged unchanged.');
    const refreshed=await call('Session renewal '+round,'/api/staff/session/refresh','POST');
    if(!refreshed.ok||!refreshed.token)throw new Error('Session renewal did not finish.');
    token=refreshed.token;localStorage.setItem('ora_staff_session_token',token);
   }
   const after=(await call('Verify saved catalog','/api/admin/storefront/state')).state;
   if(after.version!==before.version||JSON.stringify([after.products,after.categories,after.settings])!==JSON.stringify([before.products,before.categories,before.settings]))throw new Error('The catalog changed during the check.');
-  results.push('All 11 save/session checks passed. Catalog version '+after.version+' is unchanged. Orders, stock and invoices were not changed.');
+  results.push('All 17 save/session checks passed. Catalog version '+after.version+' is unchanged. Orders, stock and invoices were not changed.');
  }catch(error){results.push('Failed: '+error.message)}finally{saveResult.textContent=results.join('\n');saveButton.disabled=false}
 };
 </script></body></html>

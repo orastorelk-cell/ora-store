@@ -2239,7 +2239,7 @@ app.post('/api/orders/invoice-download-status', requireAdminSession, async (req,
     await saveOrderSnapshotsBatch(result.updatedOrders);
     return res.json({ok:true,downloadedAt:body.downloadedAt,updatedCount:result.orders.length,orders:result.orders});
   }catch(e:any){
-    return res.status(e?.status===404?404:500).json({error:e?.message || 'Invoice download status could not be saved.'});
+    return res.status([404,422].includes(e?.status)?e.status:500).json({error:e?.message || 'Invoice download status could not be saved.'});
   }
 });
 // The live Worker applies CSV decisions atomically in R2. Keep the same guards

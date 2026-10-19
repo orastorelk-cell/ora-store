@@ -68,7 +68,7 @@ export const r2WebsiteOrdersHandler=async(request:Request,env:any,ctx:any):Promi
     if(existing){if(identity(existing.payload)!==identity(input))throw new Error('Order retry details changed.');return {rows,result:existing.payload};}
     const prior=rows.map(row=>row.payload).filter(order=>order&&order.order_status!=='Cancelled'&&!order.is_test_order&&Date.parse(order.created_at)>Date.now()-86400000&&fingerprint(order)===fingerprint(input))
       .sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)))[0];
-    const order={...receipt(input),id:String(input.id),order_number:reserved,phone:phone(input.phone),whatsapp:phone(input.whatsapp||input.phone),
+    const order:Record<string,any>={...receipt(input),id:String(input.id),order_number:reserved,phone:phone(input.phone),whatsapp:phone(input.whatsapp||input.phone),
       customer_name:cleanText(input.customer_name),address:cleanText(input.address),city:cleanText(input.city),district:cleanText(input.district),
       order_source:'Website',payment_status:'Pending',order_status:input.payment_method==='Bank Payment'?'Pending Payment':'New Orders',
       payment_verification_status:input.payment_method==='Bank Payment'?'Awaiting Receipt':'Not Required',bank_receipt_url:'',advance_confirmed:false,

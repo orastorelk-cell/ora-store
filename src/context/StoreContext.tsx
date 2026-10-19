@@ -37,9 +37,11 @@ import {
 import { syncOrderToGoogleSheets, syncOrdersBatchToGoogleSheets, syncProductCatalogToGoogleSheets, clearGoogleSheetTestData, clearGoogleSheetLiveStartData, deleteOrderFromGoogleSheets } from '../lib/googleSheetRequests';
 import { buildOrderItemSnapshot, deliverySplitForSettings, displayUnitPrice, effectiveBuyingPrice, findProductSelection, normalizeProductForStorage, normalizedProductType, productDisplayStock, variantById, variantBySku, repriceAfterBuyingCostChange } from '../lib/productVariants';
 import { canonicalJson, confirmCsvRequestWithRetry, saveConfirmCsvDecisions } from '../lib/confirmCsvSave';
-import { saveInvoiceDownloadStatus } from '../lib/invoiceDownloadStatus';
+import { createInvoiceDownloadQueue } from '../lib/invoiceDownloadQueue';
+import { mergeInvoiceDownloadReceipt } from '../lib/invoiceDownloadStatus';
 import { saveFardarExportStatus } from '../lib/fardarExportStatus';
-import { storefrontSaveBody } from '../lib/storefrontProductSave';
+import { storefrontSaveBody, rebaseStorefrontEdit, sameStorefrontValue } from '../lib/storefrontProductSave';
+import { readStorefrontDraft, rememberStorefrontDraft, acknowledgeStorefrontDraft, archiveStorefrontDraft } from '../lib/storefrontDraft';
 import { publicStorefrontRequest } from '../lib/publicStorefrontRequest';
 import { validCodPaymentEntries, type CodPaymentEntry } from '../lib/codPaymentImport';
 
@@ -111,6 +113,12 @@ interface StoreContextType {
   sharedStoreReady: boolean;
   sharedOrdersReady: boolean;
   orderLoadError: string;
+  storefrontSyncMessage: string;
+  invoiceDownloadSyncMessage: string;
+  invoiceDownloadCanRetry: boolean;
+  retryInvoiceDownloadSave: () => void;
+  getPendingInvoiceDownloadSets: () => {date:string;number:number;orderIds:string[]}[];
+  retryStorefrontSave: () => void;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   selectedCategorySlug: string | null;
@@ -216,7 +224,7 @@ interface StoreContextType {
   redispatchReturnedParcel: (oldWaybill: string) => Promise<{ success: boolean; message: string; order?: Order; oldWaybill?: string; newWaybill?: string }>;
   unassignWaybill: (orderId: string) => void;
   markInvoicesGenerated: (orderIds: string[], generatedBy?: string) => Order[];
-  markInvoiceBatchDownloaded: (orderIds: string[], downloadedBy?: string, downloadSet?: { date: string; number: number }) => Promise<void>;
+  markInvoiceBatchDownloaded: (orderIds: string[], downloadedBy?: string, downloadSet?: { date: string; number: number }, downloadedInvoices?: Order[]) => Promise<void>;
   markFardarCsvExported: (orderIds: string[], exportedBy?: string) => Promise<void>;
   scanDispatchBarcode: (barcode: string, scannedBy?: string) => Promise<{ success: boolean; message: string; order?: Order }>;
   recordCodPayments: (entries: CodPaymentEntry[], recordedBy?: string) => Promise<{ updatedCount: number; unchangedCount: number; payments: number; returns: number; notFound: string[] }>;
@@ -357,8 +365,8 @@ const localStorefrontRequest = async (body: any) => {
 };
 const staffMutationQueue = createStaffMutationQueue();
 const sharedStaffRequest = async (url: string, options: RequestInit = {}) => {
+  const token = getStaffSessionToken();
   const send = () => {
-    const token = getStaffSessionToken();
     const headers = new Headers(options.headers || {});
     headers.set('Content-Type', 'application/json');
     if (token) headers.set('Authorization', `Bearer ${token}`);
@@ -375,18 +383,13 @@ const refreshStaffSessionToken = async () => {
   // Existing staff sessions are 12 hours. Renew only in the final 6 hours so
   // active dashboards stay signed in without creating unnecessary requests.
   if (exp - Date.now() > 6 * 60 * 60 * 1000) return token;
-  const response = await fetch('/api/staff/session/refresh', {
+  const data = await staffJsonRequest('/api/staff/session/refresh', {
     method:'POST',
     headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},
   });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error:any = new Error(data?.error || `Session refresh failed (${response.status})`);
-    error.status = response.status;
-    throw error;
-  }
   const nextToken = String(data?.token || '');
   if (!nextToken || !decodeStaffSessionExpiry(nextToken)) throw new Error('Server returned an invalid refreshed session.');
+  if(getStaffSessionToken()!==token)return getStaffSessionToken();
   localStorage.setItem('ora_staff_session_token', nextToken);
   return nextToken;
 };
@@ -592,11 +595,44 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [returnPackingBatches,setReturnPackingBatches] = useState<{operation_id:string;batch_id:string;created_at:string;count:number}[]>([]);
   const [sharedOrdersReady,setSharedOrdersReady]=useState(false);
   const [orderLoadError,setOrderLoadError]=useState('');
+  const [storefrontSyncMessage,setStorefrontSyncMessage]=useState('');
+  const [storefrontRetry,setStorefrontRetry]=useState(0);
+  const storefrontRetryableRef=useRef(false);
+  const retryStorefrontSave=()=>setStorefrontRetry(value=>value+1);
   const sharedStoreVersionRef = useRef(0);
   const sharedStoreSnapshotRef = useRef<{products:Product[];categories:Category[];settings:StoreSettings}|null>(null);
   const orderServerVersionRef = useRef('');
   const orderRefreshRef=useRef<{user:string;promise:Promise<void>}|null>(null);
   const adminIdentityRef=useRef('');adminIdentityRef.current=adminUser?.id||'';
+  const [invoiceDownloadSyncMessage,setInvoiceDownloadSyncMessage]=useState('');
+  const [invoiceDownloadCanRetry,setInvoiceDownloadCanRetry]=useState(false);
+  const invoiceDownloadQueueRef=useRef<ReturnType<typeof createInvoiceDownloadQueue>|null>(null);
+  const invoiceDownloadReceiptsRef=useRef(new Map<string,Order>());
+  const retryInvoiceDownloadSave=()=>{void invoiceDownloadQueueRef.current?.flush(true);};
+  const getPendingInvoiceDownloadSets=()=>invoiceDownloadQueueRef.current?.pendingSets()||[];
+  useEffect(()=>{
+    setInvoiceDownloadSyncMessage('');setInvoiceDownloadCanRetry(false);
+    invoiceDownloadReceiptsRef.current.clear();
+    const user=adminUser?.id;if(!user)return;
+    const queue=createInvoiceDownloadQueue({storage:localStorage,user,request:sharedStaffRequest,
+      onSaved:updated=>{
+        if(adminIdentityRef.current!==user)return;
+        const saved=new Map(updated.map(order=>[String(order.id),order as Order]));
+        for(const [id,receipt] of saved)invoiceDownloadReceiptsRef.current.set(id,receipt);
+        setOrders(previous=>previous.map(order=>{const receipt=saved.get(String(order.id));return receipt?mergeInvoiceDownloadReceipt(order,receipt):order;}));
+      },onState:state=>{
+        if(adminIdentityRef.current!==user)return;
+        setInvoiceDownloadSyncMessage(state.message);setInvoiceDownloadCanRetry(state.canRetry);
+      }});
+    invoiceDownloadQueueRef.current=queue;
+    const retry=()=>{if(adminIdentityRef.current===user&&getStaffSessionToken())void queue.flush();};
+    retry();
+    const timer=window.setInterval(retry,30_000);
+    window.addEventListener('online',retry);window.addEventListener('focus',retry);
+    return ()=>{queue.dispose();if(invoiceDownloadQueueRef.current===queue)invoiceDownloadQueueRef.current=null;
+      window.clearInterval(timer);window.removeEventListener('online',retry);window.removeEventListener('focus',retry);};
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[adminUser?.id]);
   // Serialize full storefront publishes. Rapid Admin edits used to start overlapping
   // PUT requests for the ~shared catalog payload, so an older transient failure could
   // raise "Website sync failed" even when a newer save was already succeeding.
@@ -758,13 +794,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setProducts(normalized);
     }
     if (Array.isArray(state.categories)) {savedCategories=state.categories as Category[];setCategories(savedCategories);}
-    if (state.settings && typeof state.settings === 'object' && !Array.isArray(state.settings)) {
-      setSettings((prev) => {
-        const next={...prev,...state.settings} as StoreSettings;
-        sharedStoreSnapshotRef.current={products:savedProducts,categories:savedCategories,settings:next};
-        return next;
-      });
-    }else sharedStoreSnapshotRef.current={products:savedProducts,categories:savedCategories,settings};
+    const savedSettings=state.settings && typeof state.settings === 'object' && !Array.isArray(state.settings)
+      ? {...settings,...state.settings} as StoreSettings : settings;
+    setSettings(savedSettings);
+    sharedStoreSnapshotRef.current={products:savedProducts,categories:savedCategories,settings:savedSettings};
     const verifiedVersion = Number(state.version || 0);
     sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, verifiedVersion);
     try {
@@ -807,6 +840,19 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           // current live catalog, so the customer can see it without a full JSON wait.
         } else if (data?.initialized && data?.state) {
           applySharedStorefrontState(data.state, hasStaffSession);
+          if(hasStaffSession&&adminUser){
+            const draft=readStorefrontDraft(localStorage,adminUser.id),current=sharedStoreSnapshotRef.current!;
+            if(draft){
+              const recovered=rebaseStorefrontEdit(draft.base,draft.next,current);
+              if(recovered){
+                if(sameStorefrontValue(recovered,current))acknowledgeStorefrontDraft(localStorage,adminUser.id,draft.next,Number(data.state.version||0));
+                else{setProducts(recovered.products);setCategories(recovered.categories);setSettings(recovered.settings as StoreSettings);setStorefrontSyncMessage('Recovered your unsaved website edit. Saving it now…');}
+              }else{
+                archiveStorefrontDraft(localStorage,adminUser.id);
+                setStorefrontSyncMessage('An earlier unsaved edit is preserved in this browser. Newer server data conflicts with it; review the latest values and save your intended edit again.');
+              }
+            }
+          }
         } else if (adminUser?.role === 'admin') {
           // One-time migration: the current Super Admin browser owns the existing
           // catalog. Authenticated live installs publish through the private API.
@@ -855,6 +901,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // A failed load must never publish stale cache; hydration is not a new edit.
     if(!saved||(saved.products===products&&saved.categories===categories&&saved.settings===settings))return;
 
+    const draftPreserved=rememberStorefrontDraft(localStorage,adminUser.id,saved,{products,categories,settings},sharedStoreVersionRef.current);
+
     const timer = window.setTimeout(() => {
       const seq = ++storefrontPublishSeqRef.current;
       const snapshot = { products, categories, settings };
@@ -862,7 +910,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       storefrontPublishQueueRef.current = storefrontPublishQueueRef.current
         .catch(() => {})
         .then(async () => {
-          if (!adminUser || seq !== storefrontPublishSeqRef.current) return;
+          if (!adminUser || adminIdentityRef.current!==adminUser.id || seq !== storefrontPublishSeqRef.current) return;
+          setStorefrontSyncMessage('Saving website changes…');
+          storefrontRetryableRef.current=false;
 
           const publishOnce = async () => {
             if (isLocalStorefrontHost()) {
@@ -892,14 +942,19 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           let lastError:any = null;
           const retryDelays = [0, 1200, 3000];
           for (let attempt=0; attempt<retryDelays.length; attempt++) {
-            if (seq !== storefrontPublishSeqRef.current) return;
-            if (retryDelays[attempt] > 0) {
-              await new Promise<void>((resolve) => window.setTimeout(resolve, retryDelays[attempt]));
+            if (adminIdentityRef.current!==adminUser.id || seq !== storefrontPublishSeqRef.current) return;
+            const delay=Math.min(15000,Math.max(retryDelays[attempt],Number(lastError?.retryAfterMs||0)));
+            if (delay > 0) {
+              await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
             }
             try {
               const data = await publishOnce();
+              if(data?.ok!==true||!Number.isSafeInteger(data?.version)||data.version<1){const error:any=new Error('The server did not verify the website save.');error.status=503;throw error;}
+              if(adminIdentityRef.current!==adminUser.id)return;
               sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, Number(data?.version || 0));
               sharedStoreSnapshotRef.current=snapshot;
+              acknowledgeStorefrontDraft(localStorage,adminUser.id,snapshot,data.version);
+              if(seq===storefrontPublishSeqRef.current)setStorefrontSyncMessage('Website changes saved.');
               return;
             } catch (err:any) {
               lastError = err;
@@ -908,6 +963,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }
 
           const status = Number(lastError?.status || 0);
+          if(adminIdentityRef.current!==adminUser.id)return;
           if ((status === 401 || status === 403) && !isLocalStorefrontHost()) {
             localStorage.removeItem('ora_staff_session_token');
             localStorage.removeItem('ora_admin_user');
@@ -926,14 +982,24 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }
 
           console.warn('Shared storefront publish failed after retries:', lastError?.message || lastError);
-          window.alert(
-            `Website sync failed after 3 attempts: ${String(lastError?.message || 'Network/server error')}. Your edit is still kept in this browser; please try Save again.`
-          );
+          storefrontRetryableRef.current=![400,401,403,409,413].includes(status);
+          const retained=draftPreserved?'Your edit is preserved.':'Keep this page open; the browser could not store a recovery copy.';
+          setStorefrontSyncMessage(status===409
+            ? `Newer server data conflicts with this edit. ${retained} ${draftPreserved?'Reload to review the latest values.':'Copy your edit before reloading to review the latest values.'}`
+            : `Website changes are not saved yet: ${String(lastError?.message||'Connection unavailable')}. ${retained} ${storefrontRetryableRef.current?'Retrying automatically.':'Review this edit before retrying.'}`);
         });
     }, 900);
 
     return () => window.clearTimeout(timer);
-  }, [products, categories, settings, sharedStoreReady, adminUser?.id]);
+  }, [products, categories, settings, sharedStoreReady, adminUser?.id, storefrontRetry]);
+
+  useEffect(()=>{
+    if(!adminUser)return;
+    const retry=()=>{if(storefrontRetryableRef.current&&navigator.onLine!==false)retryStorefrontSave();};
+    const timer=window.setInterval(retry,30000);
+    window.addEventListener('online',retry);window.addEventListener('focus',retry);
+    return ()=>{window.clearInterval(timer);window.removeEventListener('online',retry);window.removeEventListener('focus',retry);};
+  },[adminUser?.id]);
 
   // Public storefront freshness:
   // Facebook/Instagram in-app browsers can restore an old page from memory/BFCache
@@ -1051,7 +1117,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if(adminIdentityRef.current!==user||!getStaffSessionToken())return;
     const serverOrders: Order[] = Array.isArray(data?.snapshots) ? data.snapshots.map((row:any)=>row?.payload) : data?.orders;
     if(!Array.isArray(serverOrders)||serverOrders.some(order=>!order||!order.id||!order.order_number||!Array.isArray(order.items))){setOrderLoadError('The server returned an incomplete order list. Automatic retry is active.');throw new Error('Order loading did not finish. The previous order list has been kept; retrying the server.');}
-    const sortedServerOrders = [...serverOrders].sort((a,b)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime());
+    const sortedServerOrders = [...serverOrders].sort((a,b)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime())
+      .map(order=>{const receipt=invoiceDownloadReceiptsRef.current.get(String(order.id));return receipt?mergeInvoiceDownloadReceipt(order,receipt):order;});
 
     // Customer DB is derived from the same durable order snapshots for every
     // authenticated Admin/Staff browser. Local browser demo data is never authoritative.
@@ -2867,25 +2934,23 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const markInvoiceBatchDownloaded = async (
     orderIds: string[],
     downloadedBy = adminUser?.name || 'Packing Staff',
-    downloadSet?: { date: string; number: number }
+    downloadSet?: { date: string; number: number },
+    downloadedInvoices?: Order[]
   ): Promise<void> => {
     const uniqueIds=Array.from(new Set(orderIds.map(String).filter(Boolean)));
     if(!uniqueIds.length) return;
 
-    // One current-data metadata transaction replaces a full order PUT per PDF.
-    const updatedOrders=await saveInvoiceDownloadStatus(uniqueIds,downloadedBy,downloadSet,sharedStaffRequest) as Order[];
-
-    const updatedMap=new Map(updatedOrders.map(o=>[String(o.id),o] as [string,Order]));
-    setOrders(prev=>prev.map(o=>updatedMap.get(String(o.id)) || o));
-
-    const batchIds=Array.from(new Set(
-      updatedOrders.map(o=>o.invoice_pack_batch_id).filter(Boolean)
-    ));
-
+    const queue=invoiceDownloadQueueRef.current;
+    if(!adminUser||!queue)throw new Error('Sign in again to save this PDF download status.');
+    const invoices=(downloadedInvoices||orders.filter(order=>uniqueIds.includes(order.id))).map(order=>({
+      id:order.id,invoiceNumber:String(order.invoice_number||''),batchId:String(order.invoice_pack_batch_id||''),waybill:String(order.waybill_number||'')
+    }));
+    queue.enqueue(uniqueIds,downloadedBy,downloadSet,invoices);
+    // The PDF exists now. Only a verified receipt marks its orders Downloaded.
     logActivity({
-      action:'Packing Invoice Batch Downloaded',
+      action:'Packing Invoice PDF Downloaded',
       module:'Invoices',
-      details:`${updatedOrders.length} invoice(s) • ${batchIds.join(', ') || 'Legacy Batch'} • ${downloadedBy}`
+      details:`${uniqueIds.length} invoice(s) • ${downloadedBy} • Download status queued for server confirmation`
     });
   };
 
@@ -3512,6 +3577,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         sharedStoreReady,
         sharedOrdersReady,
         orderLoadError,
+        storefrontSyncMessage,
+        invoiceDownloadSyncMessage,
+        invoiceDownloadCanRetry,
+        retryInvoiceDownloadSave,
+        getPendingInvoiceDownloadSets,
+        retryStorefrontSave,
         searchQuery,
         setSearchQuery,
         selectedCategorySlug,

@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { createClient } from '@supabase/supabase-js';
-import { ACTIVE_KEY, activeData, configureCloudflareData, cloudflareDataFetch, dataBucket, importRecovery, mutateDataTable } from '../worker/cloudflareData';
+import { ACTIVE_KEY, activeData, configureCloudflareData, cloudflareDataFetch, dataBucket, importRecovery, mutateDataTable, readDataTable } from '../worker/cloudflareData';
 import { withR2DataFallback } from '../worker/r2RecoveryFallback';
 import { facebookLeadAuditHandler } from '../worker/facebookLeadAudit';
 import { compactR2StorageOnce } from '../worker/r2StorageCompression';
@@ -149,8 +149,8 @@ try {
   // login/retry with an identical catalog must not rewrite the entire data table.
   assert.equal((await fast('/api/admin/storefront/state','GET',undefined,'invalid')).status,401);
   const privateState:any=await (await fast('/api/admin/storefront/state')).json();
-  const site=privateState.state,adminKey=active.prefix+'admin_data_store.json';
-  const unrelatedBefore=JSON.parse(await (await bucket.get(adminKey))!.text()).filter((row:any)=>row.key!=='storefront-state-v1');
+  const site=privateState.state,adminKey=active.prefix+'admin-changes-v1.json';
+  const unrelatedBefore=(await readDataTable(env,'admin_data_store')).filter((row:any)=>row.key!=='storefront-state-v1');
   const siteInput={products:site.products,categories:site.categories,settings:{...site.settings,store_name:'R2 Test Store',
     google_sheet_webhook_url:'',admin_secret_path:'private-test',fardar_api_url:'private-api',fardar_account_id:'private-account',
     bank_details_saved:false,bank_account_number:'not-public'},expected_version:site.version};
@@ -160,7 +160,7 @@ try {
   const repeatSite:any=await (await fast('/api/admin/storefront/state','PUT',siteInput)).json();
   assert.equal(repeatSite.unchanged,true);assert.equal(repeatSite.version,firstSite.version);
   assert.equal(rawBucket.objects.get(adminKey)!.etag,firstSiteEtag,'An acknowledged website-save retry must not write again');
-  assert.deepEqual(JSON.parse(await (await bucket.get(adminKey))!.text()).filter((row:any)=>row.key!=='storefront-state-v1'),unrelatedBefore);
+  assert.deepEqual((await readDataTable(env,'admin_data_store')).filter((row:any)=>row.key!=='storefront-state-v1'),unrelatedBefore);
   const publicSite:any=await (await fast('/api/storefront/state','GET',undefined,'')).json();
   assert.equal(publicSite.state.settings.store_name,'R2 Test Store');
   for(const field of ['google_sheet_webhook_url','admin_secret_path','fardar_api_url','fardar_account_id','courier_api_enabled'])assert.equal(publicSite.state.settings[field],undefined);
@@ -179,9 +179,7 @@ try {
   await sdk.from('admin_users').update({is_active:true}).eq('id',staffId);
 
   // A blank URL from an older admin browser cannot clear a working integration.
-  const currentSiteRows=JSON.parse(await (await bucket.get(adminKey))!.text());
-  currentSiteRows.find((row:any)=>row.key==='storefront-state-v1').payload.settings.google_sheet_webhook_url='https://script.google.com/macros/s/fixture/exec';
-  await bucket.put(adminKey,JSON.stringify(currentSiteRows));
+  await mutateDataTable(env,'admin_data_store',rows=>{rows.find(row=>row.key==='storefront-state-v1')!.payload.settings.google_sheet_webhook_url='https://script.google.com/macros/s/fixture/exec';});
   const preserveWebhook:any=await (await fast('/api/admin/storefront/state','PUT',{...siteInput,expected_version:firstSite.version})).json();
   assert.equal(preserveWebhook.unchanged,true);
   assert.equal((await (await fast('/api/admin/storefront/state')).json() as any).state.settings.google_sheet_webhook_url,'https://script.google.com/macros/s/fixture/exec');
@@ -206,9 +204,9 @@ try {
   assert.equal((await fast('/api/admin/storefront/state','PUT',{...stockBody,expected_version:stockAck.version,product_expected:[{id:'missing'}],product_updates:[{id:'missing'}]})).status,409);
   assert.equal((await fast('/api/admin/storefront/state','PUT',{...stockBody,product_updates:[stockNext.products[0],stockNext.products[0]]})).status,400);
   assert.equal((await fast('/api/admin/storefront/state','PUT',{format:'ora-storefront-products-v1',product_updates:[]})).status,400);
-  assert.equal(storefrontSaveBody(stockBase,{...stockNext,categories:[{id:'new'}]},stockBase.version).format,undefined);
-  assert.equal(storefrontSaveBody(stockBase,{...stockNext,products:[...stockNext.products,{id:'new'}]},stockBase.version).format,undefined);
-  assert.deepEqual(JSON.parse(await (await bucket.get(adminKey))!.text()).filter((row:any)=>row.key!=='storefront-state-v1'),unrelatedBefore);
+  assert.equal((storefrontSaveBody(stockBase,{...stockNext,categories:[{id:'new'}]},stockBase.version) as any).format,'ora-storefront-patch-v1');
+  assert.equal(storefrontSaveBody(stockBase,{...stockNext,products:[...stockNext.products,{id:'new'}]},stockBase.version).format,'ora-storefront-catalog-v1');
+  assert.deepEqual((await readDataTable(env,'admin_data_store')).filter((row:any)=>row.key!=='storefront-state-v1'),unrelatedBefore);
 
   // Binding throttles and an ambiguous successful CAS write must be retry-safe.
   const stablePut=rawBucket.put.bind(rawBucket),stableGet=rawBucket.get.bind(rawBucket);
@@ -289,8 +287,8 @@ try {
   assert.equal(rawBucket.objects.get(currentOrderKey)!.etag,committedEtag,'Lost-response retry must not write a second snapshot');
   const confirmedRows=(await sdk.from('order_snapshots').select('payload').in('order_id',confirmOrders.map(order=>order.id))).data!;
   assert.equal(confirmedRows.length,12);assert(confirmedRows.every(row=>row.payload.call_center_status==='Confirmed'&&row.payload.order_status==='Processing'));
-  assert.deepEqual(confirmedRows.slice(0,7).map(row=>canonicalJson(row.payload)),firstSeven,'Previously committed orders retain all fields exactly');
-  assert(confirmedRows.slice(7).every(row=>row.payload.confirm_upload_batch_id==='RETRY-TWELVE'));
+  assert.deepEqual(confirmedRows.filter(row=>confirmOrders.slice(0,7).some(order=>order.id===row.payload.id)).map(row=>canonicalJson(row.payload)).sort(),firstSeven.sort(),'Previously committed orders retain all fields exactly');
+  assert(confirmedRows.filter(row=>confirmOrders.slice(7).some(order=>order.id===row.payload.id)).every(row=>row.payload.confirm_upload_batch_id==='RETRY-TWELVE'));
   assert(displayedOrders.every(order=>order.call_center_status==='Confirmed'),'Only verified server results update the UI');
   const auditExpected=confirmOrders.map(order=>({order_number:order.order_number,decision:'Confirmed',items:[{sku:'R1',quantity:1,variant:''}]}));
   const auditEtag=rawBucket.objects.get(currentOrderKey)!.etag;
@@ -371,7 +369,7 @@ try {
   let localInvoiceOrders:any[]=JSON.parse(JSON.stringify(invoiceOrders)),rejectQueue=true,scheduledRetry=0;
   const effects:Array<()=>void>=[],inFlight={current:new Set()},retryTimer={current:null};
   const queueScope:any={invoiceReady,invoiceComplete,adminUser:{id:adminId,name:'Admin'},sharedStoreReady:true,orders:localInvoiceOrders,
-    autoInvoiceReadyRef:inFlight,invoiceQueueBusyRef:{current:false},invoiceQueueRetryTimerRef:retryTimer,invoiceQueueRetry:0,returnPackingPending:false,getStaffSessionToken:()=>token,
+    autoInvoiceReadyRef:inFlight,invoiceQueueBusyRef:{current:false},invoiceQueueRetryTimerRef:retryTimer,invoiceQueueRetry:0,returnPackingPending:false,returnStockTransactionPending:false,getStaffSessionToken:()=>token,
     useEffect:(callback:any)=>effects.push(callback),window:{setTimeout:()=>{scheduledRetry++;return 10;}},setInvoiceQueueRetry:()=>{},
     sharedStaffRequest:async(path:string,options?:RequestInit)=>{if(rejectQueue){const error:any=new Error('503');error.status=503;throw error;}const response=await fast(path,options?.method||'GET',options?.body?JSON.parse(String(options.body)):undefined);return response.json();},
     saveInvoiceQueue:(a:any,b:any,c:any,d?:any)=>saveInvoiceQueue(a,b,c,d,async()=>{}),
@@ -410,7 +408,7 @@ try {
   assert(dashboardCode.includes('const desc = fardarParcelDescription(o.items)'));
   assert(dashboardCode.includes("const blob = utf8CsvBlob([header.join(','),...rows].join('\\n'))"));
 
-  const original=confirmedRows[7].payload;
+  const original=confirmedRows.find(row=>row.payload.id===confirmOrders[7].id)!.payload;
   const correction={id:original.id,order_number:original.order_number,expected:canonicalJson(original),patch:{call_center_status:'Confirmed',order_status:'Processing',items:original.items,customer_name:'Corrected'},clear_fields:[]};
   assert(validConfirmCsvEntries([correction]));
   assert.equal((await fast('/api/orders/confirm-csv','POST',{entries:[correction]},'invalid')).status,401);
@@ -433,7 +431,7 @@ try {
   assert.equal(raced.results[0].status,'failed');assert.match(raced.results[0].error,/locked/);
   const locked=(await sdk.from('order_snapshots').select('payload').eq('order_id',original.id).single()).data!.payload;
   assert.equal(locked.customer_name,'Test Customer');assert.equal(locked.invoice_locked,true);assert.equal(locked.stock_allocated,true);assert.equal(locked.waybill_number,'STAFF-LOCK');
-  const staleCorrection={...correction,id:confirmedRows[8].payload.id,order_number:confirmedRows[8].payload.order_number,expected:canonicalJson({...confirmedRows[8].payload,phone:'stale'})};
+  const staleCorrection={...correction,id:confirmedRows.find(row=>row.payload.id===confirmOrders[8].id)!.payload.id,order_number:confirmedRows.find(row=>row.payload.id===confirmOrders[8].id)!.payload.order_number,expected:canonicalJson({...confirmedRows.find(row=>row.payload.id===confirmOrders[8].id)!.payload,phone:'stale'})};
   const conflicted:any=await (await fast('/api/orders/confirm-csv','POST',{entries:[staleCorrection]})).json();
   assert.equal(conflicted.results[0].status,'failed');assert.match(conflicted.results[0].error,/changed/);
   const missing={...correction,id:'does-not-exist'};

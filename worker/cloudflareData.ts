@@ -6,6 +6,7 @@ import { prepareOrderSnapshotUpdate } from '../src/lib/orderSnapshotUpdate';
 import { constants as zlibConstants, gzip, gunzip } from 'node:zlib';
 import { pauseR2Conflict, retryR2Operation } from './r2Retry';
 import { readOrderJournal, readOrderJournalWire, writeOrderJournal } from './r2OrderJournal';
+import { readAdminJournal, writeAdminJournal } from './r2AdminJournal';
 type Row = Record<string, any>;
 export type DataBucket = {
   get(key: string): Promise<{ text(): Promise<string>; etag: string; customMetadata?: Record<string,string> } | null>;
@@ -219,7 +220,8 @@ const tableState = async (bucket: DataBucket, prefix: string, table: string) => 
   const state = await parsedObject(bucket,prefix+table+'.json');
   if (!state || !Array.isArray(state.value)) throw new DataError('Cloudflare table is missing or invalid: '+table);
   if(table==='order_snapshots')return readOrderJournal(bucket,prefix,state,{read:key=>parsedObject(bucket,key),cache:(key,etag,text,value)=>cacheSaved(bucket,key,etag,text,value)});
-  return {rows:state.value as Row[],etag:state.object.etag,text:state.text,journal:undefined,customMetadata:state.object.customMetadata};
+  if(table==='admin_data_store')return readAdminJournal(bucket,prefix,state,{read:key=>parsedObject(bucket,key),cache:(key,etag,text,value)=>cacheSaved(bucket,key,etag,text,value)});
+  return {rows:state.value as Row[],etag:state.object.etag,text:state.text,journal:undefined,adminJournal:undefined,customMetadata:state.object.customMetadata};
 };
 const preserveHourlyBackup = async (bucket:DataBucket,table:string,rows:Row[],serialized?:string) => {
   // Seven days of hourly slots, bounded independently of traffic and order count.
@@ -235,16 +237,20 @@ const preserveHourlyBackup = async (bucket:DataBucket,table:string,rows:Row[],se
 const mutateTable = async <T>(bucket:DataBucket,prefix:string,table:string,change:(rows:Row[])=>T):Promise<T> => {
   for(let attempt=0;attempt<8;attempt++) {
     const state = await tableState(bucket,prefix,table);
-    const before = state.text;
     // A failed CAS or write must never modify a cached successful read.
-    const rows=JSON.parse(before) as Row[];
+    const rows=state.adminJournal?structuredClone(state.rows):JSON.parse(state.text) as Row[];
     const result = change(rows);
+    if(state.adminJournal){
+      if(await writeAdminJournal(bucket,prefix,state as Awaited<ReturnType<typeof readAdminJournal>>,rows))return result;
+      if(attempt<7)await pauseR2Conflict(attempt);
+      continue;
+    }
     if(state.journal){
       if(await writeOrderJournal(bucket,prefix,state as Awaited<ReturnType<typeof readOrderJournal>>,rows))return result;
       if(attempt<7)await pauseR2Conflict(attempt);
       continue;
     }
-    const after=JSON.stringify(rows);
+    const before=state.text,after=JSON.stringify(rows);
     if(before===after)return result;
     if (table !== '__sequences') await preserveHourlyBackup(bucket,table,state.rows,before);
     const saved = await bucket.put(prefix+table+'.json',after,{...options,customMetadata:{oraData:'1',oraCount:String(rows.length),oraUpdatedAt:new Date().toISOString()},onlyIf:{etagMatches:state.etag}});
@@ -262,6 +268,33 @@ export const readDataTable=async(env:unknown,table:string):Promise<Row[]>=>{
   const active=await activeData(bucket);if(!active)throw new DataError('Cloudflare recovery is required.');
   return (await tableState(bucket,active.prefix,table)).rows;
 };
+// Download/confirm guards need the current transaction lock, not every saved
+// return receipt, invoice logo and packing history. Publish it in the SAME CAS.
+export const readPackingInProgress=async(env:unknown):Promise<boolean>=>{
+  const bucket=dataBucket(env);if(!bucket)throw new DataError('Cloudflare R2 binding is unavailable.');
+  const active=await activeData(bucket);if(!active)throw new DataError('Cloudflare recovery is required.');
+  const saved=await parsedObject(bucket,active.prefix+'admin-changes-v1.json');
+  if(saved){
+    const manifest=saved.value,base=await bucket.get(active.prefix+'admin_data_store.json');
+    if(manifest?.format!=='ora-admin-changes-v1'||!base||base.etag!==manifest.base_etag)throw new DataError('Cloudflare admin journal is missing or invalid.');
+    if(typeof manifest.packing_in_progress==='boolean')return manifest.packing_in_progress;
+  }
+  return returnPackingInProgress((await tableState(bucket,active.prefix,'admin_data_store')).rows);
+};
+// Customer freshness polling only needs the catalog revision. Do not decrypt and
+// parse return receipts and old packing operations on every thirty-second poll.
+export const readStorefrontVersion=async(env:unknown)=>{
+  const bucket=dataBucket(env);if(!bucket)throw new DataError('Cloudflare R2 binding is unavailable.');
+  const active=await activeData(bucket);if(!active)throw new DataError('Cloudflare recovery is required.');
+  const saved=await parsedObject(bucket,active.prefix+'admin-changes-v1.json');
+  if(saved){
+    const manifest=saved.value,base=await bucket.get(active.prefix+'admin_data_store.json');
+    if(manifest?.format!=='ora-admin-changes-v1'||!base||base.etag!==manifest.base_etag||typeof manifest.catalog?.initialized!=='boolean'||typeof manifest.catalog?.updated_at!=='string')throw new DataError('Cloudflare admin journal is missing or invalid.');
+    return manifest.catalog as {initialized:boolean;updated_at:string};
+  }
+  const row=(await tableState(bucket,active.prefix,'admin_data_store')).rows.find(row=>row.key==='storefront-state-v1');
+  return {initialized:Boolean(row),updated_at:String(row?.updated_at||row?.payload?.updated_at||'')};
+};
 // Ship already-serialized snapshots to the browser instead of parsing and
 // serializing the full order history inside the Free Worker's CPU budget.
 export const readDataTableWire=async(env:unknown,table:string,journalWire=false):Promise<{etag:string;customMetadata?:Record<string,string>;text:()=>Promise<string>;changes?:string;count?:number}>=>{
@@ -273,6 +306,10 @@ export const readDataTableWire=async(env:unknown,table:string,journalWire=false)
     return readOrderJournalWire(bucket,active.prefix,object,{read:key=>parsedObject(bucket,key),cache:(key,etag,text,value)=>cacheSaved(bucket,key,etag,text,value)});
   }
   if(table==='order_snapshots'&&await bucket.get(active.prefix+'order-changes-v1.json')){
+    const state=await tableState(bucket,active.prefix,table);
+    return {etag:state.etag,customMetadata:state.customMetadata,text:async()=>state.text};
+  }
+  if(table==='admin_data_store'&&await bucket.get(active.prefix+'admin-changes-v1.json')){
     const state=await tableState(bucket,active.prefix,table);
     return {etag:state.etag,customMetadata:state.customMetadata,text:async()=>state.text};
   }
@@ -298,6 +335,11 @@ export const replaceDataTable=async<T>(env:unknown,table:string,change:(rows:rea
   for(let attempt=0;attempt<8;attempt++){
     const state=await tableState(bucket,active.prefix,table),next=change(state.rows);
     if(next.rows===state.rows)return next.result;
+    if(state.adminJournal){
+      if(await writeAdminJournal(bucket,active.prefix,state as Awaited<ReturnType<typeof readAdminJournal>>,next.rows))return next.result;
+      if(attempt<7)await pauseR2Conflict(attempt);
+      continue;
+    }
     if(state.journal){
       if(await writeOrderJournal(bucket,active.prefix,state as Awaited<ReturnType<typeof readOrderJournal>>,next.rows))return next.result;
       if(attempt<7)await pauseR2Conflict(attempt);

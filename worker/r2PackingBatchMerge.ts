@@ -15,7 +15,7 @@ export const r2PackingBatchMergeHandler = async (request: Request, env: unknown,
       const now = new Date().toISOString();
       const merged = applyPackingBatchMerge(rows.map(row => row.payload).filter(Boolean), body,
         String(user.display_name || user.username || 'Admin'), now);
-      const changed = new Map(merged.updated.map(order => [String(order.id), order]));
+      const changed = new Map<string,Record<string,any>>(merged.updated.map(order => [String(order.id), order] as const));
       let count = 0;
       const next = changed.size ? rows.map(row => {
         const order = changed.get(String(row.order_id)); if (!order) return row;
