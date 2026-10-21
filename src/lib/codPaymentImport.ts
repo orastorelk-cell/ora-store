@@ -74,6 +74,7 @@ export function parseFardarInvoicePayments(csv: string): CodPaymentEntry[] {
 
 /** Courier invoices never replace an existing bank payment with a zero COD amount. */
 export function prepareCodPaymentUpdate(order: Order, entry: CodPaymentEntry, now = new Date().toISOString()): Order {
+  if (order.item_edit_lock) throw new Error(`${order.order_number}: its item edit is finishing. Retry this payment after the saved edit finishes.`);
   if (entry.status === 'returned') {
     const fee = validAmount(entry.return_fee);
     if (fee === undefined) throw new Error(`${order.order_number}: the Return Fee is missing.`);

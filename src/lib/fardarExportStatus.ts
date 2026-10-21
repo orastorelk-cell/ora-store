@@ -33,7 +33,7 @@ export const applyFardarExportStatus = (orders: readonly Row[], body: FardarExpo
       throw new FardarExportError(order.order_number + ': The saved parcel changed. Refresh this batch before downloading its CSV.');
     if (order.order_status === 'Cancelled' || order.cancel_stock_restore || !order.stock_allocated || order.call_center_status !== 'Confirmed')
       throw new FardarExportError(order.order_number + ': This parcel is not ready for Fardar export.');
-    if (order.variant_correction_lock || order.stock_quantity_correction_lock || order.sheet_confirm_hold)
+    if (order.variant_correction_lock || order.stock_quantity_correction_lock || order.item_edit_lock || order.sheet_confirm_hold)
       throw new FardarExportError(order.order_number + ': Its saved operation is finishing. Retry this same batch shortly.');
     return {entry, order};
   });

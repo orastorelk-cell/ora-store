@@ -184,6 +184,26 @@ export function getInvoicePageCount(order: Order): number {
   return splitInvoiceItems(order).length;
 }
 
+// Every physical invoice page occupies a slot, including fifth and later item
+// rows. The existing invoice artwork and four-item pagination are reused.
+export async function generateA4InvoicePagesPDF(orders: Order[], settings: StoreSettings, fileName: string) {
+  if (!orders.length || orders.some(order => !order.invoice_locked || validateInvoiceOrder(order).length)) throw new Error('A valid allocated invoice is required.');
+  const doc = new jsPDF({orientation: 'landscape', unit: 'mm', format: 'a4', compress: true});
+  let rendered = 0;
+  for (const order of orders) {
+    const pages = splitInvoiceItems(order);
+    for (let index = 0; index < pages.length; index++) {
+      if (rendered && rendered % 4 === 0) doc.addPage('a4', 'landscape');
+      const slot = rendered % 4, x = slot % 2 * 148.5 + 0.25, y = Math.floor(slot / 2) * 105;
+      const svg = await buildInvoiceSvg(order, settings, pages[index], index, pages.length);
+      const png = await svgToBrowserPngBytes(svg);
+      doc.addImage(png, 'PNG', x, y, 148, 105, undefined, 'FAST');
+      rendered++;
+    }
+  }
+  downloadPdfBlob(doc, fileName);
+}
+
 export async function generateA4FourUpInvoicesPDF(orders: Order[], settings: StoreSettings = {} as StoreSettings, fileName?: string) {
   const singles=orders.filter(o=>getInvoicePageCount(o)===1).slice(0,200);
   if(!singles.length) throw new Error('No single-page A6 invoices are available for A4 4-up printing.');

@@ -24,6 +24,8 @@ import { SHEET_CONFIRM_API } from '../src/lib/sheetConfirmState';
 import { r2CourierPaymentsHandler } from './r2CourierPayments';
 import { profitFacebookLeadMatch } from './profitFacebookLeadMatch';
 import { staffPurchasesHandler } from './staffPurchases';
+import { orderItemEditHandler } from './orderItemEdit';
+import { ORDER_ITEM_EDIT_API } from '../src/lib/orderItemEdit';
 import { STAFF_PURCHASE_API } from '../src/lib/staffPurchases';
 
 type Env = Record<string, any>;
@@ -66,15 +68,17 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   const cancellation=['GET','POST'].includes(request.method)&&path==='/api/orders/cancel-before-dispatch';
   const stockCorrection=['GET','POST'].includes(request.method)&&path==='/api/orders/stock-quantity';
   const variantCorrection=['GET','POST'].includes(request.method)&&path==='/api/orders/variant-correction';
+  const itemEdit=path===ORDER_ITEM_EDIT_API;
   const pool=(request.method==='GET'&&path==='/api/courier/waybills')||(request.method==='POST'&&path==='/api/courier/waybills/import');
   const assignment=request.method==='POST'&&path==='/api/orders/waybill/assign';
   const fulfilment=request.method==='GET'&&path==='/api/orders/fulfilment-status';
   const orderPut=['PUT','DELETE'].includes(request.method)&&/^\/api\/orders\/[^/]+$/.test(path);
   const returns=path.startsWith('/api/returns/');
   const redispatch=request.method==='POST'&&path==='/api/orders/redispatch-waybill';
-  if(!read&&!delivered&&!courierPayments&&!confirmed&&!refresh&&!audit&&!invoices&&!mergeBatches&&!invoiceRecovery&&!downloads&&!fardarExport&&!cancellation&&!variantCorrection&&!stockCorrection&&!orderPut&&!pool&&!assignment&&!fulfilment&&!returns&&!redispatch)return null;
+  if(!read&&!delivered&&!courierPayments&&!confirmed&&!refresh&&!audit&&!invoices&&!mergeBatches&&!invoiceRecovery&&!downloads&&!fardarExport&&!cancellation&&!variantCorrection&&!itemEdit&&!stockCorrection&&!orderPut&&!pool&&!assignment&&!fulfilment&&!returns&&!redispatch)return null;
   const user=await verifyActiveStaff(request,env);
   if(!user)return json({error:'Login session required.'},401);
+  if(itemEdit)return orderItemEditHandler(request,r2ReturnStorage(env),user);
   if(fardarExport)return r2FardarExportStatusHandler(request,env);
   if(stockCorrection)return r2OrderStockCorrectionHandler(request,env,user);
   if(variantCorrection)return r2VariantCorrectionHandler(request,env,user);
@@ -95,7 +99,7 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
     const id=decodeURIComponent(path.slice('/api/orders/'.length));
     if(request.method==='PUT')return r2OrderUpdateHandler(request,env,id);
     const current=(await readDataTable(env,'order_snapshots')).find(row=>String(row.order_id)===id)?.payload;
-    if(current?.stock_quantity_correction||current?.stock_quantity_correction_lock)return json({error:'Keep this corrected order in history. Use Order Stock Corrections to cancel it and retire its waybill.'},409);
+    if(current?.stock_quantity_correction||current?.stock_quantity_correction_lock||current?.item_edit||current?.item_edit_lock)return json({error:'Keep this corrected order in history. Use Order Stock Corrections to cancel it and retire its waybill.'},409);
     if(current?.return_sheet_id||current?.return_tracking_waybill)return json({error:'Orders linked to a return sheet must remain in history.'},409);
     if(current?.cancel_stock_restore?.operation_id){
       if(request.method==='DELETE')return json({error:'The cancelled order and its retired waybill must remain in history.'},409);

@@ -116,6 +116,26 @@ Check these in order:
 
 Only after these pass should the custom `.com.lk` domain be attached.
 
+## Order item changes
+
+Super Admin opens **ORDERS → Edit Order Items**, or **Edit Items / Colours** on an
+order, and searches its exact Order ID or waybill. Rows can be split into colours,
+added, removed or replaced, with quantities and explicit unit prices. The editor
+shows delivery, wrapping, the order discount and the final total before saving.
+Equal-price colour changes retain historical prices; check the order discount
+when changing quantities. Unchanged selections keep their historical buying
+costs; changed selections use current server catalog costs.
+
+Allocated orders release old physical stock and deduct only the net difference,
+including exact combo components. Unallocated orders keep normal allocation.
+Existing invoice and waybill numbers stay attached; corrected invoices receive
+a fresh packing batch and download/export receipts. The same editor downloads
+A6, A5, A4 4×A6, A4 2×A5 and Fardar CSV, including every item page. Dispatched,
+cancelled and returned parcels continue through their existing workflows.
+Interrupted saves retain the original operation for recovery without repeated
+stock changes. `npm run test:order-item-edit` covers native storage, prices,
+stock, interrupted saves, editor recovery and all four PDF layouts.
+
 ## Staff purchases
 
 Under **STOCK → Staff Purchases**, Inventory editors select individual items or

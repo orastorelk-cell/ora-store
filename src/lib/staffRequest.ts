@@ -16,6 +16,7 @@ export const staffJsonRequest=async(url:string,options:RequestInit={},timeoutMs=
       const resourceLimit=/\berror(?: code)?:?\s*1102\b/i.test(raw)||response.headers.get('cf-error-code')==='1102';
       const error:any=new Error(data?.error||(resourceLimit?'The website server reached its processing limit. The save has not been confirmed.':!response.ok?`Request failed (${response.status}, ${options.method||'GET'} ${url.split('?')[0]})`:'Server response was incomplete.'));
       error.status=response.ok?503:response.status;error.path=url.split('?')[0];
+      if(typeof data?.retry_required==='boolean')error.retryRequired=data.retry_required;
       error.requestId=response.headers.get('cf-ray')||'';
       if(resourceLimit)error.code='WORKER_RESOURCE_LIMIT';
       error.retryAfterMs=Number(response.headers.get('Retry-After'))*1000;throw error;
