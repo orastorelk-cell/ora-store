@@ -5,6 +5,9 @@ import { withR2DataFallback } from '../worker/r2RecoveryFallback';
 import { ORDER_ITEM_EDIT_API, ORDER_ITEM_EDIT_PREFIX, itemEditDraft } from '../src/lib/orderItemEdit';
 import { returnPackingCsv } from '../src/lib/returnExports';
 import { prepareOrderSnapshotUpdate } from '../src/lib/orderSnapshotUpdate';
+import { invoiceReady } from '../src/lib/invoiceQueue';
+import { applyFardarExportStatus } from '../src/lib/fardarExportStatus';
+import { prepareCodPaymentUpdate } from '../src/lib/codPaymentImport';
 
 class Bucket {
   objects = new Map<string, {value: string; etag: string; customMetadata: any}>(); revision = 0;
@@ -136,6 +139,17 @@ for (const boundary of ['before-stock','after-stock','after-order'] as const) {
   const failed = await crash.call(action); assert.equal(failed.status, 503, boundary); assert.equal(failed.body.retry_required, true);
   const savedAdmin = await readDataTable(crash.env, 'admin_data_store');
   assert(!['complete','failed'].includes(savedAdmin.find(row => row.key === ORDER_ITEM_EDIT_PREFIX + action.operation_id)!.payload.phase));
+  const held = await crash.current();
+  if (held.item_edit_lock) {
+    assert.equal(invoiceReady(held), false, 'A racing invoice/merge transaction cannot change a held parcel');
+    const exportRequest = {entries: [{id: held.id, waybill: held.waybill_number, invoice_number: held.invoice_number, invoice_batch_id: held.invoice_pack_batch_id}],
+      exported_at: new Date().toISOString(), exported_by: 'Synthetic staff', export_batch_id: 'SYNTHETIC-EXPORT'};
+    assert.throws(() => applyFardarExportStatus([held], exportRequest), /finishing/);
+    assert.throws(() => prepareCodPaymentUpdate(held as any, {waybill: held.waybill_number, status: 'delivered', amount: held.total_amount} as any), /finishing/);
+    const exportResult = await crash.call(exportRequest, '', 'admin', '/api/orders/fardar-export-status');
+    assert.equal(exportResult.status, 409, 'The native CSV acknowledgment cannot invalidate an interrupted item edit');
+    assert.deepEqual(await crash.current(), held, 'Racing export leaves the saved recovery identity untouched');
+  }
   crash.raw.failAdmin = 0; crash.raw.failOrder = 0;
   const resumed = await crash.call(action); assert.equal(resumed.status, 200, JSON.stringify(resumed));
   assert.deepEqual((await crash.state()).products[0].variants.map((v: any) => v.stock_quantity), [6,2], boundary + ': stock applied exactly once');
