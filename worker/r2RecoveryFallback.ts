@@ -23,6 +23,8 @@ import { r2SheetConfirmHandler } from './r2SheetConfirm';
 import { SHEET_CONFIRM_API } from '../src/lib/sheetConfirmState';
 import { r2CourierPaymentsHandler } from './r2CourierPayments';
 import { profitFacebookLeadMatch } from './profitFacebookLeadMatch';
+import { staffPurchasesHandler } from './staffPurchases';
+import { STAFF_PURCHASE_API } from '../src/lib/staffPurchases';
 
 type Env = Record<string, any>;
 type StaffSession = { sub:string; role:'admin'|'staff'; exp:number };
@@ -252,6 +254,11 @@ export const withR2DataFallback=async(request:Request,env:unknown,_ctx:any,next:
       const user=await verifyActiveStaff(request,env);
       if(!user)return json({error:'Login session required.'},401);
       return profitAdCostHandler(request,r2ReturnStorage(env),user,()=>readDataTable(env,'purchase_orders'));
+    }
+    if(new URL(request.url).pathname===STAFF_PURCHASE_API){
+      const user=await verifyActiveStaff(request,env);
+      if(!user)return json({error:'Login session required.'},401);
+      return staffPurchasesHandler(request,r2ReturnStorage(env),user);
     }
     const operational=await operationalHandler(request,env);
     if(operational)return operational;

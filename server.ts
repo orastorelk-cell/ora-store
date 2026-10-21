@@ -91,6 +91,8 @@ import { createClient } from "@supabase/supabase-js";
 import { cloudflareDataFetch, dataBucket, readDataTable } from "./worker/cloudflareData";
 import { markR2SheetSynced } from './worker/r2SheetSyncStatus';
 import { returnSheetsHandler, r2ReturnStorage, type ReturnStorage } from './worker/r2ReturnSheets';
+import { staffPurchasesHandler } from './worker/staffPurchases';
+import { STAFF_PURCHASE_API } from './src/lib/staffPurchases';
 import { sharedReturnInventory } from './src/lib/returnSheets';
 import { prepareOrderSnapshotUpdate } from './src/lib/orderSnapshotUpdate';
 import { applyDeliveredReport } from './src/lib/deliveredOrders';
@@ -2371,6 +2373,16 @@ const localReturnStorage: ReturnStorage = {
     if (changed) writeOrderSnapshotsLocal(rows);
   },
 };
+app.all(STAFF_PURCHASE_API,requireStaffPermission('stock'),async (req,res) => {
+  try {
+    if (isLiveServerlessRuntime && !dataBucket()) return res.status(503).json({error:'Durable stock storage is unavailable. Retry the saved purchase.'});
+    const request = new Request('http://localhost' + req.originalUrl,{method:req.method,
+      headers:{'content-type':'application/json'},...(['GET','HEAD'].includes(req.method) ? {} : {body:JSON.stringify(req.body)})});
+    const response = await staffPurchasesHandler(request,dataBucket() ? r2ReturnStorage() : localReturnStorage,(req as any).staffSessionUser);
+    return res.status(response.status).json(await response.json());
+  } catch (error:any) { return res.status(503).json({error:error.message || 'Staff purchase could not be confirmed. Retry the saved purchase.'}); }
+});
+
 app.all('/api/admin/profit-ad-costs',requireStaffPermission('profit_report'),async (req,res) => {
   try {
     if (isLiveServerlessRuntime && !dataBucket()) return res.status(503).json({error:'Durable advertising storage is unavailable. Please retry.'});
