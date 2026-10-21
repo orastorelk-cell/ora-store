@@ -1,8 +1,8 @@
 import { stockConsumedItems, stockItemQuantities } from '../../lib/orderStockQuantities';
 import { OrderStockCorrectionsPanel } from './OrderStockCorrectionsPanel';
 import { StaffPurchasesPanel } from './StaffPurchasesPanel';
+import { OrderItemEditorPanel } from './OrderItemEditorPanel';
 import { returnOrderFilter } from '../../lib/returnSheets';
-import { OrderVariantCorrection } from './OrderVariantCorrection';
 import { downloadA5Invoices } from '../../lib/a5InvoiceDownload';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
@@ -237,7 +237,7 @@ export const AdminDashboard: React.FC = () => {
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<
-    'order_stock_corrections' | 'duplicate_orders' | 'staff_purchases' |
+    'order_stock_corrections' | 'order_item_edit' | 'duplicate_orders' | 'staff_purchases' |
     'overview' | 'add_product' | 'combo_packs' | 'supplier_offer' | 'price_increase' | 'products' | 'categories' | 'banners' | 'notifications' | 'stock' | 'orders' | 'out_of_stock' | 'packing_expenses' | 'returns' | 'lead_import' | 'confirm_upload' | 'invoices' | 'packing' | 'invoice_design' | 'delivery' | 'dispatch' | 'cod_payments' | 'bank_transfer_check' | 'assistant_chats' | 'complaints' | 'reports' | 'profit_report' | 'success_rate' | 'reviews' | 'product_requests' | 'customers' | 'sheets' | 'activity' | 'branding' | 'website_info' | 'settings' | 'user_access' | 'deploy'
   >('overview');
   const [comboEditProductId, setComboEditProductId] = useState<string | undefined>(undefined);
@@ -267,6 +267,7 @@ export const AdminDashboard: React.FC = () => {
   const [orderDateFrom, setOrderDateFrom] = useState('');
   const [orderDateTo, setOrderDateTo] = useState('');
   const [editingOrderAddressId, setEditingOrderAddressId] = useState('');
+  const [itemEditOrderId, setItemEditOrderId] = useState('');
   const [orderAddressDraft, setOrderAddressDraft] = useState({ address:'', city:'', district:'' });
   const [orderAddressBusy, setOrderAddressBusy] = useState(false);
   const [selectedDeleteOrderId, setSelectedDeleteOrderId] = useState('');
@@ -3145,7 +3146,7 @@ Suitable For:
   ] as const;
   const canAccessTab = (tabId: string) => {
     if (adminUser?.role === 'admin') return true;
-    if (tabId === 'user_access' || tabId === 'order_stock_corrections') return false;
+    if (tabId === 'user_access' || tabId === 'order_stock_corrections' || tabId === 'order_item_edit') return false;
     return accessLevelFromList(adminUser?.permissions, tabId) !== 'none';
   };
   const canEditTab = (tabId: string) => adminUser?.role === 'admin' || accessLevelFromList(adminUser?.permissions, tabId) === 'edit';
@@ -3177,6 +3178,7 @@ Suitable For:
     { id:'ORDERS', label:'ORDERS', items:[
       { id:'orders', label:newOrdersCount > 0 ? `Orders (${newOrdersCount} New)` : `Orders (${orders.length})`, icon:ShoppingBag },
       { id:'order_stock_corrections', label:'Order Stock Corrections', icon:PackageCheck },
+      { id:'order_item_edit', label:'Edit Order Items', icon:Edit },
       { id:'duplicate_orders', label:`Duplicate Orders (${orders.filter(order=>order.is_duplicate_order&&order.order_status!=='Cancelled').length})`, icon:ShieldAlert },
       { id:'lead_import', label:'FB / TikTok Lead Import', icon:FileSpreadsheet },
       { id:'confirm_upload', label:'FINALIZE • Confirm / Cancel Upload', icon:Upload },
@@ -4531,7 +4533,7 @@ Suitable For:
                       </button>
                     )}
 
-                    {adminUser?.role === 'admin' && order.invoice_locked && order.stock_allocated && order.dispatch_status !== 'Handed Over' && ['Processing','Packed','Confirmed'].includes(order.order_status) && !order.fardar_csv_exported_at && order.items.every(item => Boolean(item.variant_id) && item.product_type !== 'bundle') && <OrderVariantCorrection orderId={order.id} />}
+                    {adminUser?.role === 'admin' && !['Cancelled','Shipped','Delivered'].includes(order.order_status) && order.dispatch_status !== 'Handed Over' && <button type="button" onClick={() => {setItemEditOrderId(order.id); setActiveTab('order_item_edit');}} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white">Edit Items / Colours</button>}
                     {order.order_status !== 'Cancelled' && (
                       <button
                         type="button"
@@ -5285,6 +5287,7 @@ Suitable For:
       )}
 
       {activeTab === 'order_stock_corrections' && adminUser?.role === 'admin' && <OrderStockCorrectionsPanel />}
+      {activeTab === 'order_item_edit' && adminUser?.role === 'admin' && <OrderItemEditorPanel initialOrderId={itemEditOrderId} />}
       {activeTab === 'duplicate_orders' && <DuplicateOrdersPanel canEdit={canEditTab('duplicate_orders')} />}
       {activeTab === 'returns' && <ReturnSheetsPanel canEdit={canEditTab('returns') || canUseSpecialAction('return_process')} />}
 

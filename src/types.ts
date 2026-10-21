@@ -161,6 +161,8 @@ export type OrderSource = 'Website' | 'Facebook Ads' | 'TikTok Ads' | 'Manual Ad
 
 export interface Order {
   id: string;
+  item_edit_lock?: string;
+  item_edit?: {operation_id: string; corrected_at: string; corrected_by: string; reason: string; previous_batch_id?: string; previous_total: number; stock_history: StockHistory[]};
   order_number: string;
   customer_name: string;
   phone: string;

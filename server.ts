@@ -92,6 +92,8 @@ import { cloudflareDataFetch, dataBucket, readDataTable } from "./worker/cloudfl
 import { markR2SheetSynced } from './worker/r2SheetSyncStatus';
 import { returnSheetsHandler, r2ReturnStorage, type ReturnStorage } from './worker/r2ReturnSheets';
 import { staffPurchasesHandler } from './worker/staffPurchases';
+import { orderItemEditHandler } from './worker/orderItemEdit';
+import { ORDER_ITEM_EDIT_API } from './src/lib/orderItemEdit';
 import { STAFF_PURCHASE_API } from './src/lib/staffPurchases';
 import { sharedReturnInventory } from './src/lib/returnSheets';
 import { prepareOrderSnapshotUpdate } from './src/lib/orderSnapshotUpdate';
@@ -2373,6 +2375,15 @@ const localReturnStorage: ReturnStorage = {
     if (changed) writeOrderSnapshotsLocal(rows);
   },
 };
+app.all(ORDER_ITEM_EDIT_API,requireSuperAdmin,async (req,res) => {
+  try {
+    if (isLiveServerlessRuntime && !dataBucket()) return res.status(503).json({error:'Durable order storage is unavailable. Retry the saved edit.'});
+    const request = new Request('http://localhost' + req.originalUrl,{method:req.method, headers:{'content-type':'application/json'},
+      ...(['GET','HEAD'].includes(req.method) ? {} : {body:JSON.stringify(req.body)})});
+    const response = await orderItemEditHandler(request,dataBucket() ? r2ReturnStorage() : localReturnStorage,(req as any).staffSessionUser);
+    return res.status(response.status).json(await response.json());
+  } catch (error:any) { return res.status(503).json({error:error.message || 'The edit was not confirmed. Retry the saved edit.',retry_required:true}); }
+});
 app.all(STAFF_PURCHASE_API,requireStaffPermission('stock'),async (req,res) => {
   try {
     if (isLiveServerlessRuntime && !dataBucket()) return res.status(503).json({error:'Durable stock storage is unavailable. Retry the saved purchase.'});

@@ -5,7 +5,7 @@ export class OrderUpdateConflict extends Error { readonly status = 409; }
 // One-way stock, invoice and courier guards for order snapshot updates.
 export const prepareOrderSnapshotUpdate = (existing: Row | undefined, incoming: Row, locks: readonly Row[]) => {
   const order = { ...incoming };
-  if(!existing){delete order.stock_quantity_correction;delete order.stock_quantity_correction_lock;}
+  if(!existing){delete order.stock_quantity_correction;delete order.stock_quantity_correction_lock;delete order.item_edit;delete order.item_edit_lock;}
   let waybillPreserved = false;
   const requestedWaybill = String(order.waybill_number || '').trim();
   const lock = locks.find(row => String(row.waybill_number) === requestedWaybill);
@@ -21,7 +21,7 @@ export const prepareOrderSnapshotUpdate = (existing: Row | undefined, incoming: 
         if(existing[field]!==undefined)order[field]=existing[field];else delete order[field];
       }
     }
-    if (existing.variant_correction_lock || existing.stock_quantity_correction_lock) return { order: existing, waybillPreserved: true };
+    if (existing.variant_correction_lock || existing.stock_quantity_correction_lock || existing.item_edit_lock) return { order: existing, waybillPreserved: true };
     if (existing.stock_quantity_correction) {
       for (const field of ['stock_quantity_correction','items','invoice_confirm_snapshot']) {
         if (existing[field] !== undefined) order[field] = existing[field]; else delete order[field];
@@ -96,6 +96,24 @@ export const prepareOrderSnapshotUpdate = (existing: Row | undefined, incoming: 
         'invoice_payment_label_snapshot', 'invoice_advance_percentage_snapshot', 'invoice_pack_merge']) if (existing[field] !== undefined) order[field] = existing[field];
       order.invoice_locked = true;
     }
+    // This server operation owns item money and invoice snapshots. Older Sheet
+    // uploads and browser mirrors must not reinstate the previous parcel.
+    if (existing.item_edit) {
+      for (const field of ['item_edit','items','subtotal','total_amount','special_offer_discount','delivery_rebalance_qty_offer',
+        'delivery_rebalance_qty_offer_amount','delivery_rebalance_offset','delivery_fee','gift_wrap_selected','gift_wrap_fee','is_advance_required','advance_amount',
+        'invoice_confirm_snapshot','product_change_history','stock_quantity_correction',
+        ...(existing.invoice_locked ? ['invoice_pack_batch_id','invoice_generated_at','invoice_generated_by',
+          'invoice_pack_downloaded_at','invoice_pack_downloaded_by','invoice_pack_download_set_date','invoice_pack_download_set_number',
+          'fardar_csv_exported_at','fardar_csv_exported_by','fardar_csv_export_batch_id','fardar_csv_exported_waybill','invoice_payment_label_snapshot'] : [])]) {
+        if (existing[field] !== undefined) order[field] = existing[field]; else delete order[field];
+      }
+      if (incoming.item_edit?.operation_id !== existing.item_edit.operation_id) {
+        for (const field of ['payment_received_amount','payment_status','payment_paid_type','invoice_payment_label_snapshot']) {
+          if (existing[field] !== undefined) order[field] = existing[field]; else delete order[field];
+        }
+      }
+    } else delete order.item_edit;
+    delete order.item_edit_lock;
   }
   return { order, waybillPreserved };
 };

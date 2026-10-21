@@ -10,6 +10,7 @@
     "test:profit-csv": "node --import tsx tools/test-current-csv-pending.ts && node --import tsx tools/test-current-csv-report.ts",
     "test:storefront-reliability": "node --import tsx tools/test-storefront-reliability.ts",
     "test:staff-purchases": "node --import tsx tools/test-staff-purchases.ts && node --import tsx tools/test-staff-purchases-ui.tsx",
+    "test:order-item-edit": "node --import tsx tools/test-order-item-edit.ts && node --import tsx tools/test-order-item-editor-ui.tsx && node --import tsx tools/test-order-item-invoices.ts",
     "test:invoice-downloads": "node --import tsx tools/test-invoice-download-queue.ts && node --import tsx tools/test-invoice-downloads.ts",
     "build:server": "esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "build:local-prod": "npm run build && npm run build:server",
