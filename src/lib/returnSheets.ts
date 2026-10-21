@@ -203,7 +203,7 @@ export const sheetsFromRows = (rows: readonly any[]): ReturnSheet[] => rows.filt
 export const returnContainersFromRows = (rows: readonly any[]): ReturnSheet[] => rows.filter(row => [RETURN_SHEET_PREFIX,RETURN_UNLISTED_PREFIX].some(prefix => String(row.key).startsWith(prefix))).map(row => row.payload);
 export const sharedReturnInventory = (rows: readonly any[]) => {
   const sheets = returnContainersFromRows(rows);
-  const stockHistory = [...sheets.flatMap(sheet => sheet.receipts.flatMap(receipt => receipt.stock_history)),...rows.filter(row => [RETURN_PACKING_PREFIX,VARIANT_CORRECTION_PREFIX,STOCK_QUANTITY_PREFIX,'order-cancel-stock-v1:'].some(prefix => String(row.key).startsWith(prefix)) && ['stock_saved','complete'].includes(row.payload?.phase)).flatMap(row => row.payload.stock_history || row.payload.history || [])];
+  const stockHistory = [...sheets.flatMap(sheet => sheet.receipts.flatMap(receipt => receipt.stock_history)),...rows.filter(row => [RETURN_PACKING_PREFIX,VARIANT_CORRECTION_PREFIX,STOCK_QUANTITY_PREFIX,'order-cancel-stock-v1:','staff-purchase-v1:'].some(prefix => String(row.key).startsWith(prefix)) && ['stock_saved','complete'].includes(row.payload?.phase)).flatMap(row => row.payload.stock_history || row.payload.history || [])];
   const returnRecords: ReturnRecord[] = sheets.flatMap(sheet => sheet.parcels.filter(parcel => parcel.checked_at && parcel.order_id).map(parcel => ({
     id: 'return-record:' + parcel.waybill, order_id: parcel.order_id!, order_number: parcel.order_number!, waybill_number: parcel.waybill,
     checked_at: parcel.checked_at!, checked_by: parcel.checked_by || '', status: parcel.items.every(item => !pendingReturnQty(item) && !item.damaged_qty && !wrongReturnQty(item)) ? 'Verified' : 'Issue Found',

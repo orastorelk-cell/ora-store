@@ -116,6 +116,16 @@ Check these in order:
 
 Only after these pass should the custom `.com.lk` domain be attached.
 
+## Staff purchases
+
+Under **STOCK → Staff Purchases**, Inventory editors select individual items or
+exact variants, enter the staff member and a manual price per unit, then save.
+The receipt, stock deductions and Decrease audit entries commit atomically in
+private R2 storage. Browser recovery retains the original operation for retries;
+normal selling prices remain independent. History supports staff/item search and
+Sri Lanka date filters. Inventory viewers can read history without recording sales.
+`npm run test:staff-purchases` checks stock, accounting, concurrency and UI recovery.
+
 ## Google Sheet Confirm / Cancel auto upload
 
 In **Confirm / Cancel Upload**, **New Confirm Orders Auto Upload** reads the

@@ -1,5 +1,6 @@
 import { stockConsumedItems, stockItemQuantities } from '../../lib/orderStockQuantities';
 import { OrderStockCorrectionsPanel } from './OrderStockCorrectionsPanel';
+import { StaffPurchasesPanel } from './StaffPurchasesPanel';
 import { returnOrderFilter } from '../../lib/returnSheets';
 import { OrderVariantCorrection } from './OrderVariantCorrection';
 import { downloadA5Invoices } from '../../lib/a5InvoiceDownload';
@@ -236,7 +237,7 @@ export const AdminDashboard: React.FC = () => {
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<
-    'order_stock_corrections' | 'duplicate_orders' |
+    'order_stock_corrections' | 'duplicate_orders' | 'staff_purchases' |
     'overview' | 'add_product' | 'combo_packs' | 'supplier_offer' | 'price_increase' | 'products' | 'categories' | 'banners' | 'notifications' | 'stock' | 'orders' | 'out_of_stock' | 'packing_expenses' | 'returns' | 'lead_import' | 'confirm_upload' | 'invoices' | 'packing' | 'invoice_design' | 'delivery' | 'dispatch' | 'cod_payments' | 'bank_transfer_check' | 'assistant_chats' | 'complaints' | 'reports' | 'profit_report' | 'success_rate' | 'reviews' | 'product_requests' | 'customers' | 'sheets' | 'activity' | 'branding' | 'website_info' | 'settings' | 'user_access' | 'deploy'
   >('overview');
   const [comboEditProductId, setComboEditProductId] = useState<string | undefined>(undefined);
@@ -3124,6 +3125,7 @@ Suitable For:
   const currentRole = adminUser?.role || 'staff';
   const accessLevelFromList = (list: string[] | undefined, tabId: string): StaffAccessLevel => {
     if(tabId==='duplicate_orders')tabId='orders';
+    if(tabId==='staff_purchases')tabId='stock';
     const rows = list || [];
     if (!rows.includes(tabId)) return 'none';
     if (rows.includes(`level:${tabId}:view`)) return 'view';
@@ -3187,6 +3189,7 @@ Suitable For:
     ]},
     { id:'STOCK', label:'STOCK', items:[
       { id:'stock', label:`Inventory & Stock (${lowStockProducts.length} Alert)`, icon:Database },
+      { id:'staff_purchases', label:'Staff Purchases', icon:Users },
       { id:'out_of_stock', label:`Out of Stock (${outOfStockNeeds.length})`, icon:ShieldAlert },
     ]},
     { id:'EXPENSES', label:'EXPENSES', items:[
@@ -4001,6 +4004,7 @@ Suitable For:
       )}
 
       {/* TAB 4: STOCK & INVENTORY CONTROL */}
+      {activeTab === 'staff_purchases' && canAccessTab('stock') && <StaffPurchasesPanel key={adminUser?.id} canEdit={canEditTab('stock')} />}
       {activeTab === 'stock' && (
         <div className="space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
