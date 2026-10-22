@@ -21,7 +21,7 @@ export const sheetDecisionFingerprint = async(headers:string[],rows:string[][]) 
 
 // Group every current item row before making any order decision. Sheet status
 // cells are never used as evidence that an import reached the durable system.
-export const readSheetDecisions = async(tabs:SheetTab[],ignoreOrders:ReadonlySet<string>=new Set()) => {
+export const readSheetDecisions = async(tabs:SheetTab[],ignoreOrders:ReadonlySet<string>=new Set(),onlyOrders?:ReadonlySet<string>) => {
   const decisions:SheetDecision[]=[],errors:string[]=[]; let pendingCount=0,alreadyProcessedCount=0;
   const seen=new Set<string>(),conflicts=new Set<string>(),tabOccurrences=new Map<string,Set<number>>();
   for(const tab of tabs){
@@ -36,8 +36,13 @@ export const readSheetDecisions = async(tabs:SheetTab[],ignoreOrders:ReadonlySet
     if(new Set(h.filter(Boolean)).size!==h.filter(Boolean).length){errors.push(tab.title+': Duplicate column headers must be corrected.');continue;}
     const groups=new Map<string,{rows:string[][];indices:number[]}>();
     for(let i=headerAt+1;i<tab.values.length;i++){
-      const row=tab.values[i].map(value=>String(value ?? '').trim()),number=String(row[id]||'').toUpperCase();
+      const number=String(tab.values[i][id]||'').trim().toUpperCase();
       if(!number || number.startsWith('DATE:'))continue;
+      // Verification/colouring only needs the saved import's current orders.
+      // Historic decisions still occupy the Sheet; do not hash them on every
+      // acknowledgement. Search every tab so moved/duplicate IDs stay visible.
+      if(onlyOrders&&!onlyOrders.has(number))continue;
+      const row=tab.values[i].map(value=>String(value ?? '').trim());
       if(!/^(WEB|FB|TK|MAN)-\d{6}$/.test(number)){
         if(!pending.has(normalized(row[action])))errors.push(tab.title+' row '+(i+1)+': Invalid Order ID '+number+'.');
         continue;
@@ -88,5 +93,24 @@ export const sheetAcknowledgmentRequests = (decisions:SheetDecision[],at:string)
       for(const [column,value] of [[status,decision.status],[sync,at]] as const)if(column>=0)requests.push({repeatCell:{range:{...range,startColumnIndex:column,endColumnIndex:column+1},cell:{userEnteredValue:{stringValue:value}},fields:'userEnteredValue'}});
     }
   }
-  return requests;
+  // Google can colour a whole contiguous block in one request. Merge only
+  // touching ranges with identical fields/values, never across Pending rows,
+  // other orders, tabs or columns. This also batches Imported Status / Last Sync
+  // without rewriting any business cells or formulas.
+  const groups=new Map<string,any[]>();
+  for(const request of requests){
+    const value=request.repeatCell,{range,cell,fields}=value;
+    const key=JSON.stringify([range.sheetId,range.startColumnIndex,range.endColumnIndex,fields,cell]);
+    const group=groups.get(key)||[];group.push(value);groups.set(key,group);
+  }
+  const compact:any[]=[];
+  for(const group of groups.values()){
+    group.sort((a,b)=>a.range.startRowIndex-b.range.startRowIndex);
+    let previous:any;
+    for(const value of group){
+      if(previous&&value.range.startRowIndex<=previous.range.endRowIndex)previous.range.endRowIndex=Math.max(previous.range.endRowIndex,value.range.endRowIndex);
+      else {previous={...value,range:{...value.range}};compact.push({repeatCell:previous});}
+    }
+  }
+  return compact;
 };

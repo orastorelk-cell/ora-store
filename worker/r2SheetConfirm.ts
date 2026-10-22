@@ -52,6 +52,7 @@ const changeJob = async(env:unknown,id:string,change:(job:Job)=>Job) => {
 };
 const publicJob=(job:Job)=>({operation_id:job.operation_id,batch_id:job.batch_id,phase:job.phase,created_at:job.created_at,updated_at:job.updated_at,
   counts:job.counts,errors:job.errors.slice(0,40),warnings:job.warnings.slice(0,40),error:job.error||null,
+  sheet_progress:{checked:job.ack_cursor,total:job.sources.length},
   invoices_ready:job.invoices_ready,completed_at:job.completed_at||null,downloaded_at:job.downloaded_at||null});
 const setControl = (env:unknown,job:Job,hold:boolean,complete=false) => replaceDataTable(env,'admin_data_store',rows=>{
   const current=controlFrom(rows);if(current.active_id!==job.operation_id)return {rows,result:null};
@@ -172,7 +173,7 @@ const commitDecisions = async(env:unknown,job:Job) => {
   });
 };
 const verifySheetSnapshot = async(connection:SheetConnection,job:Job) => {
-  const parsed=await readSheetDecisions(await readGoogleSheetTabs(connection)),current=new Map(parsed.decisions.map(value=>[value.order_number,value]));
+  const parsed=await readSheetDecisions(await readGoogleSheetTabs(connection),new Set(),new Set(job.sources.map(source=>source.order_number))),current=new Map(parsed.decisions.map(value=>[value.order_number,value]));
   const changed=job.sources.filter(source=>current.get(source.order_number)?.fingerprint!==source.fingerprint);
   if(changed.length)throw new Blocked(changed.map(source=>source.order_number+': The Sheet was edited during import. Retry to read the latest variants and rows before invoicing.'));
 };
@@ -213,7 +214,9 @@ export const advanceSheetConfirmJob = async(env:unknown,id:string) => {
   try {
     const connection=await readSheetConnection(env);
     if(!connection||connection.spreadsheet_id!==job.spreadsheet_id||canonicalJson(connection.tabs)!==canonicalJson(job.tabs))throw new Blocked(['Reconnect the original Google Sheet and tabs before resuming this saved import.']);
-    for(let step=0;step<3&&Date.now()<deadline;step++){
+    // Finish acknowledgement in this invocation when time remains instead of
+    // waiting for another browser poll or cron just because packing used step 3.
+    for(let step=0;(step<3||job.phase==='colouring')&&Date.now()<deadline;step++){
       if(job.phase==='reading'){
         const plan=await prepareJob(env,job,connection);
         job=await checkpoint({...plan,phase:'saving',errors:[]});
@@ -242,8 +245,14 @@ export const advanceSheetConfirmJob = async(env:unknown,id:string) => {
           job=await checkpoint({holds_released:true});
           await setControl(env,job,false);
         }
-        const parsed=await readSheetDecisions(await readGoogleSheetTabs(connection)),byNumber=new Map(parsed.decisions.map(value=>[value.order_number,value]));
-        let end=Math.min(job.sources.length,job.ack_cursor+25),requests:any[]=[],warnings=[...job.warnings];
+        // Bound memory by item rows, rather than taking only 25 orders and
+        // repeatedly reading/hashing the complete call-centre history. Normal
+        // daily batches fit one Google write; scattered rows stay chunked.
+        let end=job.ack_cursor,rowCount=0;
+        while(end<job.sources.length&&(end===job.ack_cursor||rowCount+job.sources[end].row_indices.length<=1000))rowCount+=job.sources[end++].row_indices.length;
+        const wanted=new Set(job.sources.slice(job.ack_cursor,end).map(source=>source.order_number));
+        const parsed=await readSheetDecisions(await readGoogleSheetTabs(connection),new Set(),wanted),byNumber=new Map(parsed.decisions.map(value=>[value.order_number,value]));
+        let requests:any[]=[],warnings=[...job.warnings];
         const select=(stop:number)=>{
           const matching:SheetDecision[]=[],changed:string[]=[];
           for(const source of job.sources.slice(job.ack_cursor,stop)){
@@ -254,7 +263,7 @@ export const advanceSheetConfirmJob = async(env:unknown,id:string) => {
           return {matching,changed};
         };
         let selection=select(end);requests=sheetAcknowledgmentRequests(selection.matching,job.created_at);
-        while(requests.length>450&&end>job.ack_cursor+1){end--;selection=select(end);requests=sheetAcknowledgmentRequests(selection.matching,job.created_at);}
+        while(requests.length>450&&end>job.ack_cursor+1){end=job.ack_cursor+Math.max(1,Math.floor((end-job.ack_cursor)/2));selection=select(end);requests=sheetAcknowledgmentRequests(selection.matching,job.created_at);}
         if(requests.length)await googleSheetRequest(connection,':batchUpdate',{requests});
         warnings=[...new Set([...warnings,...selection.changed])];
         const done=end>=job.sources.length;
