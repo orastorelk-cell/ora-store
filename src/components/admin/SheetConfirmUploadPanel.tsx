@@ -8,7 +8,7 @@ import { StoreOnlyZip } from '../../lib/productFolderZip';
 import { watchSavedSheetConnection, type SavedSheetConnection } from '../../lib/sheetConnectionSync';
 
 type Connection=SavedSheetConnection;
-type Job={operation_id:string;batch_id:string;phase:string;created_at:string;updated_at:string;counts:Record<string,number>;errors:string[];warnings:string[];error?:string;invoices_ready:boolean;downloaded_at?:string};
+type Job={operation_id:string;batch_id:string;phase:string;created_at:string;updated_at:string;counts:Record<string,number>;errors:string[];warnings:string[];error?:string;invoices_ready:boolean;downloaded_at?:string;sheet_progress?:{checked:number;total:number}};
 const primary='inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-xs font-black text-white hover:bg-emerald-500 disabled:cursor-default disabled:opacity-50 sm:w-auto';
 const field='mt-1 w-full rounded-xl border border-neutral-700 bg-neutral-950 px-3 py-2.5 text-xs text-white outline-none focus:border-emerald-500';
 const request=invoiceRecoveryRequest;
@@ -126,6 +126,7 @@ export const SheetConfirmUploadPanel=()=>{
     {(!connection?.connected||connectionError)&&<button type="button" disabled={checkingConnection} onClick={()=>void reloadConnection.current?.()} className="text-xs font-bold text-emerald-300 disabled:opacity-50">{checkingConnection?'Checking connection…':'Retry saved connection'}</button>}
     {job&&<div className="rounded-xl border border-neutral-700 bg-neutral-950 p-3 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2"><p role="status" className="text-xs font-black text-white">{sheetConfirmPhaseLabel(job.phase)}</p><button type="button" onClick={()=>void load().catch(failure=>setError(failure.message))} className="text-xs font-bold text-emerald-300">Refresh status</button></div>
+      {job.invoices_ready&&!!job.sheet_progress?.total&&<p role="status" className="text-xs text-neutral-300">Sheet update · {job.sheet_progress.checked} / {job.sheet_progress.total} orders checked{job.phase==='colouring'?' · Updating colours…':''}</p>}
       <div className="flex flex-wrap gap-2 text-[11px] font-bold">{[['Recovered missing',job.counts.recovered],['Confirmed',job.counts.confirmed],['Cancelled',job.counts.cancelled],['Pending skipped',job.counts.pending],['Already processed',job.counts.already_processed],['Invoices ready',job.counts.invoices]].map(([label,value])=><span key={String(label)} className="rounded-lg bg-neutral-800 px-2.5 py-1.5 text-neutral-200">{label} {Number(value||0)}</span>)}</div>
       {!!details.length&&<p className="text-xs text-amber-300">{details.join(' · ')}</p>}
       {job.errors?.map((value,i)=><p key={i} role="alert" className="text-xs leading-5 text-amber-300">{value}</p>)}

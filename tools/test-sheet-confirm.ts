@@ -6,7 +6,7 @@ import { ACTIVE_KEY, activeData, dataBucket, importRecovery, readDataTable, repl
 import { withR2DataFallback } from '../worker/r2RecoveryFallback';
 import { advanceSheetConfirmJob, scheduleSheetConfirm } from '../worker/r2SheetConfirm';
 import { SHEET_CONFIRM_API, SHEET_CONFIRM_CONTROL_KEY } from '../src/lib/sheetConfirmState';
-import { readSheetDecisions } from '../src/lib/sheetConfirmRows';
+import { readSheetDecisions, sheetAcknowledgmentRequests } from '../src/lib/sheetConfirmRows';
 import { canonicalJson } from '../src/lib/confirmCsvSave';
 import { invoiceComplete } from '../src/lib/invoiceQueue';
 import { returnPackingCsv } from '../src/lib/returnExports';
@@ -39,7 +39,7 @@ const fixture=async(extra:{orders?:any[];rows?:string[][];tabs?:[string,string[]
   const locked=initial('FB-000005',{call_center_status:'Confirmed',order_status:'Processing',stock_allocated:true,stock_status:'Allocated',waybill_number:'OLD-WB-5',invoice_locked:true,invoice_number:'INV-FB-000005',invoice_pack_batch_id:'PACK-OLD-5',invoice_generated_at:'2026-10-09T10:00:00Z',invoice_pack_downloaded_at:'2026-10-09T10:10:00Z',fardar_csv_exported_at:'2026-10-09T10:10:00Z'});
   const orders=extra.orders||[initial('FB-000001',{items:[watchItem],subtotal:1150,total_amount:1400,delivery_rebalance_qty_offer:true,delivery_rebalance_amount_snapshot:50,delivery_visible_fee_snapshot:250}),initial('WEB-000002'),initial('TK-000003'),initial('FB-000004'),locked,initial('FB-000006',{items:[{product_id:'empty',product_name:'Fixture empty',sku:'EMPTY',main_sku:'EMPTY',quantity:1,unit_price:100,subtotal:100}]}),initial('FB-000007',{call_center_status:'Confirmed',order_status:'Processing'})];
   const rows=extra.rows||[headers,line('FB-000001','WATCH-GREEN','Light Blue'),line('FB-000001','WATCH','light_purple',''),line('WEB-000002'),line('TK-000003','MAT','','CANCEL ENTIRE ORDER'),line('FB-000004','MAT','','PENDING'),line('FB-000005'),line('FB-000006','EMPTY'),line('FB-000007')];
-  const tabs=new Map(extra.tabs||[['CALL CENTER ORDERS',rows]]),colors=new Map<string,any>();let reads=0,writes=0,tokens=0,failWrite=false;let onRead:(()=>Promise<void>)|undefined;
+  const tabs=new Map(extra.tabs||[['CALL CENTER ORDERS',rows]]),colors=new Map<string,any>(),writeSizes:number[]=[];let reads=0,writes=0,tokens=0,failWrite=false;let onRead:(()=>Promise<void>)|undefined;
   const spreadsheet='fixtureSpreadsheet_'+crypto.randomUUID().replace(/-/g,''),suffix=crypto.randomUUID().slice(0,8);
   const rsa=crypto.generateKeyPairSync('rsa',{modulusLength:2048});
   const account={type:'service_account',client_email:'ora@fixture-'+suffix+'.iam.gserviceaccount.com',private_key:rsa.privateKey.export({type:'pkcs8',format:'pem'}).toString(),private_key_id:suffix};
@@ -58,14 +58,17 @@ const fixture=async(extra:{orders?:any[];rows?:string[][];tabs?:[string,string[]
     }
     if(url.pathname.endsWith(':batchUpdate')){
       writes++;const body=JSON.parse(init.body);assert(Array.isArray(body.requests));
+      writeSizes.push(body.requests.length);assert(body.requests.length<=450,'Colour writes must stay within the bounded request budget');
       // Apply the complete request before losing an acknowledgment, to prove
       // repeating a successful Google color update does not re-import invoices.
       for(const request of body.requests){
         const value=request.repeatCell,range=value.range,tab=Array.from(tabs.values())[range.sheetId-1];
         assert(tab);
-        if(value.fields==='userEnteredFormat.backgroundColor')colors.set((range.sheetId===1?'':range.sheetId+'/')+String(range.startRowIndex),value.cell.userEnteredFormat.backgroundColor);
-        else if(value.fields==='userEnteredValue')tab[range.startRowIndex][range.startColumnIndex]=value.cell.userEnteredValue.stringValue;
-        else assert.fail('Only background and acknowledgment cells can be written');
+        for(let r=range.startRowIndex;r<range.endRowIndex;r++){
+          if(value.fields==='userEnteredFormat.backgroundColor')colors.set((range.sheetId===1?'':range.sheetId+'/')+String(r),value.cell.userEnteredFormat.backgroundColor);
+          else if(value.fields==='userEnteredValue')tab[r][range.startColumnIndex]=value.cell.userEnteredValue.stringValue;
+          else assert.fail('Only background and acknowledgment cells can be written');
+        }
       }
       if(failWrite){failWrite=false;return Response.json({error:{message:'fixture failure'}},{status:503});}
       return Response.json({spreadsheetId:spreadsheet,replies:body.requests.map(()=>({}))});
@@ -93,7 +96,7 @@ const fixture=async(extra:{orders?:any[];rows?:string[][];tabs?:[string,string[]
       if(job.error)await request('/jobs/'+id+'/retry',{});
     }assert.fail('The saved job did not finish');
   };
-  return {raw,env,active,account,spreadsheet,network,tabs,colors,call,request,currentOrders,admin,connect,view,finish,setOnRead:(value:any)=>{onRead=value;},readCount:()=>reads,writeCount:()=>writes,setFailColor:()=>{failWrite=true;}};
+  return {raw,env,active,account,spreadsheet,network,tabs,colors,writeSizes,call,request,currentOrders,admin,connect,view,finish,setOnRead:(value:any)=>{onRead=value;},readCount:()=>reads,writeCount:()=>writes,setFailColor:()=>{failWrite=true;}};
 };
 const originalFetch=globalThis.fetch;
 try{
@@ -177,7 +180,41 @@ try{
   const many=await fixture({orders:manyOrders,rows:[headers,...manyOrders.map(order=>line(order.order_number))]});globalThis.fetch=many.network;await many.connect();
   await replaceDataTable(many.env,'admin_data_store',rows=>({rows:rows.map(row=>row.key==='storefront-state-v1'?{...row,payload:{...row.payload,products:row.payload.products.map((product:any)=>product.id==='mat'?{...product,stock_quantity:100}:product)}}:row),result:null}));
   const manyId=crypto.randomUUID();await many.request('/jobs',{operation_id:manyId});assert.equal((await many.finish(manyId)).counts.invoices,75);
+  assert.equal(many.writeCount(),1,'75 adjacent orders must colour in one Google write instead of three 25-order chunks');
+  assert.deepEqual(many.writeSizes,[3],'Adjacent orders share one colour range and two metadata ranges');
+  assert.equal(many.readCount(),5,'Do not re-read the full Sheet for every 25 orders');
+  assert.deepEqual((await many.view(manyId)).sheet_progress,{checked:75,total:75});
   const manyFiles=await many.request('/jobs/'+manyId+'/files');assert.equal(manyFiles.orders.length,75);assert.equal(new Set(manyFiles.orders.map((order:any)=>order.invoice_pack_batch_id)).size,1);assert.equal(parseCsv(returnPackingCsv(manyFiles.orders,manyFiles.settings)).rows.length,75);
+
+  // Scattered order rows cannot be merged across Pending gaps. Respect the
+  // request budget and resume with a fresh row lookup for the next write.
+  const spacedOrders=Array.from({length:200},(_,i)=>initial('WEB-'+String(i+1).padStart(6,'0')));
+  const spaced=await fixture({orders:spacedOrders,rows:[headers,...spacedOrders.flatMap((order,i)=>[line(order.order_number,'MAT','','CANCEL ENTIRE ORDER'),line('WEB-'+String(i+1001).padStart(6,'0'),'MAT','','PENDING')])]});
+  globalThis.fetch=spaced.network;await spaced.connect();const spacedId=crypto.randomUUID();await spaced.request('/jobs',{operation_id:spacedId});
+  const spacedDone=await spaced.finish(spacedId);assert.equal(spacedDone.phase,'complete');assert.equal(spacedDone.counts.cancelled,200);
+  assert.equal(spaced.writeCount(),2);assert.equal(spaced.colors.size,200);assert(spaced.writeSizes.every(size=>size<=450));
+  for(let r=2;r<=400;r+=2)assert(!spaced.colors.has(String(r)),'Pending gaps must retain their existing colours');
+
+  // Resolve moved rows immediately before colouring; a business edit after
+  // invoicing gets a warning rather than a misleading success colour.
+  const moved=await fixture({orders:[initial('WEB-000001'),initial('WEB-000002')],rows:[headers,line('WEB-000001'),line('WEB-000002'),line('WEB-000003','MAT','','PENDING')]});
+  globalThis.fetch=moved.network;await moved.connect();const movedId=crypto.randomUUID();await moved.request('/jobs',{operation_id:movedId});
+  moved.setOnRead(async()=>{if(moved.readCount()===5){const rows=moved.tabs.get('CALL CENTER ORDERS')!;[rows[1],rows[3]]=[rows[3],rows[1]];rows[2][8]='2';}});
+  const movedDone=await moved.finish(movedId);assert.equal(movedDone.phase,'complete');assert.equal(movedDone.counts.invoices,2);
+  assert(moved.colors.has('3'));assert(!moved.colors.has('1'));assert(!moved.colors.has('2'));
+  assert(movedDone.warnings.some((warning:string)=>warning.startsWith('WEB-000002: Sheet changed after invoicing')));
+  assert.equal((await moved.currentOrders()).find(order=>order.order_number==='WEB-000002').items[0].quantity,1);
+
+  // Filtering historical decisions must preserve exact fingerprints and detect
+  // a selected Order ID duplicated in another connected tab.
+  const historyRows=[headers,...Array.from({length:1000},(_,i)=>line('FB-'+String(i+1).padStart(6,'0'))),line('WEB-000001')];
+  const historyTab={sheetId:1,title:'History',columnCount:headers.length,values:historyRows};
+  const selected=await readSheetDecisions([historyTab],new Set(),new Set(['WEB-000001']));assert.equal(selected.decisions.length,1);assert.deepEqual(selected.decisions[0].row_indices,[1001]);
+  assert.equal(selected.decisions[0].fingerprint,(await readSheetDecisions([{...historyTab,values:[headers,line('WEB-000001')]}])).decisions[0].fingerprint);
+  const duplicate=await readSheetDecisions([historyTab,{...historyTab,sheetId:2,title:'Other',values:[headers,line('WEB-000001')]}],new Set(),new Set(['WEB-000001']));assert.equal(duplicate.decisions.length,0);assert(duplicate.errors.length);
+  const compactRows=await readSheetDecisions([{...historyTab,values:[headers,line('WEB-000001'),line('WEB-000002'),line('WEB-000003','MAT','','CANCEL ENTIRE ORDER'),line('WEB-000004','MAT','','PENDING'),line('WEB-000005')]}]);
+  const compact=sheetAcknowledgmentRequests(compactRows.decisions,'fixture-time');
+  assert(compact.every(request=>request.repeatCell.range.endRowIndex<=4||request.repeatCell.range.startRowIndex>=5),'No compact range crosses the Pending row');
 
   const multi=await fixture({orders:[initial('WEB-000001'),initial('FB-000002'),initial('TK-000003')],tabs:[['CALL CENTER ORDERS',[headers,line('WEB-000001')]],['FACEBOOK ORDERS',[headers,line('FB-000002')]],['TIKTOK ORDERS',[headers,line('TK-000003','MAT','','CANCEL ENTIRE ORDER')]]]});globalThis.fetch=multi.network;await multi.connect();
   const multiId=crypto.randomUUID();await multi.request('/jobs',{operation_id:multiId});const multiDone=await multi.finish(multiId);assert.equal(multiDone.counts.invoices,2);assert.equal(multiDone.counts.cancelled,1);assert.equal(multi.colors.size,3);
