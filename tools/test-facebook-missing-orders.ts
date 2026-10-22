@@ -177,6 +177,39 @@ scan.failSheet(); await assert.rejects(scanMissingFacebookLeads(since, until, ()
 await assert.rejects(scanMissingFacebookLeads(since, until, () => {}, async () => ({ok: true, page_id: 'page', forms: [], next_cursor: 'repeated', done: false})));
 assert.throws(() => facebookSheetGroups([{sheetId: 1, title: 'Facebook', columnCount: 1, values: [['Wrong header']]}]));
 assert.throws(() => facebookSheetGroups([{sheetId: 1, title: 'TikTok Ads', columnCount: headers.length, values: [headers]}]), /ambiguous/, 'A TikTok-only connection is never chosen as the Facebook destination');
-const numericRow: any[] = line('numeric', 'FB-000129'); numericRow[headers.indexOf('Lead ID')] = 12345678901234567;
-const numericIds = await fixture({rows: [headers, numericRow]}); assert.equal((await numericIds.call({action: 'snapshot'})).status, 409); assert.equal((await numericIds.call(input('numeric'))).status, 409); assert.equal(numericIds.writes(), 0);
+// The original reported bug: every numeric cell was rejected, including intact
+// 15-digit IDs. Accept those without requiring a workbook edit or rewriting it.
+const numericLine = (id: string, number: string, cell: number | string) => {const row: any[] = line(id, number); row[headers.indexOf('Lead ID')] = cell; return row;};
+const safeId = '123456789012345', longId = '12345678901234567', roundedId = '1234567890123456', scientificId = '123456789012345678';
+const mixedRows = [headers, numericLine(safeId, 'FB-000129', Number(safeId)), numericLine(longId, 'FB-000130', Number(longId)),
+  numericLine(roundedId, 'FB-000131', Number(Number(roundedId).toPrecision(15))), numericLine(scientificId, 'FB-000132', '123456789012346e3')];
+const numericIds = await fixture({rows: mixedRows, orders: [initial(longId, 'FB-000130'), initial(roundedId, 'FB-000131'), initial(scientificId, 'FB-000132')]});
+const numericBefore = structuredClone(numericIds.rows), savedBefore = await numericIds.orders();
+const numericSnapshot = await numericIds.call({action: 'snapshot'}); assert.equal(numericSnapshot.status, 200, JSON.stringify(numericSnapshot));
+assert.deepEqual(numericSnapshot.data.snapshot.sheet_review_orders, []); assert.deepEqual(numericIds.rows, numericBefore); assert.deepEqual(await numericIds.orders(), savedBefore);
+const numericCompared = compareFacebookLeads([safeId, longId, roundedId, scientificId].map(lead), numericSnapshot.data.snapshot);
+assert.deepEqual(numericCompared.map(row => [row.system_found, row.sheet_found, row.can_import]), [[false, true, true], [true, true, false], [true, true, false], [true, true, false]]);
+const numericRestored = await numericIds.call(input(safeId)); assert.equal(numericRestored.data.results[0].ok, true, JSON.stringify(numericRestored));
+assert.equal((await numericIds.orders()).find(order => order.platform_lead_id === safeId)!.order_number, 'FB-000129'); assert.equal(numericIds.writes(), 0); assert.deepEqual(numericIds.rows, numericBefore);
+
+// A rounded Sheet-only ID cannot identify a lead by numeric similarity, even
+// when Meta currently returns just one candidate. Report that row, retain the
+// rest of the check and let independent exact-ID recoveries continue.
+const unknownId = '22345678901234567', independentId = '523456789012345';
+const uncertainIds = await fixture({rows: [headers, numericLine(unknownId, 'FB-000133', Number(unknownId)), numericLine(independentId, 'FB-000134', Number(independentId))]});
+const uncertainSnapshot = await uncertainIds.call({action: 'snapshot'}); assert.equal(uncertainSnapshot.status, 200);
+assert.equal(uncertainSnapshot.data.snapshot.sheet_review_orders[0].order_number, 'FB-000133');
+assert.deepEqual(uncertainSnapshot.data.snapshot.unlinked_sheet_orders, ['FB-000133']);
+const uncertainCompared = compareFacebookLeads([unknownId, independentId, 'unrelated-new-lead'].map(lead), uncertainSnapshot.data.snapshot);
+assert.equal(uncertainCompared[0].can_import, false); assert.equal(uncertainCompared[0].sheet_unverified, true); assert(uncertainCompared[0].issue.includes('FB-000133'));
+assert.equal(uncertainCompared[1].can_import, true); assert.equal(uncertainCompared[2].can_import, false);
+const uncertainImport = await uncertainIds.call(input(unknownId, independentId)); assert.equal(uncertainImport.status, 200);
+assert.equal(uncertainImport.data.results[0].ok, false); assert.equal(uncertainImport.data.results[1].ok, true);
+assert.equal((await uncertainIds.orders()).length, 1); assert.equal((await uncertainIds.orders())[0].order_number, 'FB-000134'); assert.equal(uncertainIds.writes(), 0);
+const wrongNumericId = await fixture({rows: [headers, numericLine(longId, 'FB-000135', Number(longId))], orders: [initial('98765432101234567', 'FB-000135')]});
+const wrongNumericSnapshot = await wrongNumericId.call({action: 'snapshot'}); assert.equal(wrongNumericSnapshot.status, 200); assert.equal(wrongNumericSnapshot.data.snapshot.sheet_review_orders.length, 1);
+assert.equal(compareFacebookLeads([lead('98765432101234567')], wrongNumericSnapshot.data.snapshot)[0].can_import, false, 'A conflicting Lead ID is not silently replaced using Order ID alone');
+assert(facebookSheetGroups([{sheetId: 1, title: 'Facebook', columnCount: headers.length, values: [headers, numericLine(unknownId, 'FB-000136', '2234567890123457e1')]}]).groups.get('FB-000136')!.identity_issue, 'Scientific notation without punctuation is still unverified, never an exact Lead ID');
+const uncertainScan = await scanMissingFacebookLeads(since, until, () => {}, async (body, audit = false) => {const response = await uncertainIds.call(body, 'admin', audit); assert.equal(response.status, 200); return response.data;});
+assert.equal(uncertainScan.snapshot.sheet_review_orders.length, 1, 'The full browser check completes with per-order review instead of a workbook-wide numeric-ID error');
 console.log('Facebook missing-order checks passed: pagination, identities, recovery, Sheet edits, cancellations, history, retries, concurrency, stock/invoice preservation, source failures.');

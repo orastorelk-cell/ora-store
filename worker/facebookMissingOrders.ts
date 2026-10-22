@@ -20,15 +20,16 @@ type Row = Record<string, any>;
 const message = (error: unknown) => error instanceof SheetApiError || error instanceof FacebookSheetCoverageError || error instanceof FacebookSheetBusyError ? error.message : 'The sources or saved import could not be verified. Check again and retry the missing order.';
 
 const makeSnapshot = (orders: Row[], tabs: SheetTab[]): FacebookMissingSnapshot => {
-  const {groups, target} = facebookSheetGroups(tabs);
+  const {groups, target} = facebookSheetGroups(tabs, orders);
   const numbers = new Set(orders.map(order => order.order_number));
   return {
     checked_at: new Date().toISOString(), target_tab: target.tab.title,
     orders: orders.filter(order => order.order_source === 'Facebook Ads' && facebookLeadKey(order.platform_lead_id)).map(order => ({
       lead_id: facebookLeadKey(order.platform_lead_id), order_number: String(order.order_number), expected_rows: Math.max(1, order.items?.length || 0),
     })),
-    sheet_orders: [...groups.values()].map(({order_number, lead_ids, rows, sheet_ids}) => ({order_number, lead_ids, rows, sheet_ids})),
-    unlinked_sheet_orders: [...groups.values()].filter(group => !group.lead_ids.length && !numbers.has(group.order_number)).map(group => group.order_number),
+    sheet_orders: [...groups.values()].map(({order_number, lead_ids, rows, sheet_ids, unverified_lead_ids, identity_issue}) => ({order_number, lead_ids, rows, sheet_ids, unverified_lead_ids, identity_issue})),
+    unlinked_sheet_orders: [...groups.values()].filter(group => (!group.lead_ids.length || group.identity_issue) && !numbers.has(group.order_number)).map(group => group.order_number),
+    sheet_review_orders: [...groups.values()].filter(group => group.identity_issue).map(group => ({order_number: group.order_number, issue: group.identity_issue!})),
   };
 };
 const allOrders = async (env: Env) => (await readDataTable(env, 'order_snapshots')).map(row => row.payload).filter(Boolean);

@@ -12,7 +12,7 @@ class Storage {
 }
 const target = process.cwd() + '/tools/.facebook-missing-ui.mjs', storage = new Storage(), requests: any[] = [];
 const now = new Date().toISOString(), leads = ['sheet-only', 'system-only', 'both', 'present'].map(lead_id => ({lead_id, form_id: 'form', form_name: 'Fixture form', created_at: now}));
-let scanCount = 0, refreshes = 0, failScan = true, failImport = true, ui: any;
+let scanCount = 0, refreshes = 0, failScan = true, failImport = true, ui: any, scanOverride: any;
 const snapshot = () => ({checked_at: now, target_tab: 'Facebook Ads', unlinked_sheet_orders: [],
   orders: [{lead_id: 'system-only', order_number: 'FB-000002', expected_rows: 1}, {lead_id: 'present', order_number: 'FB-000004', expected_rows: 1}],
   sheet_orders: [{order_number: 'FB-000001', lead_ids: ['sheet-only'], rows: 1, sheet_ids: [1]}, {order_number: 'FB-000004', lead_ids: ['present'], rows: 1, sheet_ids: [1]}]});
@@ -20,7 +20,7 @@ const store: any = {adminUser: {id: 'admin', role: 'admin'}, refreshReturnInvent
 Object.assign(globalThis, {IS_REACT_ACT_ENVIRONMENT: true, localStorage: storage, __fbMissingStore: store,
   __fbMissingScan: async (since: string, until: string) => {
     scanCount++; assert(Date.parse(until) - Date.parse(since) <= 21 * 86400000); assert(Date.parse(until) - Date.parse(since) >= 20 * 86400000);
-    if (failScan) throw new Error('Google Sheet is unavailable'); return {leads, page_id: 'page', snapshot: snapshot()};
+    if (failScan) throw new Error('Google Sheet is unavailable'); return {leads, page_id: 'page', snapshot: scanOverride || snapshot()};
   },
   __fbMissingRequest: async (body: any) => {
     requests.push(structuredClone(body)); if (failImport) throw new Error('Synthetic lost response');
@@ -49,6 +49,11 @@ try {
   await act(async () => ui.unmount()); await mount(); assert(button('Retry Saved Missing Orders'), 'Reload retains the exact unfinished lead identities');
   failImport = false; await click('Retry Saved Missing Orders'); assert.deepEqual(requests[1], requests[0]); assert.equal(storage.values.size, 0); assert.equal(refreshes, 1);
   assert(text().includes('3 orders verified in both')); assert(text().includes('No missing orders found'));
+  scanOverride = {...snapshot(), orders: leads.map((lead, i) => ({lead_id: lead.lead_id, order_number: 'FB-00000' + (i + 1), expected_rows: 1})),
+    sheet_orders: leads.map((lead, i) => ({lead_ids: [lead.lead_id], order_number: 'FB-00000' + (i + 1), rows: 1, sheet_ids: [1]})),
+    sheet_review_orders: [{order_number: 'FB-000099', issue: 'FB-000099: Sheet Lead ID needs verification.'}], unlinked_sheet_orders: ['FB-000099']};
+  await click('Check Missing Orders'); assert(text().includes('Sheet Lead IDs to review')); assert(text().includes('FB-000099')); assert(!text().includes('No missing orders found'), 'Unresolved Sheet IDs cannot produce a false all-clear report');
+  assert(button('Import Selected Missing Orders (0)').props.disabled);
   failScan = true; await click('Check Missing Orders'); assert(!text().includes('No missing orders found'), 'A failed new scan removes the old all-clear report');
   await act(async () => ui.unmount()); store.adminUser = {id: 'staff', role: 'staff'}; await mount(); assert.equal(ui.toJSON(), null);
   console.log('Facebook missing-order UI passed: explicit buttons, 3-week default, destination selection, incomplete source state, exact reload retry and verified receipts.');

@@ -1,6 +1,6 @@
 import { canonicalJson } from './confirmCsvSave';
 
-export type SheetTab = { sheetId:number; title:string; values:string[][]; columnCount:number };
+export type SheetTab = { sheetId:number; title:string; values:string[][]; columnCount:number; unverified_facebook_lead_rows?:number[] };
 export type SheetDecision = {
   order_number:string; status:'Confirmed'|'Cancelled'; sheetId:number; title:string;
   headers:string[]; rows:string[][]; row_indices:number[]; fingerprint:string;
