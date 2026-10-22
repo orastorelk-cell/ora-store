@@ -34,6 +34,7 @@ export const facebookSheetGroups = (tabs: SheetTab[]) => {
       if (!/^FB-\d{6}$/.test(number)) throw new FacebookSheetCoverageError(tab.title + ': Invalid Facebook Order ID. Check the Sheet before importing.');
       const group = groups.get(number) || {order_number: number, lead_ids: [], rows: 0, sheet_ids: [], headers, values: [], row_indices: [], title: tab.title};
       const key = facebookLeadKey(row[lead]);
+      if (key && !/^[A-Za-z0-9_-]{1,128}$/.test(key)) throw new FacebookSheetCoverageError(number + ': The original Lead ID must be plain text. Restore it before checking missing orders.');
       if (key && !group.lead_ids.includes(key)) group.lead_ids.push(key);
       if (!group.sheet_ids.includes(tab.sheetId)) group.sheet_ids.push(tab.sheetId);
       group.rows++; group.values.push(row); group.row_indices.push(i); groups.set(number, group);
@@ -41,8 +42,9 @@ export const facebookSheetGroups = (tabs: SheetTab[]) => {
   }
   // The connected Facebook order tab must be included, even when it is empty.
   let targets = layouts.filter(({tab}) => /facebook|\bfb\b/i.test(tab.title));
-  if (!targets.length && layouts.length === 1) targets = layouts;
-  if (!targets.length) targets = layouts.filter(({tab}) => [...groups.values()].some(group => group.sheet_ids.includes(tab.sheetId)));
+  const otherSource = (title: string) => /tiktok|tik.?tok|website|\btk\b|\bweb\b|manual/i.test(title);
+  if (!targets.length && layouts.length === 1 && !otherSource(layouts[0].tab.title)) targets = layouts;
+  if (!targets.length) targets = layouts.filter(({tab}) => !otherSource(tab.title) && [...groups.values()].some(group => group.sheet_ids.includes(tab.sheetId)));
   if (targets.length !== 1) throw new FacebookSheetCoverageError('Select the Facebook order tab in Confirm / Cancel Upload → Google Sheet connection. The destination tab is ambiguous.');
   return {groups, target: targets[0]};
 };

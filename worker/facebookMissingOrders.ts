@@ -154,7 +154,7 @@ export const facebookMissingOrdersHandler = async (request: Request, envValue: u
     if (!['snapshot', 'import'].includes(body?.action)) return json({error: 'Unknown missing-order action.'}, 400);
     const connection = await requiredConnection(env);
     if (body.action === 'snapshot') {
-      const [orders, tabs] = await Promise.all([allOrders(env), readGoogleSheetTabs(connection, network)]);
+      const [orders, tabs] = await Promise.all([allOrders(env), readGoogleSheetTabs(connection, network, true)]);
       return json({ok: true, snapshot: makeSnapshot(orders, tabs)});
     }
     if (!Array.isArray(body.leads) || !body.leads.length || body.leads.length > 3 || !body.leads.every((lead: any) => validId(lead?.lead_id) && validId(lead?.form_id) && Number.isFinite(Date.parse(lead?.created_at))) || new Set(body.leads.map((lead: any) => lead.lead_id)).size !== body.leads.length)
@@ -165,7 +165,7 @@ export const facebookMissingOrdersHandler = async (request: Request, envValue: u
     release = await acquireFacebookSheetWriteLock(env);
     const graph = graphReader(env, network), page = await graph('me', 'id');
     if (String(page.id) !== body.page_id) throw new SheetApiError('The Facebook Page changed. Run Check Missing Orders again.', 409);
-    let [orders, tabs] = await Promise.all([allOrders(env), readGoogleSheetTabs(connection, network)]);
+    let [orders, tabs] = await Promise.all([allOrders(env), readGoogleSheetTabs(connection, network, true)]);
     const admin = await readDataTable(env, 'admin_data_store'), state = admin.find(row => row.key === 'storefront-state-v1')?.payload;
     if (!Array.isArray(state?.products) || !state.settings) throw new SheetApiError('The current product catalog could not be verified.');
     const parcelHistory = sheetParcelHistory(await readDataTable(env, 'courier_waybills'), admin);
@@ -209,14 +209,14 @@ export const facebookMissingOrdersHandler = async (request: Request, envValue: u
       try {
         // Recheck after the durable save, so a webhook or staff member that
         // filled the Sheet during Meta reads is respected.
-        tabs = await readGoogleSheetTabs(connection, network);
+        tabs = await readGoogleSheetTabs(connection, network, true);
         const current = makeSnapshot(await allOrders(env), tabs);
         for (const order of toMirror) {
           const check = compareFacebookLeads([{lead_id: order.platform_lead_id, form_id: '', created_at: order.created_at}], current)[0];
           if (check.issue) throw new SheetApiError(check.issue, 409);
         }
         await appendMissing(connection, tabs, toMirror, state.settings, network);
-        tabs = await readGoogleSheetTabs(connection, network);
+        tabs = await readGoogleSheetTabs(connection, network, true);
         const verified = makeSnapshot(await allOrders(env), tabs);
         for (const order of toMirror) {
           const result = results.find(value => value.lead_id === order.platform_lead_id);

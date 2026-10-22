@@ -176,4 +176,7 @@ assert.deepEqual(scanned.leads.map(row => row.lead_id), ['scanned']); assert.equ
 scan.failSheet(); await assert.rejects(scanMissingFacebookLeads(since, until, () => {}, request));
 await assert.rejects(scanMissingFacebookLeads(since, until, () => {}, async () => ({ok: true, page_id: 'page', forms: [], next_cursor: 'repeated', done: false})));
 assert.throws(() => facebookSheetGroups([{sheetId: 1, title: 'Facebook', columnCount: 1, values: [['Wrong header']]}]));
+assert.throws(() => facebookSheetGroups([{sheetId: 1, title: 'TikTok Ads', columnCount: headers.length, values: [headers]}]), /ambiguous/, 'A TikTok-only connection is never chosen as the Facebook destination');
+const numericRow: any[] = line('numeric', 'FB-000129'); numericRow[headers.indexOf('Lead ID')] = 12345678901234567;
+const numericIds = await fixture({rows: [headers, numericRow]}); assert.equal((await numericIds.call({action: 'snapshot'})).status, 409); assert.equal((await numericIds.call(input('numeric'))).status, 409); assert.equal(numericIds.writes(), 0);
 console.log('Facebook missing-order checks passed: pagination, identities, recovery, Sheet edits, cancellations, history, retries, concurrency, stock/invoice preservation, source failures.');
