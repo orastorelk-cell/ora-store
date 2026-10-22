@@ -13,6 +13,16 @@ export const prepareOrderSnapshotUpdate = (existing: Row | undefined, incoming: 
       String(lock.assigned_order_number) !== String(order.order_number || ''))
     throw new OrderUpdateConflict('Waybill ' + requestedWaybill + ' is already locked/used by ' + String(lock.assigned_order_number) + '.');
   if (existing) {
+    // Missing-lead recovery owns the original identity and its retry receipt.
+    // An in-flight webhook or stale browser predating recovery cannot replace
+    // the restored Sheet corrections with a newly built lead snapshot.
+    if (existing.facebook_missing_recovery) {
+      if (incoming.facebook_missing_recovery?.operation_id !== existing.facebook_missing_recovery.operation_id)
+        return {order: existing, waybillPreserved: true};
+      order.facebook_missing_recovery = existing.facebook_missing_recovery;
+      for (const field of ['id','order_number','order_source','platform_lead_id','sheet_lead_recovery'])
+        if (existing[field] !== undefined) order[field] = existing[field];
+    } else delete order.facebook_missing_recovery;
     // Duplicate review owns its hold and approval. A stale browser mirror must
     // neither release a pending repeat purchase nor restore a cleared hold.
     if(existing.is_duplicate_order===true||existing.duplicate_review_status){

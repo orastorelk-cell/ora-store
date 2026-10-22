@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import type { SheetTab } from '../src/lib/sheetConfirmRows';
+import {sheetHeader, type SheetTab} from '../src/lib/sheetConfirmRows';
 
 export type SheetConnection = { spreadsheet_id:string; tabs:string[]; client_email:string; private_key:string; private_key_id?:string; connected_at:string; connected_by:string };
 export class SheetApiError extends Error { constructor(message:string,public status=503){super(message);} }
@@ -50,7 +50,7 @@ export const googleSheetRequest = async(connection:SheetConnection,path:string,b
   return data;
 };
 export const sheetMetadata = (connection:SheetConnection,network?:Network) => googleSheetRequest(connection,'?fields=spreadsheetId,properties.title,sheets.properties',undefined,network);
-export const readGoogleSheetTabs = async(connection:SheetConnection,network?:Network):Promise<SheetTab[]> => {
+export const readGoogleSheetTabs = async(connection:SheetConnection,network?:Network,requireTextFacebookLeadIds=false):Promise<SheetTab[]> => {
   const metadata=await sheetMetadata(connection,network);
   const properties=connection.tabs.map(title=>metadata.sheets?.find((sheet:any)=>sheet.properties?.title===title)?.properties);
   if(properties.some(value=>!value))throw new SheetApiError('A connected order tab was renamed or removed. Check the Google Sheet connection.',400);
@@ -68,6 +68,14 @@ export const readGoogleSheetTabs = async(connection:SheetConnection,network?:Net
   return properties.map((property,i)=>{
     const values=data.valueRanges[i].values||[];
     if(values.length>20000)throw new SheetApiError('The order tab has more than 20,000 rows. Archive completed orders before importing.',400);
+    if(requireTextFacebookLeadIds){
+      const at=values.slice(0,10).findIndex((row:any[])=>row.some(value=>['order_id','order_number','order'].includes(sheetHeader(value))));
+      if(at>=0){
+        const h=values[at].map(sheetHeader),id=h.findIndex((key:string)=>['order_id','order_number','order'].includes(key)),lead=h.findIndex((key:string)=>['lead_id','platform_lead_id','leadid'].includes(key));
+        if(lead>=0&&values.slice(at+1).some((row:any[])=>/^FB-/i.test(String(row[id]||''))&&typeof row[lead]==='number'))
+          throw new SheetApiError('Facebook Lead IDs must be stored as plain text in the Sheet. Restore the original IDs before checking missing orders.',409);
+      }
+    }
     return {sheetId:property.sheetId,title:property.title,columnCount:property.gridProperties.columnCount,values:values.map((row:any[])=>row.map(value=>String(value ?? '')))};
   });
 };

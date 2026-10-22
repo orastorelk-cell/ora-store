@@ -1,5 +1,6 @@
 import { cloudflareDataFetch } from './cloudflareData';
 import { facebookLeadAuditHandler } from './facebookLeadAudit';
+import { facebookMissingOrdersHandler } from './facebookMissingOrders';
 import fastWorker from './indexV2';
 import { facebookLeadAutoHandler } from './facebookLeadAuto';
 
@@ -205,6 +206,8 @@ export default {
   async fetch(request:Request, env:unknown, ctx:unknown) {
     const auditResponse=await facebookLeadAuditHandler(request,env);
     if(auditResponse)return auditResponse;
+    const missingResponse=await facebookMissingOrdersHandler(request,env);
+    if(missingResponse)return missingResponse;
     const leadResponse = await facebookLeadAutoHandler(request, env, ctx, fastWorker);
     if (leadResponse) return leadResponse;
 

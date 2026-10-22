@@ -474,13 +474,14 @@ const buildPendingLeadItem = (
   );
 };
 
-const buildFacebookOrder = async (
-  runtime: Runtime,
+export const buildFacebookOrder = async (
+  runtime: Runtime | null,
   lead: any,
   form: any,
   event: LeadEvent,
+  catalog?: {products: Product[]; settings: StoreSettings},
 ): Promise<Order> => {
-  const { products, settings } = await readStorefront(runtime);
+  const { products, settings } = catalog || await readStorefront(runtime!);
   const code = detectItemCode(form?.name, products);
   if (!code) throw new Error(`Form name "${String(form?.name || '')}" does not contain a valid O-RA catalog item code.`);
 
@@ -521,7 +522,7 @@ const buildFacebookOrder = async (
   const pct = Math.min(100, Math.max(1, Number(settings.advance_percentage ?? 50)));
   const importedAt = new Date().toISOString();
   const createdAt = String(lead?.created_time || importedAt);
-  const duplicate = await readRecentDuplicate(runtime, phone, item);
+  const duplicate = runtime ? await readRecentDuplicate(runtime, phone, item) : null;
   const duplicateFingerprint = fingerprint(phone, item);
   const safeLeadId = String(lead?.id || event.leadgen_id).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 120);
 
@@ -631,8 +632,12 @@ const processLead = async (
   const runtime = getRuntime(env);
   const existing = await readExistingLeadOrder(runtime, event.leadgen_id);
   if (existing) {
+    // Explicit missing-order recovery owns its Sheet retry. Do not rewrite
+    // restored historical rows or repair their variants from today's catalog.
+    if (existing.facebook_missing_recovery?.phase === 'sheet_pending') return;
     const existingItem = Array.isArray(existing?.items) ? existing.items[0] : null;
     const needsComboVariantRepair =
+      !existing.facebook_missing_recovery &&
       existing.call_center_status === 'Pending' &&
       existing.order_status !== 'Cancelled' &&
       existingItem?.product_type === 'bundle' &&

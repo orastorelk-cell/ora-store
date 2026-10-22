@@ -22,8 +22,9 @@ const runFacebookLeadAudit=async(request:Request,env:any,fetcher:typeof fetch):P
   if(user.role!=='admin')return json({error:'Super Admin access required.'},403);
   const body:any=await request.json().catch(()=>null);
   const allAvailable=body?.scope==='all_available';
-  const since=allAvailable?0:Date.parse(body?.since||''),until=Date.parse(body?.until||'');
+  const since=allAvailable&&!body?.since?0:Date.parse(body?.since||''),until=Date.parse(body?.until||'');
   if(!Number.isFinite(since)||!Number.isFinite(until)||since>until||(!allAvailable&&since<Date.now()-3*86400000)||until>Date.now()+60000)return json({error:allAvailable?'Choose a valid audit cutoff.':'Choose a valid audit window within the last three days.'},400);
+  if(allAvailable&&since&&since<Date.now()-91*86400000)return json({error:'Choose a date within the last 90 days.'},400);
   if(allAvailable&&body.action==='compare'){
     if(!Array.isArray(body.lead_ids)||!body.lead_ids.length||body.lead_ids.length>200||!body.lead_ids.every(validId)||new Set(body.lead_ids).size!==body.lead_ids.length)return json({error:'Compare one to 200 unique lead IDs per request.'},400);
     const orders=(await readDataTable(env,'order_snapshots')).map(row=>row.payload).filter(Boolean);
@@ -78,7 +79,7 @@ const runFacebookLeadAudit=async(request:Request,env:any,fetcher:typeof fetch):P
       const data=await graph(body.form_id+'/leads',{fields:'id,created_time',limit:'100',...(cursor?{after:cursor}:{})});
       const next=pageCursor(data,cursor);
       if(data.data.some((lead:any)=>!validId(String(lead?.id||''))||!Number.isFinite(Date.parse(lead.created_time))))throw new AuditSourceError('Facebook returned an invalid lead; source coverage is incomplete.');
-      const leads=data.data.filter((lead:any)=>Date.parse(lead.created_time)<=until).map((lead:any)=>({lead_id:String(lead.id),created_at:lead.created_time,form_id:body.form_id,form_name:String(form.name||body.form_id)}));
+      const leads=data.data.filter((lead:any)=>Date.parse(lead.created_time)>=since&&Date.parse(lead.created_time)<=until).map((lead:any)=>({lead_id:String(lead.id),created_at:lead.created_time,form_id:body.form_id,form_name:String(form.name||body.form_id)}));
       return json({ok:true,scope:'all_available',page_id:String(page.id),form_id:body.form_id,leads,next_cursor:next,done:!next});
     }
     return json({error:'Unknown audit action.'},400);

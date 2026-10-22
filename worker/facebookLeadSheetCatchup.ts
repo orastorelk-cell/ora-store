@@ -1,4 +1,5 @@
 import { cloudflareDataFetch } from './cloudflareData';
+import {acquireFacebookSheetWriteLock, isFacebookSheetWrite} from './facebookSheetWriteLock';
 import {
   normalizedProductType,
   regularDisplayUnitPrice,
@@ -60,6 +61,7 @@ const getRuntime = async (env: Env): Promise<Runtime> => {
 };
 
 const postAppsScript = async (webhook: string, payload: Record<string, any>) => {
+  const release = isFacebookSheetWrite(payload) ? await acquireFacebookSheetWriteLock() : async () => {};
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20_000);
   try {
@@ -84,6 +86,7 @@ const postAppsScript = async (webhook: string, payload: Record<string, any>) => 
     return data;
   } finally {
     clearTimeout(timer);
+    await release().catch(() => {});
   }
 };
 
@@ -100,6 +103,7 @@ const readRecentFacebookOrdersNeedingWork = async (runtime: Runtime) => {
     .map((row) => ({ order: row?.payload, rowCreatedAt: String(row?.created_at || '') }))
     .filter(({ order, rowCreatedAt }) => {
       if (!order || String(order.order_source || '') !== 'Facebook Ads') return false;
+      if (order.facebook_missing_recovery?.phase === 'sheet_pending') return false;
       const createdMs = Date.parse(String(order?.created_at || rowCreatedAt || ''));
       const needsOfferSnapshot = Number.isFinite(createdMs)
         && createdMs >= OFFER_SNAPSHOT_START_MS

@@ -156,7 +156,7 @@ const catalogProductsForSheet = (products:any[]) => {
   });
 };
 
-const buildOrderSheetRow = (order: any, item: any, isFirst: boolean, settings:Record<string,any>) => {
+export const buildOrderSheetRow = (order: any, item: any, isFirst: boolean, settings:Record<string,any>) => {
   const qty = Math.max(1, Number(item?.quantity ?? 1));
   const unitPrice = roundMoney(item?.unit_price ?? 0);
   const lineTotal = roundMoney(item?.subtotal ?? qty * unitPrice);
