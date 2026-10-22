@@ -4292,7 +4292,7 @@ Suitable For:
       {activeTab === 'orders' && (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-            <div className="flex items-center space-x-3">
+            <div className="flex flex-wrap items-center gap-3">
               <h2 className="text-base font-bold text-white">Order Management</h2>
               {adminUser?.role === 'admin' && <button type="button" onClick={() => setActiveTab('facebook_missing')} className="rounded-xl bg-orange-500 px-3 py-2 text-xs font-bold text-black">Check FB Missing Orders</button>}
               <button
