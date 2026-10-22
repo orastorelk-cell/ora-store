@@ -4,6 +4,7 @@
   "version": "14.9.1",
   "type": "module",
   "scripts": {
+    "test:facebook-missing": "node --import tsx tools/test-facebook-missing-orders.ts && node --import tsx tools/test-facebook-missing-ui.tsx",
     "dev": "tsx server.ts",
     "build": "node --import tsx tools/generate-confirm-sheet-plan.ts --check && vite build",
     "test:sheet-confirm": "node --import tsx tools/generate-confirm-sheet-plan.ts --check && node --import tsx tools/test-sheet-confirm.ts",

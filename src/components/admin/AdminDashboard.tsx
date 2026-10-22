@@ -2,6 +2,7 @@ import { stockConsumedItems, stockItemQuantities } from '../../lib/orderStockQua
 import { OrderStockCorrectionsPanel } from './OrderStockCorrectionsPanel';
 import { StaffPurchasesPanel } from './StaffPurchasesPanel';
 import { OrderItemEditorPanel } from './OrderItemEditorPanel';
+import { FacebookMissingOrdersPanel } from './FacebookMissingOrdersPanel';
 import { returnOrderFilter } from '../../lib/returnSheets';
 import { downloadA5Invoices } from '../../lib/a5InvoiceDownload';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
@@ -237,7 +238,7 @@ export const AdminDashboard: React.FC = () => {
   } = useStore();
 
   const [activeTab, setActiveTab] = useState<
-    'order_stock_corrections' | 'order_item_edit' | 'duplicate_orders' | 'staff_purchases' |
+    'order_stock_corrections' | 'order_item_edit' | 'facebook_missing' | 'duplicate_orders' | 'staff_purchases' |
     'overview' | 'add_product' | 'combo_packs' | 'supplier_offer' | 'price_increase' | 'products' | 'categories' | 'banners' | 'notifications' | 'stock' | 'orders' | 'out_of_stock' | 'packing_expenses' | 'returns' | 'lead_import' | 'confirm_upload' | 'invoices' | 'packing' | 'invoice_design' | 'delivery' | 'dispatch' | 'cod_payments' | 'bank_transfer_check' | 'assistant_chats' | 'complaints' | 'reports' | 'profit_report' | 'success_rate' | 'reviews' | 'product_requests' | 'customers' | 'sheets' | 'activity' | 'branding' | 'website_info' | 'settings' | 'user_access' | 'deploy'
   >('overview');
   const [comboEditProductId, setComboEditProductId] = useState<string | undefined>(undefined);
@@ -3146,7 +3147,7 @@ Suitable For:
   ] as const;
   const canAccessTab = (tabId: string) => {
     if (adminUser?.role === 'admin') return true;
-    if (tabId === 'user_access' || tabId === 'order_stock_corrections' || tabId === 'order_item_edit') return false;
+    if (tabId === 'user_access' || tabId === 'order_stock_corrections' || tabId === 'order_item_edit' || tabId === 'facebook_missing') return false;
     return accessLevelFromList(adminUser?.permissions, tabId) !== 'none';
   };
   const canEditTab = (tabId: string) => adminUser?.role === 'admin' || accessLevelFromList(adminUser?.permissions, tabId) === 'edit';
@@ -3181,6 +3182,7 @@ Suitable For:
       { id:'order_item_edit', label:'Edit Order Items', icon:Edit },
       { id:'duplicate_orders', label:`Duplicate Orders (${orders.filter(order=>order.is_duplicate_order&&order.order_status!=='Cancelled').length})`, icon:ShieldAlert },
       { id:'lead_import', label:'FB / TikTok Lead Import', icon:FileSpreadsheet },
+      { id:'facebook_missing', label:'FB Missing Orders', icon:Search },
       { id:'confirm_upload', label:'FINALIZE • Confirm / Cancel Upload', icon:Upload },
       { id:'packing', label:`Packing Downloads (${new Set(orders.filter(o=>o.invoice_pack_batch_id && !o.invoice_pack_downloaded_at).map(o=>o.invoice_pack_batch_id)).size})`, icon:Package },
       { id:'delivery', label:`Delivery & Waybills (${waybillRecords.filter((w)=>w.status==='Available').length})`, icon:Truck },
@@ -4292,6 +4294,7 @@ Suitable For:
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
             <div className="flex items-center space-x-3">
               <h2 className="text-base font-bold text-white">Order Management</h2>
+              {adminUser?.role === 'admin' && <button type="button" onClick={() => setActiveTab('facebook_missing')} className="rounded-xl bg-orange-500 px-3 py-2 text-xs font-bold text-black">Check FB Missing Orders</button>}
               <button
                 onClick={() => {
                   setBulkCsvFileName('');
@@ -5288,6 +5291,7 @@ Suitable For:
 
       {activeTab === 'order_stock_corrections' && adminUser?.role === 'admin' && <OrderStockCorrectionsPanel />}
       {activeTab === 'order_item_edit' && adminUser?.role === 'admin' && <OrderItemEditorPanel initialOrderId={itemEditOrderId} />}
+      {activeTab === 'facebook_missing' && adminUser?.role === 'admin' && <FacebookMissingOrdersPanel key={adminUser.id} />}
       {activeTab === 'duplicate_orders' && <DuplicateOrdersPanel canEdit={canEditTab('duplicate_orders')} />}
       {activeTab === 'returns' && <ReturnSheetsPanel canEdit={canEditTab('returns') || canUseSpecialAction('return_process')} />}
 

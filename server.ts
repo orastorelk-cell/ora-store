@@ -1,4 +1,5 @@
 import { profitAdCostHandler } from './src/lib/profitAdCostHandler';
+import {acquireFacebookSheetWriteLock, isFacebookSheetWrite} from './worker/facebookSheetWriteLock';
 import { applyCodPaymentEntries, canRecordCourierPayments, validCodPaymentEntries } from './src/lib/codPaymentImport';
 
 const sheetQtyOfferRulesServer = (settings: Record<string, any>, order?: any) => JSON.stringify({
@@ -1184,6 +1185,7 @@ const postAppsScriptFastServer = async (webhookUrl:string, payload:any, timeoutM
   if(!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/i.test(String(webhookUrl||'').trim())) {
     throw new Error('Google Sheet Web App URL is not configured on the shared server settings.');
   }
+  const release=isFacebookSheetWrite(payload)?await acquireFacebookSheetWriteLock():async()=>{};
   const controller=new AbortController();
   const timeout=setTimeout(()=>controller.abort(),timeoutMs);
   try{
@@ -1200,7 +1202,7 @@ const postAppsScriptFastServer = async (webhookUrl:string, payload:any, timeoutM
     if(!response.ok) throw new Error(`Apps Script HTTP ${response.status}`);
     if(parsed?.status==='error') throw new Error(parsed?.message||'Apps Script returned an error.');
     return parsed;
-  } finally { clearTimeout(timeout); }
+  } finally { clearTimeout(timeout); await release().catch(()=>{}); }
 };
 
 const syncOrdersToGoogleSheetsServer = async (orders:any[]):Promise<OraSheetSyncResult> => {
@@ -1731,6 +1733,7 @@ app.post('/api/google-sheets/proxy', async (req,res)=>{
   // Sheet actions are idempotent/upsert-safe, so one retry avoids false 502s
   // without creating duplicate orders.
   const postOnce=async()=>{
+    const release=isFacebookSheetWrite(payload)?await acquireFacebookSheetWriteLock():async()=>{};
     const controller=new AbortController();
     const timeout=setTimeout(()=>controller.abort(),12000);
     try{
@@ -1747,7 +1750,7 @@ app.post('/api/google-sheets/proxy', async (req,res)=>{
       if(!response.ok) throw new Error(`Apps Script HTTP ${response.status}${text ? `: ${text.slice(0,220)}` : ''}`);
       if(parsed?.status==='error') throw new Error(parsed?.message || 'Apps Script returned an error.');
       return {parsed,text};
-    } finally { clearTimeout(timeout); }
+    } finally { clearTimeout(timeout); await release().catch(()=>{}); }
   };
 
   let lastError:any=null;
