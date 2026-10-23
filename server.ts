@@ -1869,9 +1869,9 @@ const preserveConfirmedDispatch = (incoming:any, previous:any) => {
     dispatch_status: 'Handed Over',
     dispatch_scanned_at: previous.dispatch_scanned_at || incoming.dispatch_scanned_at,
     dispatch_scanned_by: previous.dispatch_scanned_by || incoming.dispatch_scanned_by,
-    order_status: incoming.order_status === 'Delivered' ? 'Delivered' : 'Shipped',
-    delivery_status: incoming.delivery_status === 'Delivered' ? 'Delivered' : 'Handed Over to Courier',
-    tracking_status: incoming.tracking_status || previous.tracking_status,
+    order_status: previous.order_status === 'Delivered' || incoming.order_status === 'Delivered' ? 'Delivered' : 'Shipped',
+    delivery_status: previous.order_status === 'Delivered' || incoming.order_status === 'Delivered' ? 'Delivered' : 'Handed Over to Courier',
+    tracking_status: previous.order_status === 'Delivered' ? previous.tracking_status : (incoming.tracking_status || previous.tracking_status),
   };
 };
 
