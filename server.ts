@@ -1857,9 +1857,29 @@ const getOrderSnapshotsVersion = async (): Promise<{count:number;updated_at:stri
    return order;
  };
 
+// Dispatch scans are authoritative. A stale browser/order sync must not undo a
+// confirmed courier handover or erase the original scan audit fields.
+const preserveConfirmedDispatch = (incoming:any, previous:any) => {
+  if (!previous || previous.dispatch_status !== 'Handed Over') return incoming;
+  // A genuinely new waybill may be dispatched again through the dedicated
+  // redispatch flow; never transfer the old scan to that different parcel.
+  if (String(previous.waybill_number || '').trim() !== String(incoming.waybill_number || '').trim()) return incoming;
+  return {
+    ...incoming,
+    dispatch_status: 'Handed Over',
+    dispatch_scanned_at: previous.dispatch_scanned_at || incoming.dispatch_scanned_at,
+    dispatch_scanned_by: previous.dispatch_scanned_by || incoming.dispatch_scanned_by,
+    order_status: incoming.order_status === 'Delivered' ? 'Delivered' : 'Shipped',
+    delivery_status: incoming.delivery_status === 'Delivered' ? 'Delivered' : 'Handed Over to Courier',
+    tracking_status: incoming.tracking_status || previous.tracking_status,
+  };
+};
+
 const saveOrderSnapshot = async (order:any) => {
   if(!order?.id || !order?.order_number) throw new Error('Invalid order snapshot');
   const now=new Date().toISOString();
+  const previous=(await getOrderSnapshots()).find((candidate:any)=>String(candidate.id)===String(order.id));
+  order=preserveConfirmedDispatch(order,previous);
   const sb=getSupabaseAdmin();
   if(sb){
     try{
@@ -1882,8 +1902,11 @@ const saveOrderSnapshot = async (order:any) => {
 };
 
 const saveOrderSnapshotsBatch = async (orders:any[]) => {
-  const incoming=(Array.isArray(orders)?orders:[]).filter(o=>o?.id&&o?.order_number);
-  if(!incoming.length) return [];
+  const requested=(Array.isArray(orders)?orders:[]).filter(o=>o?.id&&o?.order_number);
+  if(!requested.length) return [];
+  const previousOrders=await getOrderSnapshots();
+  const previousById=new Map(previousOrders.map((o:any)=>[String(o.id),o]));
+  const incoming=requested.map((order:any)=>preserveConfirmedDispatch(order,previousById.get(String(order.id))));
   const now=new Date().toISOString();
   const sb=getSupabaseAdmin();
   if(sb){
