@@ -1,3 +1,4 @@
+import { r2DispatchScanHandler } from './r2DispatchScan';
 import { r2OrderStockCorrectionHandler } from './r2OrderStockCorrection';
 import { returnPackingHandler } from './r2ReturnPacking';
 import { activeData, configureCloudflareData, dataBucket, readDataTable, readDataTableWire, readPackingInProgress, mutateDataTable, replaceDataTable } from './cloudflareData';
@@ -74,10 +75,12 @@ const operationalHandler=async(request:Request,env:unknown):Promise<Response|nul
   const fulfilment=request.method==='GET'&&path==='/api/orders/fulfilment-status';
   const orderPut=['PUT','DELETE'].includes(request.method)&&/^\/api\/orders\/[^/]+$/.test(path);
   const returns=path.startsWith('/api/returns/');
+  const dispatch=request.method==='POST'&&/^\/api\/orders\/[^/]+\/dispatch-scan$/.test(path);
   const redispatch=request.method==='POST'&&path==='/api/orders/redispatch-waybill';
-  if(!read&&!delivered&&!courierPayments&&!confirmed&&!refresh&&!audit&&!invoices&&!mergeBatches&&!invoiceRecovery&&!downloads&&!fardarExport&&!cancellation&&!variantCorrection&&!itemEdit&&!stockCorrection&&!orderPut&&!pool&&!assignment&&!fulfilment&&!returns&&!redispatch)return null;
+  if(!read&&!delivered&&!courierPayments&&!confirmed&&!refresh&&!audit&&!invoices&&!mergeBatches&&!invoiceRecovery&&!downloads&&!fardarExport&&!cancellation&&!variantCorrection&&!itemEdit&&!stockCorrection&&!orderPut&&!pool&&!assignment&&!fulfilment&&!returns&&!redispatch&&!dispatch)return null;
   const user=await verifyActiveStaff(request,env);
   if(!user)return json({error:'Login session required.'},401);
+  if(dispatch)return r2DispatchScanHandler(request,env,user,decodeURIComponent(path.split('/')[3]));
   if(itemEdit)return orderItemEditHandler(request,r2ReturnStorage(env),user);
   if(fardarExport)return r2FardarExportStatusHandler(request,env);
   if(stockCorrection)return r2OrderStockCorrectionHandler(request,env,user);

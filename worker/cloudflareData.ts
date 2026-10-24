@@ -2,7 +2,7 @@ import { returnPackingInProgress, returnPackingPending } from '../src/lib/return
 // Private R2 persistence for the existing server repository. Business rules and
 // authorization stay in Express; this implements only the REST queries it uses.
 import { Buffer } from 'node:buffer';
-import { prepareOrderSnapshotUpdate } from '../src/lib/orderSnapshotUpdate';
+import { prepareOrderSnapshotUpdate, preserveDispatchReceipt } from '../src/lib/orderSnapshotUpdate';
 import { constants as zlibConstants, gzip, gunzip } from 'node:zlib';
 import { pauseR2Conflict, retryR2Operation } from './r2Retry';
 import { readOrderJournal, readOrderJournalWire, writeOrderJournal } from './r2OrderJournal';
@@ -506,6 +506,7 @@ export const cloudflareDataFetch: typeof fetch = async (input,init) => {
             if(resource==='order_snapshots'&&at>=0&&(current[at].payload?.return_sheet_id||current[at].payload?.return_tracking_waybill||current[at].payload?.return_packing_lock||current[at].payload?.return_packing_operation||current[at].payload?.variant_correction||current[at].payload?.variant_correction_lock||current[at].payload?.stock_quantity_correction||current[at].payload?.stock_quantity_correction_lock||saved.payload?.stock_quantity_correction||saved.payload?.stock_quantity_correction_lock)){
               saved.payload=prepareOrderSnapshotUpdate(current[at].payload,saved.payload,[]).order;
             }
+            if(resource==='order_snapshots'&&at>=0)saved.payload=preserveDispatchReceipt(current[at].payload,saved.payload);
             if(resource==='courier_waybills'&&at>=0&&current[at].status==='Cancelled'&&current[at].permanently_retired===true){
               Object.assign(saved,current[at]);
             }

@@ -2,6 +2,27 @@ type Row = Record<string, any>;
 import { physicalReturnItems } from './returnSheets';
 export class OrderUpdateConflict extends Error { readonly status = 409; }
 
+// A confirmed scan belongs to the current parcel. Stale browser/Sheet mirrors
+// may edit other fields, but must retain the original handover receipt.
+export const preserveDispatchReceipt = (existing: Row | undefined, incoming: Row): Row => {
+  if (!existing || existing.dispatch_status !== 'Handed Over' ||
+      String(existing.waybill_number || '').trim() !== String(incoming.waybill_number || '').trim()) return incoming;
+  const order: Row = {...incoming, dispatch_status: 'Handed Over'};
+  for (const field of ['dispatch_scanned_at','dispatch_scanned_by']) {
+    if (existing[field] !== undefined) order[field] = existing[field]; else delete order[field];
+  }
+  const regressed = !['Shipped','Delivered','Returned'].includes(String(order.order_status)) ||
+    (existing.order_status === 'Delivered' && order.order_status === 'Shipped');
+  if (regressed) order.order_status = existing.order_status;
+  // Fresh courier updates may advance to Delivered/Returned. Only restore
+  // delivery labels when an old pre-scan snapshot would roll them backwards.
+  if (incoming.dispatch_status !== 'Handed Over' || regressed) {
+    for (const field of ['delivery_status','tracking_status'])
+      if (existing[field] !== undefined) order[field] = existing[field];
+  }
+  return order;
+};
+
 // One-way stock, invoice and courier guards for order snapshot updates.
 export const prepareOrderSnapshotUpdate = (existing: Row | undefined, incoming: Row, locks: readonly Row[]) => {
   const order = { ...incoming };
@@ -125,5 +146,5 @@ export const prepareOrderSnapshotUpdate = (existing: Row | undefined, incoming: 
     } else delete order.item_edit;
     delete order.item_edit_lock;
   }
-  return { order, waybillPreserved };
+  return { order: preserveDispatchReceipt(existing, order), waybillPreserved };
 };

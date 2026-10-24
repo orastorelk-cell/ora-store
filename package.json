@@ -19,7 +19,8 @@
     "lint": "tsc --noEmit",
     "cf:dev": "npm run build && npx wrangler@latest dev",
     "cf:dry-run": "npm run build && npx wrangler@latest deploy --dry-run",
-    "cf:deploy": "npm run build && npx wrangler@latest deploy"
+    "cf:deploy": "npm run build && npx wrangler@latest deploy",
+    "test:dispatch": "node --import tsx tools/test-dispatch-scans.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
