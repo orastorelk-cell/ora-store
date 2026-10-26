@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { activeData, dataBucket, importRecovery, readDataTable, replaceDataTable, cloudflareDataFetch, configureCloudflareData } from '../worker/cloudflareData';
+import { activeData, dataBucket, importRecovery, readDataTable, replaceDataTable, mutateDataTable, cloudflareDataFetch, configureCloudflareData } from '../worker/cloudflareData';
 import { withR2DataFallback } from '../worker/r2RecoveryFallback';
 import { prepareOrderSnapshotUpdate, preserveDispatchReceipt } from '../src/lib/orderSnapshotUpdate';
+import { AUTHORIZED_DISPATCH_WAYBILLS } from '../src/lib/authorizedDispatchReconciliation';
 class MemoryBucket {
   objects = new Map<string, { value: string; etag: string; customMetadata?: any }>();
   revision = 0;
@@ -78,4 +79,36 @@ const delivered={...after[0].payload,order_status:'Delivered',delivery_status:'D
 assert.deepEqual(preserveDispatchReceipt(after[0].payload,delivered),delivered,'A fresh courier delivery update still advances normally');
 const redispatch={...after[0].payload,waybill_number:'NEW-WB',dispatch_status:'Not Scanned',dispatch_scanned_at:undefined,dispatch_scanned_by:undefined};
 assert.deepEqual(preserveDispatchReceipt(after[0].payload,redispatch),redispatch,'A fresh waybill keeps the existing redispatch workflow');
+
+// Historic scan regression: these exact five waybills must be treated as
+// delivered courier reconciliations, not assigned a fabricated scan timestamp.
+const historicRows=AUTHORIZED_DISPATCH_WAYBILLS.map((target,i)=>({
+  order_id:'historic-'+i,updated_at:'2026-10-14T00:00:00Z',
+  payload:{id:'historic-'+i,order_number:target.order_number,waybill_number:target.waybill,
+    invoice_locked:true,stock_allocated:true,invoice_number:'INV-'+target.order_number,
+    order_status:'Processing',dispatch_status:'Not Scanned',payment_method:'COD',
+    payment_status:'Paid',cod_payment_received:true,cod_payment_source:i===1?'Manual':'Fardar CSV',
+    fardar_invoice_status:'Delivered',fardar_invoice_waybill:target.waybill,
+    cod_payment_amount:2450,total_amount:2450,...(i===2?{stock_quantity_correction_lock:'FINISHED-657'}:{})},
+}));
+await mutateDataTable(env,'order_snapshots',rows=>{rows.push(...historicRows);});
+await mutateDataTable(env,'admin_data_store',rows=>{rows.push({
+  key:'order-stock-quantity-v1:FINISHED-657',
+  payload:{phase:'complete',order_id:'historic-2',waybill_number:'18160739'},
+  updated_at:'2026-10-17T00:00:00Z',
+});});
+for(let i=0;i<historicRows.length;i++){
+  const data=await (await call('/api/orders/historic-'+i+'/dispatch-scan',{barcode:historicRows[i].payload.waybill_number})).json();
+  assert.equal(data.ok,true,historicRows[i].payload.order_number+' must be reconciled');
+  assert.equal(data.order.order_status,'Delivered');
+  assert.equal(data.order.dispatch_status,'Handed Over');
+  assert.equal(data.order.cod_payment_amount,2450);
+  assert.equal(data.order.dispatch_scanned_at,undefined,'do not forge a scan timestamp');
+}
+const historicalSaved=(await readDataTable(env,'order_snapshots')).filter(row=>String(row.order_id).startsWith('historic-'));
+assert.equal(historicalSaved.length,5);
+assert(historicalSaved.every(row=>row.payload.dispatch_status==='Handed Over'),'none of five are left on Not Scanned');
+assert.equal(historicalSaved[2].payload.stock_quantity_correction_lock,undefined,'completed correction lock cleaned');
+assert.equal((await (await call('/api/orders/historic-0/dispatch-scan',{barcode:'18160742'})).json()).duplicate,true);
+
 console.log('Dispatch scans: 31 parcels, stale mirrors, duplicate retries, concurrent edits and write failures passed.');
