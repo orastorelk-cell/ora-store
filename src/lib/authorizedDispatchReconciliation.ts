@@ -40,12 +40,12 @@ export const reconcileAuthorizedDispatch = <T extends DispatchRow>(
       skipped.push(failed(target.order_number,'Waybill is assigned to more than one order'));continue;
     }
     if(is(order.order_status,'Cancelled')||is(order.order_status,'Returned')||order.return_sheet_id||
-      order.return_tracking_waybill||order.return_received_at||is(order.fardar_invoice_status,'Return Complete')||
+      order.return_tracking_waybill||order.return_received_at||order.cancel_stock_restore||is(order.fardar_invoice_status,'Return Complete')||
       (order.return_status&&!is(order.return_status,'None'))){
       skipped.push(failed(target.order_number,'Cancelled or return record exists'));continue;
     }
     if(order.item_edit_lock||order.variant_correction_lock||order.stock_quantity_correction_lock||
-      order.return_packing_lock?.operation_id){
+      order.return_packing_lock){
       skipped.push(failed(target.order_number,'A correction or packing operation is still locked'));continue;
     }
     if(order.invoice_locked!==true||order.stock_allocated!==true){
