@@ -11,7 +11,7 @@ export const AUTHORIZED_DISPATCH_WAYBILLS = [
 ] as const;
 
 type Order = Record<string,any>;
-export type DispatchRow = {order_id:string;payload?:Order;updated_at?:string;[field:string]:unknown};
+export type DispatchRow = {order_id?:string;payload?:Order;updated_at?:string;[field:string]:unknown};
 export type DispatchReconciliationResult<T extends DispatchRow> = {
   rows:readonly T[]; reconciled:string[]; already_saved:string[];
   skipped:Array<{order_number:string;reason:string}>;
