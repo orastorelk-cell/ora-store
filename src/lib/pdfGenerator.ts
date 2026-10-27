@@ -206,22 +206,55 @@ export async function generateExchangeInvoicePDF(exchange: ExchangeInvoiceRecord
     // Leave a clear print gap between the exchange waybill bars and its number.
     svg=svg.replace(/(<rect\b[^>]*y="292"[^>]*height=")92("\s)/g,(_match,prefix,suffix)=>`${prefix}84${suffix}`);
     svg=svg.replace(/(<text\b[^>]*x="1255" y=")420("\b[^>]*>)/,(_match,prefix,suffix)=>`${prefix}429${suffix}`);
-    svg=svg.replace(/(<text\b[^>]*x="1212"[^>]*y="170"[^>]*>)COD(<\/text>)/,'$1COD: Rs. 0$2');
+    svg=svg.replace(/<text\b[^>]*x="1212"[^>]*y="170"[^>]*>COD<\/text>/,'');
+    const itemStartY=475;
+    const itemRowHeight=54;
+    const itemTableBottom=itemStartY+48+itemRowHeight*4;
+    const itemLines=Array.from({length:4},(_,rowIndex)=>{
+      const rowBottom=itemStartY+48+(rowIndex+1)*itemRowHeight;
+      const textY=rowBottom-18;
+      const item=page.items[rowIndex];
+      if(!item)return `<line x1="28" y1="${rowBottom}" x2="1508" y2="${rowBottom}" class="soft"/>`;
+      const code=String(item.sku||item.main_sku||'0');
+      const description=`${item.product_name||''}${item.variant_name?` - ${item.variant_name}`:''}`;
+      return `<line x1="28" y1="${rowBottom}" x2="1508" y2="${rowBottom}" class="soft"/><text class="t table" x="65" y="${textY}">${page.pageIndex*4+rowIndex+1}</text><text class="t table" x="155" y="${textY}" font-size="${code.length>11?18:24}">${escapeInvoiceSvgText(code)}</text><text class="t table" x="335" y="${textY}" font-size="20">${escapeInvoiceSvgText(description)}</text><text class="t table" x="1380" y="${textY}" text-anchor="middle">${Math.max(0,Number(item.quantity||0))}</text>`;
+    }).join('');
+    const exchangeTable=[
+      '<!-- Exchange item list: no item prices -->',
+      `<rect x="28" y="${itemStartY}" width="1480" height="${itemTableBottom-itemStartY}" rx="12" fill="#fff" stroke="#111" stroke-width="1.5"/>`,
+      `<rect x="28" y="${itemStartY}" width="1480" height="48" rx="12" fill="#f0f0f0"/>`,
+      ...[130,305,1250].map(x=>`<line x1="${x}" y1="${itemStartY}" x2="${x}" y2="${itemTableBottom}" class="soft"/>`),
+      `<text class="t table" x="65" y="${itemStartY+32}">#</text><text class="t table" x="155" y="${itemStartY+32}">ITEM CODE</text><text class="t table" x="335" y="${itemStartY+32}">ITEM / DESCRIPTION</text><text class="t table" x="1380" y="${itemStartY+32}" text-anchor="middle">QTY</text>`,
+      itemLines,
+    ].join('');
+    svg=svg.replace(/<!-- Large item rows -->[\s\S]*?(?=<!-- Short, readable bilingual policy -->)/,exchangeTable);
     const policy=svg.match(/<!-- Short, readable bilingual policy -->[\s\S]*?(?=<!-- Readable totals -->)/);
     if(policy){
       const policyY=Number(policy[0].match(/<rect x="28" y="(\d+)" width="930" height="220"/)?.[1]||757);
       const exchangeNote=[
         '<!-- Exchange notice in the existing invoice policy box -->',
         `<rect x="28" y="${policyY}" width="930" height="220" rx="14" fill="#fff" stroke="#111" stroke-width="1.5"/>`,
-        `<text class="t heading" x="55" y="${policyY+33}">EXCHANGE PARCEL / හුවමාරු පාර්සලය</text>`,
-        `<text class="t notice" x="55" y="${policyY+61}" style="font-size:19px">OLD WAYBILL: ${escapeInvoiceSvgText(exchange.original_waybill)}</text>`,
-        `<text class="t notice" x="55" y="${policyY+86}" style="font-size:19px">EXCHANGE ITEMS: All item codes and names listed above</text>`,
-        `<text class="si notice siNotice" x="55" y="${policyY+118}" style="font-size:20px">මෙය හුවමාරු පාර්සලයකි.</text>`,
-        `<text class="si notice siNotice" x="55" y="${policyY+147}" style="font-size:20px">පාරිභෝගිකයා සතු භාණ්ඩය අප වෙත ලබා ගැනීමට කටයුතු කරන්න.</text>`,
-        `<text class="si notice siNotice" x="55" y="${policyY+176}" style="font-size:20px">පාරිභෝගිකයාගෙන් භාණ්ඩය ලැබෙන තුරු එහි වගකීම බෙදාහැරීමේ රයිඩර් සතුය.</text>`,
-        `<text class="t notice" x="55" y="${policyY+205}" style="font-size:17px">ISSUE? CALL HOTLINE +94 76 772 9424</text>`,
+        `<text class="t heading" x="55" y="${policyY+27}" style="font-size:24px">EXCHANGE PARCEL / හුවමාරු පාර්සලය</text>`,
+        `<text class="t notice" x="55" y="${policyY+49}" style="font-size:15px">OLD WAYBILL: ${escapeInvoiceSvgText(exchange.original_waybill)}</text>`,
+        `<text class="t notice" x="55" y="${policyY+68}" style="font-size:15px">EXCHANGE ITEMS: All item codes and names listed above</text>`,
+        `<text class="si notice siNotice" x="55" y="${policyY+90}" style="font-size:18px">මෙය හුවමාරු පාර්සලයකි.</text>`,
+        `<text class="si notice siNotice" x="55" y="${policyY+109}" style="font-size:18px">පාරිභෝගිකයා සතු භාණ්ඩය අප වෙත ලබා ගැනීමට කටයුතු කරන්න.</text>`,
+        `<text class="si notice siNotice" x="55" y="${policyY+128}" style="font-size:18px">පාරිභෝගිකයාගෙන් භාණ්ඩය ලැබෙන තුරු එහි වගකීම බෙදාහැරීමේ රයිඩර් සතුය.</text>`,
+        `<text class="t notice" x="55" y="${policyY+149}" style="font-size:14px">This is an exchange parcel.</text>`,
+        `<text class="t notice" x="55" y="${policyY+167}" style="font-size:14px">Please collect the item owned by the customer.</text>`,
+        `<text class="t notice" x="55" y="${policyY+185}" style="font-size:14px">The delivery rider is responsible until it is received.</text>`,
+        `<text class="t notice" x="55" y="${policyY+207}" style="font-size:15px">ISSUE? CALL HOTLINE +94 76 772 9424</text>`,
       ].join('\n');
       svg=svg.replace(policy[0],exchangeNote);
+      const totals=svg.match(/<!-- Readable totals -->[\s\S]*?(?=<!-- FIXED BOTTOM CONTACT BAND -->)/);
+      if(totals){
+        svg=svg.replace(totals[0],[
+          '<!-- Exchange COD only -->',
+          `<rect x="978" y="${policyY}" width="530" height="220" rx="14" fill="#fff" stroke="#111" stroke-width="1.5"/>`,
+          `<text class="t heading" x="1005" y="${policyY+107}">COD</text>`,
+          `<text class="t heading" x="1475" y="${policyY+107}" text-anchor="end">Rs. 0</text>`,
+        ].join('\n'));
+      }
     }
     const png=await svgToBrowserPngBytes(svg);
     const imageWidth=148*(1536/1090);
