@@ -31,7 +31,7 @@ assert.equal(JSON.stringify(original),prior,'Do not mutate live orders, money, s
 
 assert.throws(()=>fb878SnapshotFromCsv(correctCsv.replace('1250','1000')),/must be Rs. 1,250/);
 assert.throws(()=>fb878SnapshotFromCsv(correctCsv.replace(/FB-000878/g,'FB-000999')),/no FB-000878 rows/);
-assert.throws(()=>fb878SnapshotFromCsv('Order ID,Final Total\nFB-000878,1250'),/item lines are missing/);
+assert.throws(()=>fb878SnapshotFromCsv('Order ID,Final Total\nFB-000878,1250'),/valid Item Code/);
 assert.throws(()=>confirmedFB878CsvTotal('FB-000879',snapshot),/authorized/);
 assert.throws(()=>correctedFB878PrintOrder({...original,order_status:'Cancelled'},snapshot),/non-cancelled/);
 assert.throws(()=>correctedFB878PrintOrder({...original,waybill_number:undefined},snapshot),/original waybill/);
