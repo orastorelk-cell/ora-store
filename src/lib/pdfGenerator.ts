@@ -244,12 +244,12 @@ export async function generateExchangeInvoicePDF(exchange: ExchangeInvoiceRecord
       `<text class="t notice" x="55" y="${noteYAt(47)}" style="font-size:19px;font-weight:700">OLD WAYBILL: ${escapeInvoiceSvgText(exchange.original_waybill)}</text>`,
       `<text class="t notice" x="55" y="${noteYAt(65)}" style="font-size:18px">EXCHANGE ITEMS: Listed in the table above</text>`,
       `<line x1="55" y1="${noteYAt(76)}" x2="1480" y2="${noteYAt(76)}" stroke="#888" stroke-width="1"/>`,
-      `<text class="si notice siNotice" x="55" y="${noteYAt(101)}" style="font-size:25px;font-weight:700">මෙය හුවමාරු පාර්සලයකි.</text>`,
-      `<text class="si notice siNotice" x="55" y="${noteYAt(128)}" style="font-size:25px">පාරිභෝගිකයා සතු භාණ්ඩය අප වෙත ලබා ගැනීමට කටයුතු කරන්න.</text>`,
-      `<text class="si notice siNotice" x="55" y="${noteYAt(155)}" style="font-size:25px">පාරිභෝගිකයාගෙන් භාණ්ඩය ලැබෙන තුරු එහි වගකීම බෙදාහැරීමේ රයිඩර් සතුය.</text>`,
-      `<text class="t notice" x="55" y="${noteYAt(176)}" style="font-size:18px">This is an exchange parcel.</text>`,
-      `<text class="t notice" x="55" y="${noteYAt(194)}" style="font-size:18px">Please arrange to collect the customer's item and return it to us.</text>`,
-      `<text class="t notice" x="55" y="${noteYAt(212)}" style="font-size:18px">The delivery rider is responsible until the item is received.</text>`,
+      `<text class="si notice siNotice" x="55" y="${noteYAt(101)}" style="font-size:25px;font-weight:700">මෙය භාණ්ඩ හුවමාරුවක් සඳහා යොමු කරන පාර්සලයකි.</text>`,
+      `<text class="si notice siNotice" x="55" y="${noteYAt(128)}" style="font-size:25px">පාරිභෝගිකයා සතු පැරණි භාණ්ඩය ආපසු ලබාගෙන අප වෙත භාරදීමට කාරුණිකව කටයුතු කරන්න.</text>`,
+      `<text class="si notice siNotice" x="55" y="${noteYAt(155)}" style="font-size:25px">එම භාණ්ඩය අප වෙත භාරදෙන තුරු එහි ආරක්ෂාව පිළිබඳ වගකීම බෙදාහැරීමේ නියෝජිතයා සතු වේ.</text>`,
+      `<text class="t notice" x="55" y="${noteYAt(176)}" style="font-size:18px">This parcel is being sent for an exchange.</text>`,
+      `<text class="t notice" x="55" y="${noteYAt(194)}" style="font-size:18px">Please collect the customer's old item and return it to us.</text>`,
+      `<text class="t notice" x="55" y="${noteYAt(212)}" style="font-size:18px">The delivery representative is responsible for the item's safekeeping until it is handed over to us.</text>`,
       `<text class="t notice" x="55" y="${noteYAt(233)}" style="font-size:20px;font-weight:700">ISSUE? CALL HOTLINE +94 76 772 9424</text>`,
     ].join('\n');
     svg=svg.replace(/<!-- Short, readable bilingual policy -->[\s\S]*?(?=<!-- FIXED BOTTOM CONTACT BAND -->)/,exchangeNote);
