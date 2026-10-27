@@ -21,7 +21,8 @@
     "cf:dry-run": "npm run build && npx wrangler@latest deploy --dry-run",
     "cf:deploy": "npm run build && npx wrangler@latest deploy",
     "test:dispatch": "node --import tsx tools/test-dispatch-scans.ts",
-    "test:dispatch-reconcile": "node --import tsx tools/test-authorized-dispatch-reconciliation.ts"
+    "test:dispatch-reconcile": "node --import tsx tools/test-authorized-dispatch-reconciliation.ts",
+    "test:fb878-invoice": "node --import tsx tools/test-fb878-invoice-a4.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
