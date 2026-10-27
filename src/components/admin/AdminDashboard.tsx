@@ -5,6 +5,7 @@ import { OrderItemEditorPanel } from './OrderItemEditorPanel';
 import { FacebookMissingOrdersPanel } from './FacebookMissingOrdersPanel';
 import { returnOrderFilter } from '../../lib/returnSheets';
 import { downloadA5Invoices } from '../../lib/a5InvoiceDownload';
+import { downloadFB878CorrectA4TwoA5 } from '../../lib/fb878InvoiceA4';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   LayoutDashboard,
@@ -247,6 +248,7 @@ export const AdminDashboard: React.FC = () => {
   const [stockItemSearch, setStockItemSearch] = useState('');
   const [selectedStockReportSku, setSelectedStockReportSku] = useState('');
   const [packingFilter, setPackingFilter] = useState<'pending'|'today'|'downloaded'|'all'>('pending');
+  const [fb878PdfBusy,setFb878PdfBusy]=useState(false);
   const [newOrderToast, setNewOrderToast] = useState<string>('');
   const [assistantNeedsCount, setAssistantNeedsCount] = useState(0);
   const [complaintOpenCount, setComplaintOpenCount] = useState(0);
@@ -4990,6 +4992,35 @@ Suitable For:
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <b className="font-mono text-white">{batchId}</b>
+                        {batchOrders.some(o=>String(o.order_number||'').trim()==='FB-000878') && <>
+                          <button type="button" disabled={fb878PdfBusy}
+                            onClick={async()=>{
+                              const target=batchOrders.find(o=>String(o.order_number||'').trim()==='FB-000878');
+                              if(!target)return;
+                              setFb878PdfBusy(true);
+                              try{await downloadFB878CorrectA4TwoA5(target,settings);}
+                              catch(e:any){alert(e?.message||'Could not verify the Rs. 1,250 Confirm Total. Use the Confirm CSV option.');}
+                              finally{setFb878PdfBusy(false);}
+                            }}
+                            className="rounded-lg bg-teal-600 px-3 py-2 text-[11px] font-black text-white disabled:opacity-50">
+                            {fb878PdfBusy?'Preparing corrected A4 PDF…':'FB-000878 · Rs 1,250 · A4 2×A5'}
+                          </button>
+                          <label className="cursor-pointer rounded-lg border border-teal-600/50 bg-teal-800/20 px-3 py-2 text-[11px] font-black text-teal-200">
+                            Confirm CSV → FB-000878 A4 2×A5
+                            <input type="file" className="hidden" accept=".csv,text/csv" disabled={fb878PdfBusy}
+                              onChange={async e=>{
+                                const input=e.currentTarget;
+                                const file=input.files?.[0];
+                                const target=batchOrders.find(o=>String(o.order_number||'').trim()==='FB-000878');
+                                if(!file||!target)return;
+                                setFb878PdfBusy(true);
+                                try{await downloadFB878CorrectA4TwoA5(target,settings,await file.text());}
+                                catch(err:any){alert(err?.message||'The selected Confirm CSV could not verify Rs. 1,250.');}
+                                finally{setFb878PdfBusy(false);input.value='';}
+                              }}/>
+                          </label>
+                        </>}
+
                         <span className={`rounded-full px-2.5 py-1 text-[10px] font-black ${downloaded?'bg-emerald-500/10 text-emerald-300':'bg-orange-500/10 text-orange-300'}`}>
                           {downloaded?'DOWNLOADED':awaitingAck?'STATUS SAVE PENDING':'NEED DOWNLOAD'}
                         </span>
