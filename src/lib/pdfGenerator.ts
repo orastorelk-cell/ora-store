@@ -185,8 +185,10 @@ export async function generateExchangeInvoicePDF(exchange: ExchangeInvoiceRecord
   const items=(exchange.items||[]).map(item=>({
     ...item,sku:String(item.sku||item.main_sku||'0'),unit_price:0,subtotal:0,
   }));
-  const pages=Array.from({length:Math.max(1,Math.ceil(items.length/3))},(_,pageIndex)=>({
-    pageIndex,items:items.slice(pageIndex*3,(pageIndex+1)*3),
+  // Keep up to three product rows per A5 page so the item table and bilingual note stay balanced.
+  const itemsPerPage=3;
+  const pages=Array.from({length:Math.max(1,Math.ceil(items.length/itemsPerPage))},(_,pageIndex)=>({
+    pageIndex,items:items.slice(pageIndex*itemsPerPage,(pageIndex+1)*itemsPerPage),
   }));
   const order:Order={
     id:exchange.id,order_number:exchange.id,invoice_number:exchange.id,
@@ -218,7 +220,7 @@ export async function generateExchangeInvoicePDF(exchange: ExchangeInvoiceRecord
       if(!item)return `<line x1="28" y1="${rowBottom}" x2="1508" y2="${rowBottom}" class="soft"/>`;
       const code=String(item.sku||item.main_sku||'0');
       const description=`${item.product_name||''}${item.variant_name?` - ${item.variant_name}`:''} (Exchange Blank Cover)`;
-      return `<line x1="28" y1="${rowBottom}" x2="1508" y2="${rowBottom}" class="soft"/><text class="t table" x="65" y="${textY}">${page.pageIndex*3+rowIndex+1}</text><text class="t table" x="155" y="${textY}" font-size="${code.length>11?18:24}">${escapeInvoiceSvgText(code)}</text><text class="t table" x="335" y="${textY}" font-size="20">${escapeInvoiceSvgText(description)}</text><text class="t table" x="1380" y="${textY}" text-anchor="middle">${Math.max(0,Number(item.quantity||0))}</text>`;
+      return `<line x1="28" y1="${rowBottom}" x2="1508" y2="${rowBottom}" class="soft"/><text class="t table" x="65" y="${textY}">${page.pageIndex*itemsPerPage+rowIndex+1}</text><text class="t table" x="155" y="${textY}" font-size="${code.length>11?18:24}">${escapeInvoiceSvgText(code)}</text><text class="t table" x="335" y="${textY}" font-size="20">${escapeInvoiceSvgText(description)}</text><text class="t table" x="1380" y="${textY}" text-anchor="middle">${Math.max(0,Number(item.quantity||0))}</text>`;
     }).join('');
     const exchangeTable=[
       '<!-- Exchange item list: no item prices; COD shown above -->',
