@@ -60,7 +60,7 @@ export function fb878SnapshotFromCsv(csvText:string):Snapshot {
   return snapshot;
 }
 
-const sourceSnapshot=async(order:Order,settings:StoreSettings,csvText?:string):Promise<Snapshot>=>{
+export const resolveFB878InvoiceSnapshot=async(order:Order,settings:StoreSettings,csvText?:string):Promise<Snapshot>=>{
   if(csvText)return fb878SnapshotFromCsv(csvText);
   const saved=(order as any).invoice_confirm_snapshot as Snapshot|undefined;
   if(saved && Number(saved.final_total)===1250 && Array.isArray(saved.items) && saved.items.length)
@@ -128,6 +128,14 @@ export function correctedFB878PrintOrder(order:Order,snapshot:Snapshot):Order {
     total_amount:1250,
     city:snapshot.city||order.city,
     district:snapshot.district||(order as any).district,
+    // Print-only normalization. The saved Confirm CSV is still authoritative,
+    // but reference/regular totals can differ from the actual item-line subtotal.
+    // Make the printed breakdown internally consistent so downstream Invoice V6
+    // snapshot rendering does not recalculate Rs. 1,250 back to the old Rs. 1,000.
+    invoice_confirm_snapshot:{
+      ...snapshot,normal_total:subtotal,discount,delivery_fee:delivery,
+      gift_wrap:wrapped?'Yes':'No',wrapping_cost:wrap,final_total:1250,
+    },
   } as Order;
 }
 
@@ -137,7 +145,7 @@ export async function downloadFB878CorrectA4TwoA5(
   order:Order,settings:StoreSettings,csvText?:string
 ):Promise<void>{
   if(!sameOrder(order.order_number))throw new Error('This correction is for FB-000878 only.');
-  const snapshot=await sourceSnapshot(order,settings,csvText);
+  const snapshot=await resolveFB878InvoiceSnapshot(order,settings,csvText);
   const corrected=correctedFB878PrintOrder(order,snapshot);
   const parts=corrected.items.length
     ? Array.from({length:Math.ceil(corrected.items.length/4)},(_,i)=>corrected.items.slice(i*4,(i+1)*4))
