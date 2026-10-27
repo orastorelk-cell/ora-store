@@ -7,7 +7,16 @@ import { ExchangeInvoiceRecord } from '../types';
 export function validateInvoiceOrder(order: Order): string[] {
   const reasons:string[]=[];
   if(order.is_duplicate_order) reasons.push('Duplicate order');
-  if(!order.stock_allocated || order.stock_status!=='Allocated') reasons.push('Stock not allocated');
+  // Printing a saved invoice is different from creating a NEW invoice.
+  // Warehouse stock may be released/updated after the parcel was dispatched.
+  // A complete, previously locked invoice can still be printed from its saved
+  // order/invoice snapshot without allocating or deducting stock again.
+  const savedInvoice = order.invoice_locked===true &&
+    Boolean(String(order.invoice_number||'').trim()) &&
+    Boolean(String(order.invoice_pack_batch_id||'').trim()) &&
+    Number.isFinite(Date.parse(order.invoice_generated_at||''));
+  if(!savedInvoice && (!order.stock_allocated || order.stock_status!=='Allocated'))
+    reasons.push('Stock not allocated');
   if(!order.waybill_number) reasons.push('Waybill required');
   if(order.order_status==='Cancelled') reasons.push('Cancelled');
   return reasons;
@@ -103,15 +112,57 @@ function splitInvoiceItems(order: Order): Order['items'][] {
 
 function downloadPdfBlob(doc: jsPDF, fileName: string) {
   const blob = doc.output('blob');
+  if (!blob.size) throw new Error('PDF is empty. No download was started.');
   const url = URL.createObjectURL(blob);
+
+  // A long invoice render can lose the browser's original click activation.
+  // Keep a real, user-clickable Save PDF link so Chrome can still save the
+  // rendered file even when it blocks the delayed automatic download.
+  let tray = document.getElementById('ora-ready-pdf-downloads') as HTMLDivElement | null;
+  if (!tray) {
+    tray = document.createElement('div');
+    tray.id = 'ora-ready-pdf-downloads';
+    tray.setAttribute('role', 'status');
+    tray.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:2147483647;width:min(430px,calc(100vw - 32px));max-height:45vh;overflow:auto;display:flex;flex-direction:column;gap:8px;pointer-events:auto;';
+    document.body.appendChild(tray);
+  }
+  const row = document.createElement('div');
+  row.style.cssText = 'padding:12px 14px;background:#102a22;color:#ffffff;border:1px solid #26a77b;border-radius:12px;box-shadow:0 8px 28px #0006;font:13px system-ui,sans-serif;';
+  const message = document.createElement('div');
+  message.textContent = 'PDF ready. If the download did not start, click Save PDF below.';
+  message.style.marginBottom = '8px';
+  row.appendChild(message);
+  const save = document.createElement('a');
+  save.href = url;
+  save.download = fileName;
+  save.textContent = 'Save PDF — ' + fileName;
+  save.style.cssText = 'display:inline-block;max-width:100%;overflow-wrap:anywhere;background:#16a085;color:white;text-decoration:none;font-weight:700;padding:8px 10px;border-radius:8px;';
+  row.appendChild(save);
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.textContent = 'Dismiss';
+  close.style.cssText = 'margin-left:8px;color:#d0ebe2;background:transparent;border:0;cursor:pointer;padding:8px;';
+  row.appendChild(close);
+  tray.appendChild(row);
+
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    row.remove();
+    if (tray && !tray.childElementCount) tray.remove();
+    URL.revokeObjectURL(url);
+  };
+  close.addEventListener('click', cleanup, { once: true });
+  save.addEventListener('click', () => window.setTimeout(cleanup, 30_000), { once: true });
+  window.setTimeout(cleanup, 10 * 60_000);
+
   const link = document.createElement('a');
   link.href = url;
   link.download = fileName;
   link.style.display = 'none';
   document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+  try { link.click(); } finally { link.remove(); }
 }
 
 
