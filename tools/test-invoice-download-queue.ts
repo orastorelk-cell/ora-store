@@ -24,6 +24,7 @@ const request=async(_url:string,options?:RequestInit)=>{
 const make=(user='staff-a',other:Record<string,any>={})=>createInvoiceDownloadQueue({storage,user,request,pause:async()=>{},onSaved:orders=>saved.push(...orders),onState:state=>states.push(state),...other});
 const queue=make();
 queue.enqueue(['order-0'],'Packing Staff',{date:'2026-10-19',number:2});
+assert.equal(queue.hasPendingOrderIds(['order-0']),true,'downloaded PDFs stay pending until the server acknowledges');
 assert.equal(storage.length,1,'The receipt is durable before the first network result');
 assert.deepEqual(queue.pendingSets(),[{date:'2026-10-19',number:2,orderIds:['order-0']}],'Pending PDFs reserve their filename set without falsely marking Downloaded');
 await queue.flush();
@@ -35,6 +36,7 @@ const other=make('staff-b');await other.flush();assert.equal(calls.length,4,'Ano
 fail=0;const recovered=make();await recovered.flush();
 assert.equal(JSON.stringify(calls.at(-1)),originalEvent,'Reload retries the original timestamp, staff and PDF set');
 assert.equal(storage.length,0);assert.equal(saved.length,1);assert.equal(states.at(-1).message,'Invoice download status saved.');
+assert.equal(recovered.hasPendingOrderIds(['order-0']),false,'acknowledged order leaves the pending-save queue');
 assert.deepEqual(recovered.pendingSets(),[]);
 recovered.dispose();
 
