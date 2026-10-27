@@ -307,7 +307,7 @@ const statusStart = patched.indexOf('  const markFardarCsvExported =');
 const statusEnd = patched.indexOf('  const recordCodPayments =', statusStart);
 const invoiceStart = patched.indexOf('  const markInvoiceBatchDownloaded =');
 const contextOrders = (await currentPayloads()).slice(300, 437);
-const exportScope: any = {orders: contextOrders, adminUser: {name: 'Packing Staff'}, saveFardarExportStatus, saveInvoiceDownloadStatus,
+const exportScope: any = {orders: contextOrders, adminUser: {id: 'admin-id', name: 'Packing Staff'}, adminIdentityRef: {current: 'admin-id'}, saveFardarExportStatus, saveInvoiceDownloadStatus,
   sharedStaffRequest: async (url: string, options?: RequestInit) => {
     assert.equal(options?.method, 'POST');
     const response = url === FARDAR_EXPORT_STATUS_API ? await exportPost(JSON.parse(String(options?.body))) : await post(JSON.parse(String(options?.body)));
