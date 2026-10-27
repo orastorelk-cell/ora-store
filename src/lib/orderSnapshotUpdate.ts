@@ -117,6 +117,23 @@ export const prepareOrderSnapshotUpdate = (existing: Row | undefined, incoming: 
         'waybill_protection_locked', 'waybill_protection_reason']) if (existing[field] !== undefined) order[field] = existing[field];
       order.waybill_number = existingWaybill;
     }
+    // Dispatch handover is a durable courier event. A stale order editor or
+    // background sync must not turn the same parcel into Not Scanned again.
+    // This applies to production R2 writes through prepareOrderSnapshotUpdate.
+    if (existing.dispatch_status === 'Handed Over' &&
+        String(existing.waybill_number || '').trim() === String(order.waybill_number || '').trim()) {
+      order.dispatch_status = 'Handed Over';
+      for (const field of ['dispatch_scanned_at', 'dispatch_scanned_by']) {
+        if (existing[field] !== undefined) order[field] = existing[field];
+      }
+      order.order_status = existing.order_status === 'Delivered' || order.order_status === 'Delivered' ? 'Delivered' : 'Shipped';
+      if (existing.order_status === 'Delivered') {
+        order.delivery_status = existing.delivery_status;
+        order.tracking_status = existing.tracking_status;
+      } else if (order.delivery_status !== 'Delivered') {
+        order.delivery_status = 'Handed Over to Courier';
+      }
+    }
     if (existing.stock_allocated === true) {
       order.stock_allocated = true;
       for (const field of ['stock_status', 'stock_allocated_at', 'stock_allocated_by']) if (existing[field] !== undefined) order[field] = existing[field];
