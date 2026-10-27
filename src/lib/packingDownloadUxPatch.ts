@@ -27,14 +27,17 @@ export const packingDownloadUxPatch = () => ({
                 const {setDate,setNumber,stem}=resolveDownloadSet();
                 setPackingDownloadBusy('all');
                 try {
+                  const plan=await preparePackingInvoicesForPrint(batchOrders,settings);
+                  if(!plan.printable.length) throw new Error(pendingPackingInvoiceMessage(plan));
                   const chunkSize=100;
-                  const partCount=Math.ceil(batchOrders.length/chunkSize);
+                  const partCount=Math.ceil(plan.printable.length/chunkSize);
                   for(let part=0;part<partCount;part++){
-                    const chunk=batchOrders.slice(part*chunkSize,(part+1)*chunkSize);
+                    const chunk=plan.printable.slice(part*chunkSize,(part+1)*chunkSize);
                     const suffix=partCount>1?('_Part-'+(part+1)+'-of-'+partCount):'';
                     await generateBatchInvoicesPDF(chunk,settings,stem+'_ALL-A6'+suffix+'.pdf');
                   }
-                  await savePackingDownloaded(batchOrders,setDate,setNumber);
+                  await savePackingDownloaded(plan.printable,setDate,setNumber);
+                  if(plan.held.length) alert(pendingPackingInvoiceMessage(plan)+' Upload Confirm CSV → Download ALL A4 2×A5 to include that invoice.');
                 } catch(e:any){ alert(e.message || 'All A6 invoice download failed. No batch status was changed unless every PDF completed.'); }
                 finally { setPackingDownloadBusy(''); }
               };
@@ -62,8 +65,11 @@ export const packingDownloadUxPatch = () => ({
                 const {setDate,setNumber,stem}=resolveDownloadSet();
                 setPackingDownloadBusy('a6');
                 try {
-                  await generateBatchInvoicesPDF(singlePageOrders,settings,\`${'${stem}'}_A6-Singles.pdf\`);
-                  await savePackingDownloaded(singlePageOrders,setDate,setNumber);
+                  const plan=await preparePackingInvoicesForPrint(singlePageOrders,settings);
+                  if(!plan.printable.length) throw new Error(pendingPackingInvoiceMessage(plan));
+                  await generateBatchInvoicesPDF(plan.printable,settings,\`${'${stem}'}_A6-Singles.pdf\`);
+                  await savePackingDownloaded(plan.printable,setDate,setNumber);
+                  if(plan.held.length) alert(pendingPackingInvoiceMessage(plan));
                 } catch(e:any){ alert(e.message || 'A6 invoice download failed.'); }
                 finally { setPackingDownloadBusy(''); }
               };`);
@@ -81,8 +87,11 @@ export const packingDownloadUxPatch = () => ({
                 const {setDate,setNumber,stem}=resolveDownloadSet();
                 setPackingDownloadBusy('a4');
                 try {
-                  await generateA4FourUpInvoicesPDF(singlePageOrders,settings,\`${'${stem}'}_A4-4-Up.pdf\`);
-                  await savePackingDownloaded(singlePageOrders,setDate,setNumber);
+                  const plan=await preparePackingInvoicesForPrint(singlePageOrders,settings);
+                  if(!plan.printable.length) throw new Error(pendingPackingInvoiceMessage(plan));
+                  await generateA4FourUpInvoicesPDF(plan.printable,settings,\`${'${stem}'}_A4-4-Up.pdf\`);
+                  await savePackingDownloaded(plan.printable,setDate,setNumber);
+                  if(plan.held.length) alert(pendingPackingInvoiceMessage(plan));
                 } catch(e:any){ alert(e.message || 'A4 4-up invoice download failed.'); }
                 finally { setPackingDownloadBusy(''); }
               };`);
