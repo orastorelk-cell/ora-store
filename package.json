@@ -23,7 +23,8 @@
     "test:dispatch": "node --import tsx tools/test-dispatch-scans.ts",
     "test:dispatch-reconcile": "node --import tsx tools/test-authorized-dispatch-reconciliation.ts",
     "test:fb878-invoice": "node --import tsx tools/test-fb878-invoice-a4.ts",
-    "test:full-packing-batch": "node --import tsx tools/test-full-packing-batch-fb878.ts"
+    "test:full-packing-batch": "node --import tsx tools/test-full-packing-batch-fb878.ts",
+    "test:profit-tab": "node --import tsx tools/test-profit-tab-open.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

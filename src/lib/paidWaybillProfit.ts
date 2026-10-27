@@ -346,6 +346,20 @@ export function buildPaidWaybillProfitReport(input: {
 }): PaidWaybillProfitReport {
   const normalized = (input.waybills || []).map(normalizeProfitWaybill).filter(Boolean);
   const waybills = [...new Set(normalized)];
+  // In the new Profit Report flow the tab opens BEFORE a waybill CSV is
+  // selected. No report rows exist yet, so do NOT replay the entire store's
+  // FIFO Purchasing/stock/return journal (a potentially large synchronous
+  // operation that previously blocked the browser navigation/render).
+  // When the user selects waybills, the original complete FIFO history is
+  // still replayed for accurate historical purchasing costs.
+  if (input.waybills !== undefined && waybills.length === 0) {
+    return {
+      rows: [], duplicates: normalized.length,
+      ranges: { Facebook: null, TikTok: null },
+      totals: { ready: 0, review: 0, sales: 0, received: 0,
+        purchasing: 0, courier: 0, returnFees: 0, packing: 0, beforeAds: 0 },
+    };
+  }
   const costs = purchaseCosts(input.orders, input.purchases, input.returns || []);
   const productFor = profitCatalogLookup(input.products || []);
   const latestPrices = latestPurchasePrices(input.purchases, productFor);

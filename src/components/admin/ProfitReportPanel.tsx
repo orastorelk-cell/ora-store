@@ -335,7 +335,10 @@ export const ProfitReportPanel: React.FC = () => {
     try { localStorage.removeItem(`ora_paid_waybill_profit_v2:${adminUser?.id || 'staff'}`); } catch {}
     if (adminUser && sharedStoreReady) void loadInputs().catch(() => {});
   }, [adminUser?.id, sharedStoreReady, loadInputs]);
-  useEffect(() => { if (adminUser && sharedStoreReady) void resetPrevious(); }, [adminUser?.id, sharedStoreReady, resetPrevious]);
+  // Opening Profit Report is READ-ONLY. Never write a Facebook ledger reset to
+  // R2 simply because the user clicked this tab. The current CSV workspace
+  // starts fresh in React state and never includes an earlier Facebook CSV.
+  // Keep resetPrevious as an explicit retry-only operation when requested.
   const refresh = async () => { await Promise.all([refreshOrdersFromServer(), loadInputs()]); };
   return <CurrentCsvProfitReport key={adminUser?.id} orders={orders} purchases={reportPurchases} products={products} returns={returnRecords}
     ready={sharedStoreReady && sharedOrdersReady && inputsReady} error={orderLoadError || inputsError} onRefresh={refresh}
