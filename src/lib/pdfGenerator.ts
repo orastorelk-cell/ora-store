@@ -207,7 +207,7 @@ export async function generateExchangeInvoicePDF(exchange: ExchangeInvoiceRecord
     svg=svg.replace(/(<rect\b[^>]*y="292"[^>]*height=")92("\s)/g,(_match,prefix,suffix)=>`${prefix}84${suffix}`);
     svg=svg.replace(/(<text\b[^>]*x="1255" y=")420("\b[^>]*>)/,(_match,prefix,suffix)=>`${prefix}429${suffix}`);
     svg=svg.replace(/<text\b[^>]*x="1212"[^>]*y="170"[^>]*>COD<\/text>/,'');
-    const itemStartY=515;
+    const itemStartY=527;
     const itemRowHeight=54;
     const visibleRows=Math.max(1,page.items.length);
     const itemTableBottom=itemStartY+48+itemRowHeight*visibleRows;
@@ -222,8 +222,8 @@ export async function generateExchangeInvoicePDF(exchange: ExchangeInvoiceRecord
     }).join('');
     const exchangeTable=[
       '<!-- Exchange item list: no item prices; COD shown above -->',
-      '<rect x="978" y="463" width="530" height="42" rx="12" fill="#fff" stroke="#111" stroke-width="1.5"/>',
-      '<text class="t label" x="1005" y="490">COD</text><text class="t heading" x="1475" y="490" text-anchor="end">Rs. 0</text>',
+      '<rect x="978" y="475" width="530" height="42" rx="12" fill="#fff" stroke="#111" stroke-width="1.5"/>',
+      '<text class="t label" x="1005" y="502">COD</text><text class="t heading" x="1475" y="502" text-anchor="end">Rs. 0</text>',
       `<rect x="28" y="${itemStartY}" width="1480" height="${itemTableBottom-itemStartY}" rx="12" fill="#fff" stroke="#111" stroke-width="1.5"/>`,
       `<rect x="28" y="${itemStartY}" width="1480" height="48" rx="12" fill="#f0f0f0"/>`,
       ...[130,305,1250].map(x=>`<line x1="${x}" y1="${itemStartY}" x2="${x}" y2="${itemTableBottom}" class="soft"/>`),
@@ -235,8 +235,8 @@ export async function generateExchangeInvoicePDF(exchange: ExchangeInvoiceRecord
     const noteHeight=997-noteY-18;
     // Use the full note panel height to give the bilingual rider instructions
     // larger type and more breathing room, even when the item table is short.
-    const noteBaseHeight=236;
-    const noteYAt=(baseY:number)=>noteY+baseY+(noteHeight-noteBaseHeight)*(baseY/noteBaseHeight);
+    const noteBaseHeight=248;
+    const noteYAt=(baseY:number)=>noteY+baseY*((noteHeight-16)/(noteBaseHeight-16));
     const exchangeNote=[
       '<!-- Full-width exchange rider note below the item table -->',
       `<rect x="28" y="${noteY}" width="1480" height="${noteHeight}" rx="14" fill="#fff" stroke="#111" stroke-width="1.5"/>`,
