@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { transformSync } from 'esbuild';
+import { loadConfigFromFile } from 'vite';
 import type { Order,StoreSettings } from '../src/types';
 import { preparePackingInvoicesForPrint,pendingPackingInvoiceMessage } from '../src/lib/packingInvoicePrintRecovery';
 import { fb878SnapshotFromCsv } from '../src/lib/fb878InvoiceA4';
@@ -57,3 +60,23 @@ assert.equal(cancelled.held.length,1,'cancelled invoice cannot be made printable
 assert.equal(cancelled.printable.length,3);
 
 console.log('PASS: whole four-invoice batch with corrected FB878 item price/total Rs1250, print-only source integrity, CSV fallback, partial safe batch, no wrong invoice/stock changes.');
+
+// Guard the actual production Vite patch chain: Packing UX creates Download
+// ALL A6, A5 patch creates Download ALL A4 2×A5 and both must run safe
+// preparation instead of feeding stale FB-000878 into the safety validator.
+const vite=(await loadConfigFromFile({command:'build',mode:'production'}))!.config as any;
+let dashboard=fs.readFileSync('src/components/admin/AdminDashboard.tsx','utf8');
+for(const plugin of vite.plugins.flat(Infinity)){
+  if(typeof plugin?.transform!=='function')continue;
+  const changed=await plugin.transform(dashboard,'/repo/src/components/admin/AdminDashboard.tsx');
+  if(changed)dashboard=typeof changed==='string'?changed:changed.code;
+}
+assert(dashboard.includes('const plan=await preparePackingInvoicesForPrint(batchOrders,settings)'),
+  'production Download ALL buttons must repair FB-000878 before PDF safety check');
+assert(dashboard.includes('generateA4TwoUpA5InvoicesPDF(chunk,settings'),
+  '2 × A5 complete-batch output is chunked and not limited to first 200 invoices');
+assert(dashboard.includes('Confirm CSV → Download ALL A4 2×A5'),
+  'the user can upload verified CSV and print all invoices together');
+assert(dashboard.includes('await savePackingDownloaded(plan.printable,setDate,setNumber)'),
+  'only the genuinely printed invoices are acknowledged');
+transformSync(dashboard,{loader:'tsx',target:'es2022',format:'esm'});
