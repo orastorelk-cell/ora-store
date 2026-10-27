@@ -4,7 +4,8 @@ import { StaffPurchasesPanel } from './StaffPurchasesPanel';
 import { OrderItemEditorPanel } from './OrderItemEditorPanel';
 import { FacebookMissingOrdersPanel } from './FacebookMissingOrdersPanel';
 import { returnOrderFilter } from '../../lib/returnSheets';
-import { downloadA5Invoices } from '../../lib/a5InvoiceDownload';
+import { downloadA5Invoices, downloadA4TwoUpA5Invoices } from '../../lib/a5InvoiceDownload';
+import { preparePackingInvoicesForPrint, pendingPackingInvoiceMessage } from '../../lib/packingInvoicePrintRecovery';
 import { downloadFB878CorrectA4TwoA5 } from '../../lib/fb878InvoiceA4';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
@@ -4981,9 +4982,13 @@ Suitable For:
               const downloadMultiPage = async () => {
                 if(!multiPageOrders.length) return;
                 const {setDate,setNumber,stem}=resolveDownloadSet();
-                try { await generateBatchInvoicesPDF(multiPageOrders,settings,`${stem}_Multi-Page-A6.pdf`); }
-                catch(e:any){ alert(e.message || 'Multi-page invoice download failed.'); return; }
-                await savePackingDownloaded(multiPageOrders,setDate,setNumber);
+                try {
+                  const plan=await preparePackingInvoicesForPrint(multiPageOrders,settings);
+                  if(!plan.printable.length) throw new Error(pendingPackingInvoiceMessage(plan));
+                  await generateBatchInvoicesPDF(plan.printable,settings,`${stem}_Multi-Page-A6.pdf`);
+                  await savePackingDownloaded(plan.printable,setDate,setNumber);
+                  if(plan.held.length) alert(pendingPackingInvoiceMessage(plan));
+                } catch(e:any){ alert(e.message || 'Multi-page invoice download failed.'); }
               };
 
               return (
@@ -4992,6 +4997,38 @@ Suitable For:
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <b className="font-mono text-white">{batchId}</b>
+                        {batchOrders.some(o=>String(o.order_number||'').trim()==='FB-000878') && (
+                          <label className="cursor-pointer rounded-lg border-2 border-cyan-500/70 bg-cyan-700/20 px-3 py-2 text-[11px] font-black text-cyan-100">
+                            {fb878PdfBusy?'Preparing whole batch…':'Confirm CSV → Download ALL A4 2×A5'}
+                            <input type="file" accept=".csv,text/csv" className="hidden" disabled={fb878PdfBusy}
+                              onChange={async e=>{
+                                const input=e.currentTarget,file=input.files?.[0];
+                                if(!file)return;
+                                setFb878PdfBusy(true);
+                                try {
+                                  const plan=await preparePackingInvoicesForPrint(batchOrders,settings,await file.text());
+                                  if(plan.held.length) throw new Error(pendingPackingInvoiceMessage(plan));
+                                  if(plan.printable.length!==batchOrders.length) throw new Error('Not every invoice in this packing batch was confirmed for printing.');
+                                  const {setDate,setNumber,stem}=resolveDownloadSet();
+                                  // The A4 renderer caps one PDF at 200 invoices. Smaller
+                                  // parts prevent memory exhaustion and silent omission.
+                                  const chunkSize=80,parts=Math.ceil(plan.printable.length/chunkSize);
+                                  for(let i=0;i<parts;i++){
+                                    const chunk=plan.printable.slice(i*chunkSize,(i+1)*chunkSize);
+                                    await downloadA4TwoUpA5Invoices(chunk,settings,
+                                      stem+'_ALL_A4_2xA5'+(parts>1?'_Part-'+(i+1)+'-of-'+parts:'')+'.pdf');
+                                  }
+                                  await savePackingDownloaded(batchOrders,setDate,setNumber);
+                                } catch(error:any) {
+                                  alert(error?.message||'Complete packing batch PDF download failed. Please check the Confirm CSV.');
+                                } finally {
+                                  setFb878PdfBusy(false);
+                                  input.value='';
+                                }
+                              }}/>
+                          </label>
+                        )}
+
                         {batchOrders.some(o=>String(o.order_number||'').trim()==='FB-000878') && <>
                           <button type="button" disabled={fb878PdfBusy}
                             onClick={async()=>{
