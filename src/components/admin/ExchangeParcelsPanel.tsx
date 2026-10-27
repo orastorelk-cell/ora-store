@@ -53,7 +53,7 @@ export const ExchangeParcelsPanel:React.FC=()=>{
     const normalizePhone=(value:string)=>{let digits=String(value||'').replace(/\D/g,'');if(digits.startsWith('0094')&&digits.length>=13)digits='0'+digits.slice(4);else if(digits.startsWith('94')&&digits.length===11)digits='0'+digits.slice(2);else if(digits.length===9&&digits.startsWith('7'))digits='0'+digits;return digits;};
     const description='Exchange: '+(row.items||[]).map(item=>`${item.sku||item.main_sku||'0'} ${item.product_name||''}${item.variant_name?` - ${item.variant_name}`:''} x${item.quantity}`).join(' | ')+' (Exchange Blank Cover)';
     const header=['Waybill ID','Order ID','Parcel Type','Parcel Description','Recipient Name','Recipient Mobile','Recipient Mobile','Recipient Address','Recipient City','COD Amount','Exchange (0 or 1)'];
-    const values=[row.new_waybill,row.id,settings.fardar_parcel_type||'',description,row.customer_name,normalizePhone(row.phone),normalizePhone(row.whatsapp||row.phone),row.address,row.fardar_city||row.city,0,1];
+    const values=[row.new_waybill,row.id,1,description,row.customer_name,normalizePhone(row.phone),normalizePhone(row.whatsapp||row.phone),row.address,row.fardar_city||row.city,0,1];
     downloadCsv(`ora_fardar_ready_${row.id}.csv`,[header,values]);
   };
   return <div className="space-y-5 p-4 md:p-6">
