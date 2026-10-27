@@ -95,6 +95,7 @@ export const createInvoiceDownloadQueue = ({ storage, user, request, onSaved, on
     },
     flush,
     pendingSets() { return [...queued.values()].filter(body=>body.downloadSet).map(body=>({...body.downloadSet!,orderIds:body.orderIds})); },
+    hasPendingOrderIds(ids: string[]) { const wanted=new Set(ids); return [...queued.values()].some(body=>body.orderIds.some(id=>wanted.has(id))); },
     dispose() { active = false; },
   };
 };

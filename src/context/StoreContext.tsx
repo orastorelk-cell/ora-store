@@ -2946,11 +2946,17 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       id:order.id,invoiceNumber:String(order.invoice_number||''),batchId:String(order.invoice_pack_batch_id||''),waybill:String(order.waybill_number||'')
     }));
     queue.enqueue(uniqueIds,downloadedBy,downloadSet,invoices);
-    // The PDF exists now. Only a verified receipt marks its orders Downloaded.
+    // The file is already on the user's device. Wait for the durable server
+    // receipt before reporting "Downloaded"; never silently claim success.
+    await queue.flush();
+    if(adminIdentityRef.current!==adminUser.id)
+      throw new Error('Staff session changed. Sign in again to retry the saved invoice download status.');
+    if(queue.hasPendingOrderIds(uniqueIds))
+      throw new Error('The PDF was downloaded, but its Downloaded status has not been confirmed by the server. Use Retry Status Save in Packing Invoice Downloads. Do not download the PDF again.');
     logActivity({
-      action:'Packing Invoice PDF Downloaded',
+      action:'Packing Invoice Download Status Confirmed',
       module:'Invoices',
-      details:`${uniqueIds.length} invoice(s) • ${downloadedBy} • Download status queued for server confirmation`
+      details:`${uniqueIds.length} invoice(s) • ${downloadedBy} • Downloaded status confirmed by server`
     });
   };
 
