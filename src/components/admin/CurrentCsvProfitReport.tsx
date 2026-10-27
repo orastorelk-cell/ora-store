@@ -24,11 +24,16 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
   const fbSequence = useRef(0), waybillSequence = useRef(0), metaSequence = useRef(0);
   const [verifiedLeads, setVerifiedLeads] = useState<Record<string, { lead_id: string; created_at: string; ad_id: string; adset_id: string; campaign_id: string }>>({});
   useEffect(() => () => { metaSequence.current++; }, []);
-  const costOrders = useMemo(() => orders.map(order => {
+  const costOrders = useMemo(() => {
+    // Before verification there is no metadata to overlay. Preserve the store
+    // array rather than cloning thousands of orders on every tab entry.
+    if (!Object.keys(verifiedLeads).length) return orders;
+    return orders.map(order => {
     const verified = verifiedLeads[order.id];
     return verified?.lead_id === order.platform_lead_id ? { ...order, platform_lead_created_at: verified.created_at,
       platform_ad_id: verified.ad_id, platform_adset_id: verified.adset_id, platform_campaign_id: verified.campaign_id } : order;
-  }), [orders, verifiedLeads]);
+    });
+  }, [orders, verifiedLeads]);
   const knownCodes = useMemo(() => products.flatMap(product => [product.sku, ...(product.variants || []).map(variant => variant.sku)]), [products]);
   const report = useMemo(() => buildPaidWaybillProfitReport({ orders, purchases, products, returns, waybills, paymentBasis: basis }), [orders, purchases, products, returns, waybills, basis]);
   const requiredDates = useMemo(() => facebookRequiredCostDates(costOrders, report), [costOrders, report]);
