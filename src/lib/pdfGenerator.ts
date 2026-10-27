@@ -233,20 +233,24 @@ export async function generateExchangeInvoicePDF(exchange: ExchangeInvoiceRecord
     svg=svg.replace(/<!-- Large item rows -->[\s\S]*?(?=<!-- Short, readable bilingual policy -->)/,exchangeTable);
     const noteY=itemTableBottom+18;
     const noteHeight=997-noteY-18;
-    const noteOffset=Math.max(0,Math.floor((noteHeight-196)/2));
+    // Use the full note panel height to give the bilingual rider instructions
+    // larger type and more breathing room, even when the item table is short.
+    const noteBaseHeight=236;
+    const noteYAt=(baseY:number)=>noteY+baseY+(noteHeight-noteBaseHeight)*(baseY/noteBaseHeight);
     const exchangeNote=[
       '<!-- Full-width exchange rider note below the item table -->',
       `<rect x="28" y="${noteY}" width="1480" height="${noteHeight}" rx="14" fill="#fff" stroke="#111" stroke-width="1.5"/>`,
-      `<text class="t heading" x="55" y="${noteY+noteOffset+25}" style="font-size:25px">EXCHANGE PARCEL / හුවමාරු පාර්සලය</text>`,
-      `<text class="t notice" x="55" y="${noteY+noteOffset+47}" style="font-size:18px">OLD WAYBILL: ${escapeInvoiceSvgText(exchange.original_waybill)}</text>`,
-      `<text class="t notice" x="55" y="${noteY+noteOffset+65}" style="font-size:18px">EXCHANGE ITEMS: All item codes and names listed above</text>`,
-      `<text class="si notice siNotice" x="55" y="${noteY+noteOffset+87}" style="font-size:20px">මෙය හුවමාරු පාර්සලයකි.</text>`,
-      `<text class="si notice siNotice" x="55" y="${noteY+noteOffset+106}" style="font-size:20px">පාරිභෝගිකයා සතු භාණ්ඩය අප වෙත ලබා ගැනීමට කටයුතු කරන්න.</text>`,
-      `<text class="si notice siNotice" x="55" y="${noteY+noteOffset+125}" style="font-size:20px">පාරිභෝගිකයාගෙන් භාණ්ඩය ලැබෙන තුරු එහි වගකීම බෙදාහැරීමේ රයිඩර් සතුය.</text>`,
-      `<text class="t notice" x="55" y="${noteY+noteOffset+145}" style="font-size:17px">This is an exchange parcel.</text>`,
-      `<text class="t notice" x="55" y="${noteY+noteOffset+163}" style="font-size:17px">Please arrange to collect the customer's item and return it to us.</text>`,
-      `<text class="t notice" x="55" y="${noteY+noteOffset+181}" style="font-size:17px">The delivery rider is responsible until the item is received.</text>`,
-      `<text class="t notice" x="55" y="${noteY+noteOffset+204}" style="font-size:17px">ISSUE? CALL HOTLINE +94 76 772 9424</text>`,
+      `<text class="t heading" x="55" y="${noteYAt(27)}" style="font-size:28px">EXCHANGE PARCEL / හුවමාරු පාර්සලය</text>`,
+      `<text class="t notice" x="55" y="${noteYAt(47)}" style="font-size:19px;font-weight:700">OLD WAYBILL: ${escapeInvoiceSvgText(exchange.original_waybill)}</text>`,
+      `<text class="t notice" x="55" y="${noteYAt(65)}" style="font-size:18px">EXCHANGE ITEMS: Listed in the table above</text>`,
+      `<line x1="55" y1="${noteYAt(76)}" x2="1480" y2="${noteYAt(76)}" stroke="#888" stroke-width="1"/>`,
+      `<text class="si notice siNotice" x="55" y="${noteYAt(101)}" style="font-size:25px;font-weight:700">මෙය හුවමාරු පාර්සලයකි.</text>`,
+      `<text class="si notice siNotice" x="55" y="${noteYAt(128)}" style="font-size:25px">පාරිභෝගිකයා සතු භාණ්ඩය අප වෙත ලබා ගැනීමට කටයුතු කරන්න.</text>`,
+      `<text class="si notice siNotice" x="55" y="${noteYAt(155)}" style="font-size:25px">පාරිභෝගිකයාගෙන් භාණ්ඩය ලැබෙන තුරු එහි වගකීම බෙදාහැරීමේ රයිඩර් සතුය.</text>`,
+      `<text class="t notice" x="55" y="${noteYAt(176)}" style="font-size:18px">This is an exchange parcel.</text>`,
+      `<text class="t notice" x="55" y="${noteYAt(194)}" style="font-size:18px">Please arrange to collect the customer's item and return it to us.</text>`,
+      `<text class="t notice" x="55" y="${noteYAt(212)}" style="font-size:18px">The delivery rider is responsible until the item is received.</text>`,
+      `<text class="t notice" x="55" y="${noteYAt(233)}" style="font-size:20px;font-weight:700">ISSUE? CALL HOTLINE +94 76 772 9424</text>`,
     ].join('\n');
     svg=svg.replace(/<!-- Short, readable bilingual policy -->[\s\S]*?(?=<!-- FIXED BOTTOM CONTACT BAND -->)/,exchangeNote);
     const png=await svgToBrowserPngBytes(svg);
