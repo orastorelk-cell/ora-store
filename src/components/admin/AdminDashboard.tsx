@@ -4862,6 +4862,7 @@ Suitable For:
         });
 
         const pendingCount = allGroups.filter(([,os])=>!os.every(o=>Boolean(o.invoice_pack_downloaded_at))).length;
+        const pendingSaveSets = getPendingInvoiceDownloadSets();
 
         return (
           <div className="space-y-4">
@@ -4891,6 +4892,17 @@ Suitable For:
                 </div>
               </div>
 
+              {invoiceDownloadSyncMessage && (
+                <div role="status" className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">
+                  <p>{invoiceDownloadSyncMessage}</p>
+                  {invoiceDownloadCanRetry && (
+                    <button type="button" onClick={retryInvoiceDownloadSave}
+                      className="mt-2 rounded-lg bg-amber-500 px-3 py-2 font-black text-black">
+                      Retry Status Save — do not download the PDF again
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="mt-4">
                 <input
                   value={packingSearch}
@@ -4914,6 +4926,8 @@ Suitable For:
               const multiPageOrders = batchOrders.filter(o=>getInvoicePageCount(o)>1);
               const singleDownloaded = singlePageOrders.length>0 && singlePageOrders.every(o=>Boolean(o.invoice_pack_downloaded_at));
               const multiDownloaded = multiPageOrders.length>0 && multiPageOrders.every(o=>Boolean(o.invoice_pack_downloaded_at));
+              const awaitingAck = pendingSaveSets.some(set=>set.orderIds.some(id=>batchOrders.some(o=>o.id===id)));
+              const undownloadedCount = batchOrders.filter(o=>!o.invoice_pack_downloaded_at).length;
 
               const resolveDownloadSet = () => {
                 const localDate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
@@ -4973,10 +4987,10 @@ Suitable For:
                       <div className="flex flex-wrap items-center gap-2">
                         <b className="font-mono text-white">{batchId}</b>
                         <span className={`rounded-full px-2.5 py-1 text-[10px] font-black ${downloaded?'bg-emerald-500/10 text-emerald-300':'bg-orange-500/10 text-orange-300'}`}>
-                          {downloaded?'DOWNLOADED':'NEED DOWNLOAD'}
+                          {downloaded?'DOWNLOADED':awaitingAck?'STATUS SAVE PENDING':'NEED DOWNLOAD'}
                         </span>
                         <span className="rounded-full bg-neutral-800 px-2.5 py-1 text-[10px] font-bold text-neutral-300">
-                          {batchOrders.length} order{batchOrders.length===1?'':'s'}
+                          {batchOrders.length} order{batchOrders.length===1?'':'s'}{undownloadedCount>0 ? ` • ${undownloadedCount} pending` : ''}
                         </span>
                         {singlePageOrders.length>0 && <span className="rounded-full bg-blue-500/10 px-2.5 py-1 text-[10px] font-bold text-blue-300">Single A6: {singlePageOrders.length}</span>}
                         {multiPageOrders.length>0 && <span className="rounded-full bg-fuchsia-500/10 px-2.5 py-1 text-[10px] font-bold text-fuchsia-300">Multi-page: {multiPageOrders.length}</span>}
