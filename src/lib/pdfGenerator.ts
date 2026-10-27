@@ -185,8 +185,8 @@ export async function generateExchangeInvoicePDF(exchange: ExchangeInvoiceRecord
   const items=(exchange.items||[]).map(item=>({
     ...item,sku:String(item.sku||item.main_sku||'0'),unit_price:0,subtotal:0,
   }));
-  const pages=Array.from({length:Math.max(1,Math.ceil(items.length/4))},(_,pageIndex)=>({
-    pageIndex,items:items.slice(pageIndex*4,(pageIndex+1)*4),
+  const pages=Array.from({length:Math.max(1,Math.ceil(items.length/3))},(_,pageIndex)=>({
+    pageIndex,items:items.slice(pageIndex*3,(pageIndex+1)*3),
   }));
   const order:Order={
     id:exchange.id,order_number:exchange.id,invoice_number:exchange.id,
@@ -207,20 +207,23 @@ export async function generateExchangeInvoicePDF(exchange: ExchangeInvoiceRecord
     svg=svg.replace(/(<rect\b[^>]*y="292"[^>]*height=")92("\s)/g,(_match,prefix,suffix)=>`${prefix}84${suffix}`);
     svg=svg.replace(/(<text\b[^>]*x="1255" y=")420("\b[^>]*>)/,(_match,prefix,suffix)=>`${prefix}429${suffix}`);
     svg=svg.replace(/<text\b[^>]*x="1212"[^>]*y="170"[^>]*>COD<\/text>/,'');
-    const itemStartY=475;
+    const itemStartY=515;
     const itemRowHeight=54;
-    const itemTableBottom=itemStartY+48+itemRowHeight*4;
-    const itemLines=Array.from({length:4},(_,rowIndex)=>{
+    const visibleRows=Math.max(1,page.items.length);
+    const itemTableBottom=itemStartY+48+itemRowHeight*visibleRows;
+    const itemLines=Array.from({length:visibleRows},(_,rowIndex)=>{
       const rowBottom=itemStartY+48+(rowIndex+1)*itemRowHeight;
       const textY=rowBottom-18;
       const item=page.items[rowIndex];
       if(!item)return `<line x1="28" y1="${rowBottom}" x2="1508" y2="${rowBottom}" class="soft"/>`;
       const code=String(item.sku||item.main_sku||'0');
-      const description=`${item.product_name||''}${item.variant_name?` - ${item.variant_name}`:''}`;
-      return `<line x1="28" y1="${rowBottom}" x2="1508" y2="${rowBottom}" class="soft"/><text class="t table" x="65" y="${textY}">${page.pageIndex*4+rowIndex+1}</text><text class="t table" x="155" y="${textY}" font-size="${code.length>11?18:24}">${escapeInvoiceSvgText(code)}</text><text class="t table" x="335" y="${textY}" font-size="20">${escapeInvoiceSvgText(description)}</text><text class="t table" x="1380" y="${textY}" text-anchor="middle">${Math.max(0,Number(item.quantity||0))}</text>`;
+      const description=`${item.product_name||''}${item.variant_name?` - ${item.variant_name}`:''} (Exchange Blank Cover)`;
+      return `<line x1="28" y1="${rowBottom}" x2="1508" y2="${rowBottom}" class="soft"/><text class="t table" x="65" y="${textY}">${page.pageIndex*3+rowIndex+1}</text><text class="t table" x="155" y="${textY}" font-size="${code.length>11?18:24}">${escapeInvoiceSvgText(code)}</text><text class="t table" x="335" y="${textY}" font-size="20">${escapeInvoiceSvgText(description)}</text><text class="t table" x="1380" y="${textY}" text-anchor="middle">${Math.max(0,Number(item.quantity||0))}</text>`;
     }).join('');
     const exchangeTable=[
-      '<!-- Exchange item list: no item prices -->',
+      '<!-- Exchange item list: no item prices; COD shown above -->',
+      '<rect x="978" y="463" width="530" height="42" rx="12" fill="#fff" stroke="#111" stroke-width="1.5"/>',
+      '<text class="t label" x="1005" y="490">COD</text><text class="t heading" x="1475" y="490" text-anchor="end">Rs. 0</text>',
       `<rect x="28" y="${itemStartY}" width="1480" height="${itemTableBottom-itemStartY}" rx="12" fill="#fff" stroke="#111" stroke-width="1.5"/>`,
       `<rect x="28" y="${itemStartY}" width="1480" height="48" rx="12" fill="#f0f0f0"/>`,
       ...[130,305,1250].map(x=>`<line x1="${x}" y1="${itemStartY}" x2="${x}" y2="${itemTableBottom}" class="soft"/>`),
@@ -228,34 +231,24 @@ export async function generateExchangeInvoicePDF(exchange: ExchangeInvoiceRecord
       itemLines,
     ].join('');
     svg=svg.replace(/<!-- Large item rows -->[\s\S]*?(?=<!-- Short, readable bilingual policy -->)/,exchangeTable);
-    const policy=svg.match(/<!-- Short, readable bilingual policy -->[\s\S]*?(?=<!-- Readable totals -->)/);
-    if(policy){
-      const policyY=Number(policy[0].match(/<rect x="28" y="(\d+)" width="930" height="220"/)?.[1]||757);
-      const exchangeNote=[
-        '<!-- Exchange notice in the existing invoice policy box -->',
-        `<rect x="28" y="${policyY}" width="930" height="220" rx="14" fill="#fff" stroke="#111" stroke-width="1.5"/>`,
-        `<text class="t heading" x="55" y="${policyY+27}" style="font-size:24px">EXCHANGE PARCEL / හුවමාරු පාර්සලය</text>`,
-        `<text class="t notice" x="55" y="${policyY+49}" style="font-size:15px">OLD WAYBILL: ${escapeInvoiceSvgText(exchange.original_waybill)}</text>`,
-        `<text class="t notice" x="55" y="${policyY+68}" style="font-size:15px">EXCHANGE ITEMS: All item codes and names listed above</text>`,
-        `<text class="si notice siNotice" x="55" y="${policyY+90}" style="font-size:18px">මෙය හුවමාරු පාර්සලයකි.</text>`,
-        `<text class="si notice siNotice" x="55" y="${policyY+109}" style="font-size:18px">පාරිභෝගිකයා සතු භාණ්ඩය අප වෙත ලබා ගැනීමට කටයුතු කරන්න.</text>`,
-        `<text class="si notice siNotice" x="55" y="${policyY+128}" style="font-size:18px">පාරිභෝගිකයාගෙන් භාණ්ඩය ලැබෙන තුරු එහි වගකීම බෙදාහැරීමේ රයිඩර් සතුය.</text>`,
-        `<text class="t notice" x="55" y="${policyY+149}" style="font-size:14px">This is an exchange parcel.</text>`,
-        `<text class="t notice" x="55" y="${policyY+167}" style="font-size:14px">Please collect the item owned by the customer.</text>`,
-        `<text class="t notice" x="55" y="${policyY+185}" style="font-size:14px">The delivery rider is responsible until it is received.</text>`,
-        `<text class="t notice" x="55" y="${policyY+207}" style="font-size:15px">ISSUE? CALL HOTLINE +94 76 772 9424</text>`,
-      ].join('\n');
-      svg=svg.replace(policy[0],exchangeNote);
-      const totals=svg.match(/<!-- Readable totals -->[\s\S]*?(?=<!-- FIXED BOTTOM CONTACT BAND -->)/);
-      if(totals){
-        svg=svg.replace(totals[0],[
-          '<!-- Exchange COD only -->',
-          `<rect x="978" y="${policyY}" width="530" height="220" rx="14" fill="#fff" stroke="#111" stroke-width="1.5"/>`,
-          `<text class="t heading" x="1005" y="${policyY+107}">COD</text>`,
-          `<text class="t heading" x="1475" y="${policyY+107}" text-anchor="end">Rs. 0</text>`,
-        ].join('\n'));
-      }
-    }
+    const noteY=itemTableBottom+18;
+    const noteHeight=997-noteY-18;
+    const noteOffset=Math.max(0,Math.floor((noteHeight-196)/2));
+    const exchangeNote=[
+      '<!-- Full-width exchange rider note below the item table -->',
+      `<rect x="28" y="${noteY}" width="1480" height="${noteHeight}" rx="14" fill="#fff" stroke="#111" stroke-width="1.5"/>`,
+      `<text class="t heading" x="55" y="${noteY+noteOffset+25}" style="font-size:25px">EXCHANGE PARCEL / හුවමාරු පාර්සලය</text>`,
+      `<text class="t notice" x="55" y="${noteY+noteOffset+47}" style="font-size:18px">OLD WAYBILL: ${escapeInvoiceSvgText(exchange.original_waybill)}</text>`,
+      `<text class="t notice" x="55" y="${noteY+noteOffset+65}" style="font-size:18px">EXCHANGE ITEMS: All item codes and names listed above</text>`,
+      `<text class="si notice siNotice" x="55" y="${noteY+noteOffset+87}" style="font-size:20px">මෙය හුවමාරු පාර්සලයකි.</text>`,
+      `<text class="si notice siNotice" x="55" y="${noteY+noteOffset+106}" style="font-size:20px">පාරිභෝගිකයා සතු භාණ්ඩය අප වෙත ලබා ගැනීමට කටයුතු කරන්න.</text>`,
+      `<text class="si notice siNotice" x="55" y="${noteY+noteOffset+125}" style="font-size:20px">පාරිභෝගිකයාගෙන් භාණ්ඩය ලැබෙන තුරු එහි වගකීම බෙදාහැරීමේ රයිඩර් සතුය.</text>`,
+      `<text class="t notice" x="55" y="${noteY+noteOffset+145}" style="font-size:17px">This is an exchange parcel.</text>`,
+      `<text class="t notice" x="55" y="${noteY+noteOffset+163}" style="font-size:17px">Please arrange to collect the customer's item and return it to us.</text>`,
+      `<text class="t notice" x="55" y="${noteY+noteOffset+181}" style="font-size:17px">The delivery rider is responsible until the item is received.</text>`,
+      `<text class="t notice" x="55" y="${noteY+noteOffset+204}" style="font-size:17px">ISSUE? CALL HOTLINE +94 76 772 9424</text>`,
+    ].join('\n');
+    svg=svg.replace(/<!-- Short, readable bilingual policy -->[\s\S]*?(?=<!-- FIXED BOTTOM CONTACT BAND -->)/,exchangeNote);
     const png=await svgToBrowserPngBytes(svg);
     const imageWidth=148*(1536/1090);
     doc.addImage(png,'PNG',(210-imageWidth)/2,0,imageWidth,148,undefined,'FAST');
