@@ -203,6 +203,9 @@ export async function generateExchangeInvoicePDF(exchange: ExchangeInvoiceRecord
     const page=pages[index];
     let svg=buildExactInvoiceSvg(order,settings,false,page.items,page.pageIndex,pages.length);
     svg=svg.replace('>INVOICE</text>','>EXCHANGE</text>');
+    // Leave a clear print gap between the exchange waybill bars and its number.
+    svg=svg.replace(/(<rect\b[^>]*y="292"[^>]*height=")92("\s)/g,(_match,prefix,suffix)=>`${prefix}84${suffix}`);
+    svg=svg.replace(/(<text\b[^>]*x="1255" y=")420("\b[^>]*>)/,(_match,prefix,suffix)=>`${prefix}429${suffix}`);
     svg=svg.replace(/(<text\b[^>]*x="1212"[^>]*y="170"[^>]*>)COD(<\/text>)/,'$1COD: Rs. 0$2');
     const policy=svg.match(/<!-- Short, readable bilingual policy -->[\s\S]*?(?=<!-- Readable totals -->)/);
     if(policy){
