@@ -2,7 +2,6 @@ import React, { useMemo, useState } from 'react';
 import { CheckCircle2, Download, FileSpreadsheet, PackageCheck, Plus, RefreshCw, Search, WalletCards } from 'lucide-react';
 import { useStore } from '../../context/StoreContext';
 import { generateExchangeInvoicePDF } from '../../lib/pdfGenerator';
-import { downloadCsv } from '../../lib/csv';
 import type { ExchangeInvoiceRecord, Order } from '../../types';
 
 const money=(value:number)=>`Rs. ${Math.max(0,Math.round(Number(value||0))).toLocaleString('en-US')}`;
@@ -50,11 +49,14 @@ export const ExchangeParcelsPanel:React.FC=()=>{
   };
   const downloadInvoice=(row:ExchangeInvoiceRecord)=>void generateExchangeInvoicePDF(row,settings).catch((error:any)=>setNotice(error?.message||'Exchange invoice PDF could not be downloaded.'));
   const downloadFardarCsv=(row:ExchangeInvoiceRecord)=>{
-    const normalizePhone=(value:string)=>{let digits=String(value||'').replace(/\D/g,'');if(digits.startsWith('0094')&&digits.length>=13)digits='0'+digits.slice(4);else if(digits.startsWith('94')&&digits.length===11)digits='0'+digits.slice(2);else if(digits.length===9&&digits.startsWith('7'))digits='0'+digits;return digits;};
+    const normalizePhone=(value:string)=>{let digits=String(value||'').replace(/\D/g,'');if(digits.startsWith('0094')&&digits.length>=13)digits=digits.slice(4);else if(digits.startsWith('94')&&digits.length===11)digits=digits.slice(2);else if(digits.length===10&&digits.startsWith('0'))digits=digits.slice(1);return digits;};
     const description='Exchange: '+(row.items||[]).map(item=>`${item.sku||item.main_sku||'0'} ${item.product_name||''}${item.variant_name?` - ${item.variant_name}`:''} x${item.quantity}`).join(' | ')+' (Exchange Blank Cover)';
     const header=['Waybill ID','Order ID','Parcel Type','Parcel Description','Recipient Name','Recipient Mobile','Recipient Mobile','Recipient Address','Recipient City','COD Amount','Exchange (0 or 1)'];
     const values=[row.new_waybill,row.id,1,description,row.customer_name,normalizePhone(row.phone),normalizePhone(row.whatsapp||row.phone),row.address,row.fardar_city||row.city,0,1];
-    downloadCsv(`ora_fardar_ready_${row.id}.csv`,[header,values]);
+    const escapeCsv=(value:unknown)=>{const text=String(value??'');return /[",\r\n]/.test(text)?`"${text.replace(/"/g,'""')}"`:text;};
+    const csv=[header,values].map(line=>line.map(escapeCsv).join(',')).join('\n');
+    const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'}));
+    const link=document.createElement('a');link.href=url;link.download=`ora_fardar_ready_${row.id}.csv`;document.body.appendChild(link);link.click();link.remove();window.setTimeout(()=>URL.revokeObjectURL(url),1000);
   };
   return <div className="space-y-5 p-4 md:p-6">
     <div className="flex flex-wrap items-start justify-between gap-3">
