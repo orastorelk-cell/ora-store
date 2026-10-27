@@ -155,6 +155,7 @@ export type OrderStatus =
   | 'Packed'
   | 'Shipped'
   | 'Delivered'
+  | 'Exchange Refund'
   | 'Cancelled';
 
 export type OrderSource = 'Website' | 'Facebook Ads' | 'TikTok Ads' | 'Manual Admin';
@@ -633,6 +634,7 @@ export type AdminPermission =
   | 'products'
   | 'stock'
   | 'orders'
+  | 'exchange_parcels'
   | 'out_of_stock'
   | 'packing_expenses'
   | 'returns'
@@ -747,6 +749,32 @@ export interface WaybillRecord {
   assigned_order_number?: string;
   imported_at: string;
   assigned_at?: string;
+  exchange_invoice?: ExchangeInvoiceRecord;
+}
+
+export interface ExchangeInvoiceRecord {
+  id: string;
+  invoice_number: string;
+  original_order_id: string;
+  original_order_number: string;
+  original_waybill: string;
+  new_waybill: string;
+  courier_name: string;
+  customer_name: string;
+  phone: string;
+  whatsapp?: string;
+  address: string;
+  city: string;
+  district?: string;
+  items: Order['items'];
+  order_total: number;
+  delivery_fee: number;
+  refund_amount: number;
+  status: 'Pending Refund' | 'Refund Complete';
+  created_at: string;
+  created_by: string;
+  refund_completed_at?: string;
+  refund_completed_by?: string;
 }
 
 

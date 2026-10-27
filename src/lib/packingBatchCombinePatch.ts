@@ -27,10 +27,12 @@ export const packingBatchCombinePatch = () => ({
     text = replaceRequired(text, stateMarker, stateReplacement, 'state');
 
     const derivedMarker = `        const pendingCount = allGroups.filter(([,os])=>!os.every(o=>Boolean(o.invoice_pack_downloaded_at))).length;
+        const pendingSaveSets = getPendingInvoiceDownloadSets();
 
         return (`;
 
     const derivedReplacement = `        const pendingCount = allGroups.filter(([,os])=>!os.every(o=>Boolean(o.invoice_pack_downloaded_at))).length;
+        const pendingSaveSets = getPendingInvoiceDownloadSets();
 
         // Separate print-only combiner. It never changes the original batches.
         const combineSelectedGroups = allGroups.filter(([batchId])=>packingCombineBatchIds.includes(batchId));

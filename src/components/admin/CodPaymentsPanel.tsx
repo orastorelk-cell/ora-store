@@ -8,7 +8,7 @@ type Mapping = CodPaymentMapping;
 const blankMapping: Mapping = { waybill: '', status: '', amount: '', deliveryFee: '', returnFee: '', date: '', reference: '' };
 
 export const CodPaymentsPanel: React.FC = () => {
-  const { orders, recordCodPayments, adminUser } = useStore();
+  const { orders, recordCodPayments, adminUser, exchangeInvoices } = useStore();
   const [headers, setHeaders] = useState<string[]>([]);
   const [rows, setRows] = useState<Record<string,string>[]>([]);
   const [mapping, setMapping] = useState<Mapping>(blankMapping);
@@ -18,6 +18,8 @@ export const CodPaymentsPanel: React.FC = () => {
 
   const codOrders = useMemo(() => orders.filter((o) => o.payment_method === 'COD' && o.waybill_number), [orders]);
   const received = codOrders.filter((o) => o.cod_payment_received && !isReturnedCourierInvoice(o));
+  const completedExchangeRefunds = exchangeInvoices.filter(row => row.status === 'Refund Complete');
+  const completedExchangeRefundTotal = completedExchangeRefunds.reduce((sum,row)=>sum+Number(row.refund_amount||0),0);
   const returned = orders.filter(isReturnedCourierInvoice);
   const deliveryCompared = received.filter((o) => o.fardar_delivery_fee != null);
   // delivery_fee = what O-RA charged the customer; fardar_delivery_fee = actual courier cost.
@@ -77,7 +79,8 @@ export const CodPaymentsPanel: React.FC = () => {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="rounded-2xl bg-white border border-gray-100 p-4"><p className="text-[11px] font-bold text-gray-400 uppercase">COD Waybills</p><p className="text-2xl font-black mt-1">{codOrders.length}</p></div>
         <div className="rounded-2xl bg-white border border-gray-100 p-4"><p className="text-[11px] font-bold text-gray-400 uppercase">Payment Received</p><p className="text-2xl font-black mt-1 text-emerald-600">{received.length}</p></div>
-        <div className="rounded-2xl bg-white border border-gray-100 p-4"><p className="text-[11px] font-bold text-gray-400 uppercase">Recorded Amount</p><p className="text-2xl font-black mt-1">Rs. {received.reduce((s,o)=>s+Number(o.cod_payment_amount||0),0).toLocaleString()}</p></div>
+        <div className="rounded-2xl bg-white border border-gray-100 p-4"><p className="text-[11px] font-bold text-gray-400 uppercase">Money Received (after refunds)</p><p className="text-2xl font-black mt-1">Rs. {(received.reduce((s,o)=>s+Number(o.cod_payment_amount||0),0)-completedExchangeRefundTotal).toLocaleString()}</p></div>
+        <div className="rounded-2xl bg-white border border-gray-100 p-4"><p className="text-[11px] font-bold text-gray-400 uppercase">Exchange Refunds Paid</p><p className="text-2xl font-black mt-1 text-red-600">Rs. {completedExchangeRefundTotal.toLocaleString()}</p></div>
         <div className="rounded-2xl bg-white border border-gray-100 p-4"><p className="text-[11px] font-bold text-gray-400 uppercase">Our System Delivery Total</p><p className="text-2xl font-black mt-1">Rs. {systemDeliveryTotal.toLocaleString()}</p></div>
         <div className="rounded-2xl bg-white border border-gray-100 p-4"><p className="text-[11px] font-bold text-gray-400 uppercase">Fardar Delivery Total</p><p className="text-2xl font-black mt-1">Rs. {fardarDeliveryTotal.toLocaleString()}</p></div>
         <div className="rounded-2xl bg-white border border-gray-100 p-4"><p className="text-[11px] font-bold text-gray-400 uppercase">Delivery Profit</p><p className={`text-2xl font-black mt-1 ${deliveryProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>Rs. {deliveryProfit.toLocaleString()}</p></div>
@@ -123,6 +126,11 @@ export const CodPaymentsPanel: React.FC = () => {
       {returned.length > 0 && <div className="rounded-2xl bg-white border border-gray-100 overflow-hidden">
         <div className="p-4 border-b border-gray-100"><h3 className="font-black text-sm">Recorded Return Fees</h3><p className="mt-1 text-xs text-gray-500">Profit deducts the return fee and FB cost. Purchasing and packing are Rs.0 for these returns.</p></div>
         <div className="overflow-x-auto"><table className="w-full text-xs"><thead className="bg-gray-50 text-gray-500"><tr><th className="text-left p-3">Waybill</th><th className="text-left p-3">Order</th><th className="text-left p-3">Status</th><th className="text-right p-3">Return Fee</th></tr></thead><tbody>{returned.map(order=><tr key={order.id} className="border-t border-gray-50"><td className="p-3 font-mono font-bold">{order.waybill_number}</td><td className="p-3">{order.order_number}</td><td className="p-3">Return Complete</td><td className="p-3 text-right font-bold text-red-600">Rs. {Number(order.fardar_return_fee||0).toLocaleString()}</td></tr>)}</tbody></table></div>
+      </div>}
+
+      {completedExchangeRefunds.length > 0 && <div className="rounded-2xl bg-white border border-gray-100 overflow-hidden">
+        <div className="p-4 border-b border-gray-100"><h3 className="font-black text-sm">Recorded Exchange Refunds</h3><p className="mt-1 text-xs text-gray-500">Completed customer refunds are deducted from Money Received above. Pending refunds are not deducted.</p></div>
+        <div className="overflow-x-auto"><table className="w-full text-xs"><thead className="bg-gray-50 text-gray-500"><tr><th className="text-left p-3">Exchange ID</th><th className="text-left p-3">Original Order / Waybill</th><th className="text-left p-3">Customer</th><th className="text-right p-3">Refund</th><th className="text-left p-3">Date</th></tr></thead><tbody>{completedExchangeRefunds.slice().sort((a,b)=>String(b.refund_completed_at||'').localeCompare(String(a.refund_completed_at||''))).map(row=><tr key={row.id} className="border-t border-gray-50"><td className="p-3 font-mono font-bold">{row.id}</td><td className="p-3">{row.original_order_number}<div className="text-[10px] text-gray-500">{row.original_waybill}</div></td><td className="p-3">{row.customer_name}</td><td className="p-3 text-right font-bold text-red-600">− Rs. {Number(row.refund_amount||0).toLocaleString()}</td><td className="p-3">{row.refund_completed_at?new Date(row.refund_completed_at).toLocaleDateString():'-'}</td></tr>)}</tbody></table></div>
       </div>}
 
       <div className="rounded-2xl bg-white border border-gray-100 overflow-hidden">

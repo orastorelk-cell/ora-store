@@ -26,6 +26,7 @@ import {
   FardarCityMapping,
   ReturnRecord,
   ProductVariant,
+  ExchangeInvoiceRecord,
 } from '../types';
 import {
   initialCategories,
@@ -74,6 +75,8 @@ interface StoreContextType {
   stockHistory: StockHistory[];
   purchaseOrders: PurchaseOrder[];
   waybillRecords: WaybillRecord[];
+  exchangeInvoices:ExchangeInvoiceRecord[];
+  refreshExchangeInvoices:()=>Promise<void>;
   returnRecords: ReturnRecord[];
   findReturnOrderByWaybill: (waybill: string) => Order | null;
   confirmReturn: (input: {
@@ -210,6 +213,8 @@ interface StoreContextType {
     quantity: number;
     reason?: string;
   }) => Promise<Order>;
+  createExchangeInvoice: (orderId:string,waybillNumber:string) => Promise<{exchange:ExchangeInvoiceRecord}>;
+  completeExchangeRefund: (exchangeId:string) => Promise<{exchange:ExchangeInvoiceRecord;original_order?:Order|null}>;
   updateOrderStatus: (orderId: string, status: OrderStatus) => void;
   cancelOrderDirect: (orderId: string, reason: string, cancelledBy?: string) => Promise<{ success: boolean; message: string }>;
   updateOrderDeliveryDetails: (orderId: string, details: { address: string; city: string; district?: string }) => Promise<{ success: boolean; sheetSynced: boolean; message: string }>;
@@ -255,7 +260,7 @@ interface StoreContextType {
 }
 
 
-const ALL_STAFF_PERMISSIONS = ['overview','add_product','combo_packs','supplier_offer','price_increase','products','stock','orders','out_of_stock','returns','lead_import','confirm_upload','invoices','packing','invoice_design','delivery','dispatch','cod_payments','bank_transfer_check','assistant_chats','complaints','notifications','reports','success_rate','reviews','product_requests','sheets','customers','categories','banners','activity','branding','website_info','settings','deploy','user_access'] as const;
+const ALL_STAFF_PERMISSIONS = ['overview','add_product','combo_packs','supplier_offer','price_increase','products','stock','orders','exchange_parcels','out_of_stock','returns','lead_import','confirm_upload','invoices','packing','invoice_design','delivery','dispatch','cod_payments','bank_transfer_check','assistant_chats','complaints','notifications','reports','success_rate','reviews','product_requests','sheets','customers','categories','banners','activity','branding','website_info','settings','deploy','user_access'] as const;
 
 const legacyPermissions = (role: string): any[] => {
   if (role === 'order_manager') return ['overview','orders','invoices','invoice_design','delivery','dispatch','customers','sheets'];
@@ -501,6 +506,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const saved = localStorage.getItem('ora_waybill_records');
     return saved ? JSON.parse(saved) : [];
   });
+  const [exchangeInvoices,setExchangeInvoices]=useState<ExchangeInvoiceRecord[]>([]);
   const [returnRecords, setReturnRecords] = useState<ReturnRecord[]>(() => {
     const saved = localStorage.getItem('ora_return_records');
     return saved ? JSON.parse(saved) : [];
@@ -1963,6 +1969,31 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
 
     return savedOrder;
+  };
+
+  const refreshExchangeInvoices=async()=>{
+    const canUse=adminUser?.role==='admin'||(adminUser?.permissions||[]).some(permission=>permission==='exchange_parcels'||permission.startsWith('level:exchange_parcels:'));
+    if(!canUse||!getStaffSessionToken())return;
+    const data=await sharedStaffRequest('/api/exchange-invoices');
+    if(Array.isArray(data?.invoices))setExchangeInvoices(data.invoices);
+  };
+  useEffect(()=>{void refreshExchangeInvoices().catch(error=>console.warn('Exchange invoice refresh failed:',error?.message||error));},[adminUser?.id]);
+  const createExchangeInvoice=async(orderId:string,waybillNumber:string)=>{
+    const data=await sharedStaffRequest(`/api/orders/${encodeURIComponent(orderId)}/exchange-invoices`,{method:'POST',body:JSON.stringify({waybill_number:waybillNumber})});
+    if(!data?.exchange)throw new Error('Exchange invoice was not saved.');
+    setExchangeInvoices(prev=>[data.exchange,...prev]);
+    setWaybillRecords(prev=>prev.map(row=>row.waybill_number===waybillNumber?{...row,status:'Assigned',assigned_order_id:data.exchange.id,assigned_order_number:data.exchange.id,assigned_at:data.exchange.created_at,exchange_invoice:data.exchange}:row));
+    logActivity({action:'Exchange Invoice Created',module:'Exchange Parcels',target_id:data.exchange.id,target_label:data.exchange.id,details:`Original ${data.exchange.original_order_number} / ${data.exchange.original_waybill} • New ${waybillNumber} • Pending refund Rs. ${data.exchange.refund_amount}`});
+    return {exchange:data.exchange};
+  };
+  const completeExchangeRefund=async(exchangeId:string)=>{
+    const data=await sharedStaffRequest(`/api/exchange-invoices/${encodeURIComponent(exchangeId)}/refund-complete`,{method:'POST',body:JSON.stringify({})});
+    if(!data?.exchange)throw new Error('Refund completion was not saved.');
+    setExchangeInvoices(prev=>prev.map(row=>row.id===exchangeId?data.exchange:row));
+    setWaybillRecords(prev=>prev.map(row=>row.exchange_invoice?.id===exchangeId?{...row,exchange_invoice:data.exchange}:row));
+    if(data.original_order)setOrders(prev=>prev.map(order=>order.id===data.original_order.id?data.original_order:order));
+    logActivity({action:'Exchange Refund Completed',module:'Exchange Parcels',target_id:exchangeId,target_label:exchangeId,details:`Refund Rs. ${data.exchange.refund_amount} recorded against received money • Original ${data.exchange.original_order_number}`});
+    return data;
   };
 
   const importBulkOrders = async (
@@ -3562,6 +3593,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         stockHistory,
         purchaseOrders,
         waybillRecords,
+        exchangeInvoices,
+        refreshExchangeInvoices,
         returnRecords,
         findReturnOrderByWaybill,
         confirmReturn,
@@ -3637,6 +3670,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         placeOrder,
         importBulkOrders,
         createMissingItemReplacement,
+        createExchangeInvoice,
+        completeExchangeRefund,
         updateOrderStatus,
         cancelOrderDirect,
         updateOrderDeliveryDetails,

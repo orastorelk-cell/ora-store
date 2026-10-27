@@ -89,7 +89,7 @@ import dotenv from "dotenv";
 import crypto from "crypto";
 import fs from "fs";
 import { createClient } from "@supabase/supabase-js";
-import { cloudflareDataFetch, dataBucket, readDataTable } from "./worker/cloudflareData";
+import { cloudflareDataFetch, dataBucket, readDataTable, replaceDataTable } from "./worker/cloudflareData";
 import { markR2SheetSynced } from './worker/r2SheetSyncStatus';
 import { returnSheetsHandler, r2ReturnStorage, type ReturnStorage } from './worker/r2ReturnSheets';
 import { staffPurchasesHandler } from './worker/staffPurchases';
@@ -1668,6 +1668,77 @@ app.put('/api/admin/packing-expenses', requireStaffPermission('packing_expenses'
   } catch (e:any) {
     return res.status(500).json({ error:e?.message || 'Packing expenses could not be saved.' });
   }
+});
+
+// Exchange invoices are kept on their newly reserved courier waybill. This keeps
+// them outside normal order, stock-allocation, and invoice-queue processing.
+const exchangeWaybillRows = async () => {
+  if (dataBucket()) return await readDataTable(undefined,'courier_waybills');
+  const sb=getSupabaseAdmin();
+  if(!sb) throw new Error('Shared waybill storage is unavailable.');
+  const {data,error}=await sb.from('courier_waybills').select('*');
+  if(error) throw error;
+  return data||[];
+};
+app.get('/api/exchange-invoices',requireStaffPermission('exchange_parcels'),async(_req,res)=>{
+  try{
+    const records=(await exchangeWaybillRows()).filter((row:any)=>row.exchange_invoice).map((row:any)=>({...row.exchange_invoice,waybill_status:row.status}));
+    return res.json({invoices:records});
+  }catch(error:any){return res.status(503).json({error:error?.message||'Exchange records could not be loaded.'});}
+});
+app.post('/api/orders/:id/exchange-invoices',requireStaffPermission('exchange_parcels'),async(req,res)=>{
+  try{
+    const orderId=String(req.params.id||'').trim(),newWaybill=String(req.body?.waybill_number||'').trim();
+    if(!orderId||!newWaybill)return res.status(400).json({error:'An original order and an available new waybill are required.'});
+    const original=(await getOrderSnapshots()).find((order:any)=>String(order.id)===orderId);
+    if(!original)return res.status(404).json({error:'Original order was not found.'});
+    if(original.order_status!=='Delivered'||!String(original.waybill_number||'').trim())return res.status(409).json({error:'Exchange invoices can be created only from an order marked Delivered with its original waybill.'});
+    if(!Array.isArray(original.items)||!original.items.length)return res.status(409).json({error:'This delivered order has no saved item details.'});
+    if(!dataBucket())return res.status(503).json({error:'Exchange parcel creation requires the shared Cloudflare waybill pool. No waybill or invoice was changed.'});
+    const actor=(req as any).staffSessionUser as ServerStaffAccount|undefined;
+    const createdAt=new Date().toISOString();
+    const makeExchange=(rows:any[])=>{
+      const poolRow=rows.find((row:any)=>String(row.waybill_number||'').trim()===newWaybill);
+      if(!poolRow||poolRow.status!=='Available'||poolRow.permanently_retired)return {rows,result:{error:'The selected waybill is no longer available. Refresh the shared waybill pool.'}};
+      const highest=rows.reduce((max:number,row:any)=>{
+        const n=Number(String(row.exchange_invoice?.id||'').match(/^EX-(\d+)$/)?.[1]||0);return Math.max(max,n);
+      },0);
+      const id='EX-'+String(highest+1).padStart(6,'0');
+      const orderTotal=Math.max(0,Math.round(Number(original.total_amount||0)));
+      const deliveryFee=Math.min(orderTotal,Math.max(0,Math.round(Number(original.delivery_fee||0))));
+      const refundAmount=Math.max(0,orderTotal-deliveryFee);
+      const exchange={id,invoice_number:id,original_order_id:original.id,original_order_number:original.order_number,
+        original_waybill:String(original.waybill_number),new_waybill:newWaybill,courier_name:String(poolRow.courier_name||original.courier_name||'Fardar'),
+        customer_name:String(original.customer_name||''),phone:String(original.phone||''),whatsapp:String(original.whatsapp||original.phone||''),
+        address:String(original.address||''),city:String(original.city||''),district:String(original.district||''),items:original.items,
+        order_total:orderTotal,delivery_fee:deliveryFee,refund_amount:refundAmount,status:'Pending Refund',created_at:createdAt,
+        created_by:String(actor?.display_name||actor?.username||'Admin')};
+      const assigned={...poolRow,status:'Assigned',assigned_order_id:id,assigned_order_number:id,assigned_at:createdAt,exchange_invoice:exchange};
+      return {rows:rows.map((row:any)=>row===poolRow?assigned:row),result:{exchange,waybill:assigned}};
+    };
+    const outcome=await replaceDataTable<any>(undefined,'courier_waybills',makeExchange);
+    if(outcome?.error)return res.status(409).json({error:outcome.error});
+    if(!outcome?.exchange)return res.status(409).json({error:'Exchange invoice could not reserve the waybill.'});
+    return res.json({ok:true,exchange:outcome.exchange});
+  }catch(error:any){return res.status(error?.status||503).json({error:error?.message||'Exchange invoice could not be created.'});}
+});
+app.post('/api/exchange-invoices/:id/refund-complete',requireStaffPermission('exchange_parcels'),async(req,res)=>{
+  const exchangeId=String(req.params.id||'').trim();
+  try{
+    const rows=await exchangeWaybillRows();
+    const owner=rows.find((row:any)=>row.exchange_invoice?.id===exchangeId);
+    if(!owner)return res.status(404).json({error:'Exchange invoice was not found.'});
+    const exchange=owner.exchange_invoice;
+    const actor=(req as any).staffSessionUser as ServerStaffAccount|undefined;
+    const completed={...exchange,status:'Refund Complete',refund_completed_at:exchange.refund_completed_at||new Date().toISOString(),refund_completed_by:exchange.refund_completed_by||String(actor?.display_name||actor?.username||'Admin')};
+    await replaceDataTable<any>(undefined,'courier_waybills',current=>{
+      const row=current.find((candidate:any)=>candidate.exchange_invoice?.id===exchangeId);if(!row)return {rows:current,result:null};
+      const next={...row,exchange_invoice:completed};return {rows:current.map(candidate=>candidate===row?next:candidate),result:next};
+    });
+    const order=(await getOrderSnapshots()).find((candidate:any)=>candidate.id===exchange.original_order_id);
+    if(order&&order.order_status!=='Exchange Refund')await saveOrderSnapshot({...order,order_status:'Exchange Refund',payment_status:'Refunded',exchange_refund_invoice_id:exchangeId,exchange_refund_amount:exchange.refund_amount,exchange_refund_completed_at:completed.refund_completed_at});
+    return res.json({ok:true,exchange:completed,original_order:order?{...order,order_status:'Exchange Refund',payment_status:'Refunded'}:null});
+  }catch(error:any){return res.status(error?.status||503).json({error:error?.message||'Refund completion could not be saved.'});}
 });
 
 // -----------------------------------------------------------------------------

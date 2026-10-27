@@ -2,6 +2,7 @@
 import { jsPDF } from 'jspdf';
 import { Order, StoreSettings } from '../types';
 import { buildExactInvoiceSvg, svgToBrowserPngBytes } from './exactInvoiceTemplate';
+import { ExchangeInvoiceRecord } from '../types';
 
 export function validateInvoiceOrder(order: Order): string[] {
   const reasons:string[]=[];
@@ -177,6 +178,63 @@ export async function generateOrderInvoicePDF(order: Order, settings: StoreSetti
   }
 
   downloadPdfBlob(doc, `O-RA_Invoice_${order.invoice_number || order.order_number}.pdf`);
+}
+
+/** Print an exchange document without entering the normal stock/invoice queue. */
+export async function generateExchangeInvoicePDF(exchange: ExchangeInvoiceRecord, settings: StoreSettings = {} as StoreSettings) {
+  const order: Order = {
+    id: exchange.id,
+    order_number: exchange.id,
+    invoice_number: exchange.invoice_number,
+    customer_name: exchange.customer_name,
+    phone: exchange.phone,
+    whatsapp: exchange.whatsapp || exchange.phone,
+    address: exchange.address,
+    city: exchange.city,
+    district: exchange.district,
+    payment_method: 'COD',
+    payment_status: 'Pending',
+    order_status: 'Processing',
+    items: (exchange.items || []).map(item => ({ ...item, sku: String(item.sku || item.main_sku || '0'), unit_price: 0, subtotal: 0 })),
+    subtotal: 0,
+    delivery_fee: 0,
+    total_amount: 0,
+    is_advance_required: false,
+    advance_amount: 0,
+    advance_confirmed: false,
+    order_source: 'Manual Admin',
+    is_synced_google_sheets: false,
+    courier_name: exchange.courier_name,
+    waybill_number: exchange.new_waybill,
+    stock_status: 'Allocated',
+    stock_allocated: true,
+    invoice_locked: true,
+    created_at: exchange.created_at,
+  };
+
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a5', compress: true });
+  let svg = buildExactInvoiceSvg(order, settings, false, order.items, 0, 1);
+  svg = svg.replace('>INVOICE</text>', '>EXCHANGE INVOICE</text>');
+  const policy = svg.match(/<rect x="28" y="(\d+)" width="930" height="220" rx="14" fill="#fff" stroke="#111" stroke-width="1.5"\/>/);
+  if (policy) {
+    const y = Number(policy[1]);
+    const notice = [
+      policy[0],
+      `<text class="t heading" x="55" y="${y + 34}">EXCHANGE PARCEL / හුවමාරු පාර්සලය</text>`,
+      `<text class="si notice" x="55" y="${y + 68}" style="font-size:23px">මෙය හුවමාරු පාර්සලයකි. පාරිභෝගිකයා සතු භාණ්ඩය</text>`,
+      `<text class="si notice" x="55" y="${y + 98}" style="font-size:23px">ලබාගැනීමට කටයුතු කරන්න. භාණ්ඩය ලැබෙන තුරු වගකීම රයිඩර් සතුය.</text>`,
+      `<text class="t notice" x="55" y="${y + 140}" style="font-size:24px">If an issue arises, contact O-RA on +94 76 772 9424.</text>`,
+      `<text class="t heading" x="55" y="${y + 190}" style="font-size:30px">HOTLINE  +94 76 772 9424</text>`,
+    ].join('\n');
+    svg = svg.replace(policy[0], notice);
+    const cityLine = '<!-- Waybill: no redundant courier name -->';
+    svg = svg.replace(cityLine, `<text class="t label" x="650" y="393">Original Order</text><text class="t label" x="760" y="393">-</text><text class="t value" x="805" y="393">${escapeInvoiceSvgText(exchange.original_order_number)} / ${escapeInvoiceSvgText(exchange.original_waybill)}</text>\n${cityLine}`);
+  }
+  const png = await svgToBrowserPngBytes(svg);
+  const imageHeight = 148;
+  const imageWidth = imageHeight * (1536 / 1090);
+  doc.addImage(png, 'PNG', (210 - imageWidth) / 2, 0, imageWidth, imageHeight, undefined, 'FAST');
+  downloadPdfBlob(doc, `O-RA_Exchange_${exchange.id}_A5.pdf`);
 }
 
 

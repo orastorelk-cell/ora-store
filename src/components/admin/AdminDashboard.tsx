@@ -109,6 +109,7 @@ import { BannersPanel } from './BannersPanel';
 import { NotificationsPanel } from './NotificationsPanel';
 import { PackingExpensesPanel } from './PackingExpensesPanel';
 import { ReturnSheetsPanel } from './ReturnSheetsPanel';
+import { ExchangeParcelsPanel } from './ExchangeParcelsPanel';
 import { DuplicateOrdersPanel } from './DuplicateOrdersPanel';
 import { getCustomerMembership } from '../../lib/membership';
 import { slugifyCategory, suggestCategoryFields } from '../../lib/categoryAuto';
@@ -239,7 +240,7 @@ export const AdminDashboard: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<
     'order_stock_corrections' | 'order_item_edit' | 'facebook_missing' | 'duplicate_orders' | 'staff_purchases' |
-    'overview' | 'add_product' | 'combo_packs' | 'supplier_offer' | 'price_increase' | 'products' | 'categories' | 'banners' | 'notifications' | 'stock' | 'orders' | 'out_of_stock' | 'packing_expenses' | 'returns' | 'lead_import' | 'confirm_upload' | 'invoices' | 'packing' | 'invoice_design' | 'delivery' | 'dispatch' | 'cod_payments' | 'bank_transfer_check' | 'assistant_chats' | 'complaints' | 'reports' | 'profit_report' | 'success_rate' | 'reviews' | 'product_requests' | 'customers' | 'sheets' | 'activity' | 'branding' | 'website_info' | 'settings' | 'user_access' | 'deploy'
+    'overview' | 'add_product' | 'combo_packs' | 'supplier_offer' | 'price_increase' | 'products' | 'categories' | 'banners' | 'notifications' | 'stock' | 'orders' | 'exchange_parcels' | 'out_of_stock' | 'packing_expenses' | 'returns' | 'lead_import' | 'confirm_upload' | 'invoices' | 'packing' | 'invoice_design' | 'delivery' | 'dispatch' | 'cod_payments' | 'bank_transfer_check' | 'assistant_chats' | 'complaints' | 'reports' | 'profit_report' | 'success_rate' | 'reviews' | 'product_requests' | 'customers' | 'sheets' | 'activity' | 'branding' | 'website_info' | 'settings' | 'user_access' | 'deploy'
   >('overview');
   const [comboEditProductId, setComboEditProductId] = useState<string | undefined>(undefined);
   const [packingSearch, setPackingSearch] = useState('');
@@ -3118,10 +3119,10 @@ Suitable For:
     staff: 'Custom Access Staff',
   };
 
-  const allPermissionIds: AdminPermission[] = ['overview','add_product','combo_packs','supplier_offer','price_increase','products','orders','lead_import','confirm_upload','packing','delivery','dispatch','returns','cod_payments','bank_transfer_check','stock','out_of_stock','packing_expenses','categories','banners','reviews','product_requests','assistant_chats','complaints','notifications','customers','invoices','invoice_design','reports','profit_report','success_rate','sheets','activity','branding','website_info','settings','user_access','deploy'];
+  const allPermissionIds: AdminPermission[] = ['overview','add_product','combo_packs','supplier_offer','price_increase','products','orders','exchange_parcels','lead_import','confirm_upload','packing','delivery','dispatch','returns','cod_payments','bank_transfer_check','stock','out_of_stock','packing_expenses','categories','banners','reviews','product_requests','assistant_chats','complaints','notifications','customers','invoices','invoice_design','reports','profit_report','success_rate','sheets','activity','branding','website_info','settings','user_access','deploy'];
   const permissionLabels: Record<AdminPermission, string> = {
     profit_report: 'Profit Report',
-    overview: 'Dashboard', add_product:'Add Product', combo_packs:'Combo Packs', supplier_offer:'Supplier Price / Offer', price_increase:'Price Increase', products: 'Products', stock: 'Inventory & Stock', orders: 'Orders', out_of_stock: 'Out of Stock Needs', packing_expenses: 'Packing Materials Expenses', returns: 'Returns Verification', lead_import: 'FB / TikTok Lead Import', confirm_upload: 'Confirm / Cancel Upload', invoices: 'Invoices', packing: 'Packing Invoice Downloads', invoice_design: 'Invoice Design', delivery: 'Delivery & Waybills', dispatch: 'Dispatch Scan', cod_payments: 'COD Payments', bank_transfer_check: 'Bank Transfer Check', assistant_chats: 'Assistant Chats', complaints: 'Complaints', notifications:'Customer Notifications', reports: 'Reports', success_rate: 'Success Rate', reviews: 'Product Reviews', product_requests: 'Product Requests', sheets: 'Google Sheets Sync', customers: 'Customers', categories: 'Categories', banners:'Banners', activity: 'Activity Log', branding: 'Branding & Logo Studio', website_info: 'Website Info & Policies', settings: 'Store Settings', deploy: 'Deployment Guide', user_access: 'System Access'
+    overview: 'Dashboard', add_product:'Add Product', combo_packs:'Combo Packs', supplier_offer:'Supplier Price / Offer', price_increase:'Price Increase', products: 'Products', stock: 'Inventory & Stock', orders: 'Orders', exchange_parcels:'Exchange Parcels', out_of_stock: 'Out of Stock Needs', packing_expenses: 'Packing Materials Expenses', returns: 'Returns Verification', lead_import: 'FB / TikTok Lead Import', confirm_upload: 'Confirm / Cancel Upload', invoices: 'Invoices', packing: 'Packing Invoice Downloads', invoice_design: 'Invoice Design', delivery: 'Delivery & Waybills', dispatch: 'Dispatch Scan', cod_payments: 'COD Payments', bank_transfer_check: 'Bank Transfer Check', assistant_chats: 'Assistant Chats', complaints: 'Complaints', notifications:'Customer Notifications', reports: 'Reports', success_rate: 'Success Rate', reviews: 'Product Reviews', product_requests: 'Product Requests', sheets: 'Google Sheets Sync', customers: 'Customers', categories: 'Categories', banners:'Banners', activity: 'Activity Log', branding: 'Branding & Logo Studio', website_info: 'Website Info & Policies', settings: 'Store Settings', deploy: 'Deployment Guide', user_access: 'System Access'
   };
   type StaffAccessLevel = 'none' | 'view' | 'edit';
   const currentRole = adminUser?.role || 'staff';
@@ -3190,6 +3191,9 @@ Suitable For:
       { id:'returns', label:'Return Sheets', icon:RotateCcw },
       { id:'cod_payments', label:`COD Payments (${orders.filter((o)=>o.cod_payment_received).length})`, icon:WalletCards },
       { id:'bank_transfer_check', label:`Bank Transfer Check (${orders.filter((o)=>o.payment_method==='Bank Payment' && o.payment_verification_status!=='Approved' && o.payment_verification_status!=='Rejected').length})`, icon:ShieldCheck },
+    ]},
+    { id:'EXCHANGE', label:'EXCHANGE PARCELS', items:[
+      { id:'exchange_parcels', label:'Exchange Parcels', icon:PackageCheck },
     ]},
     { id:'STOCK', label:'STOCK', items:[
       { id:'stock', label:`Inventory & Stock (${lowStockProducts.length} Alert)`, icon:Database },
@@ -5295,6 +5299,8 @@ Suitable For:
           </p>
         </div>
       )}
+
+      {activeTab === 'exchange_parcels' && <ExchangeParcelsPanel />}
 
       {activeTab === 'packing_expenses' && (
         <PackingExpensesPanel
