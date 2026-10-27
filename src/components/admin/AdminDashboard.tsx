@@ -100,6 +100,7 @@ import { CodPaymentsPanel } from './CodPaymentsPanel';
 import { BankTransferCheckPanel } from './BankTransferCheckPanel';
 import { ReportsPanel } from './ReportsPanel';
 import { ProfitReportPanel } from './ProfitReportPanel';
+import { ProfitReportErrorBoundary } from './ProfitReportErrorBoundary';
 import { SuccessRatePanel } from './SuccessRatePanel';
 import { ReviewModerationPanel } from './ReviewModerationPanel';
 import { ProductRequestsPanel } from './ProductRequestsPanel';
@@ -5717,7 +5718,7 @@ Suitable For:
 
       {activeTab === 'reports' && <ReportsPanel />}
 
-      {activeTab === 'profit_report' && canAccessTab('profit_report') && <ProfitReportPanel />}
+      {activeTab === 'profit_report' && canAccessTab('profit_report') && <ProfitReportErrorBoundary><ProfitReportPanel /></ProfitReportErrorBoundary>}
 
       {activeTab === 'success_rate' && <SuccessRatePanel orders={orders} products={products} />}
 
