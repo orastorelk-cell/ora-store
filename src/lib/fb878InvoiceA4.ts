@@ -111,8 +111,9 @@ export function correctedFB878PrintOrder(order:Order,snapshot:Snapshot):Order {
   const wrapText=String(snapshot.gift_wrap||'').toLowerCase().trim();
   const wrapped=['yes','true','1','on','add wrap','gift wrap'].includes(wrapText);
   const wrap=wrapped?number(snapshot.wrapping_cost):0;
-  const normal=number(snapshot.normal_total);
-  const computed=Math.round((Math.max(normal,subtotal)-discount+delivery+wrap)*100)/100;
+  // Subtotal here is the actual confirmed item-line subtotal. Reference/regular
+  // totals can include already-discounted supplier offers and must not replace it.
+  const computed=Math.round((subtotal-discount+delivery+wrap)*100)/100;
   // The confirmed CSV's Final Total is authoritative, but the component
   // breakdown should agree. Otherwise don't print an internally wrong bill.
   if(Math.abs(computed-1250)>1)
