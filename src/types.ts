@@ -765,6 +765,7 @@ export interface ExchangeInvoiceRecord {
   whatsapp?: string;
   address: string;
   city: string;
+  fardar_city?: string;
   district?: string;
   items: Order['items'];
   order_total: number;

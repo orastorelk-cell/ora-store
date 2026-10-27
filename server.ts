@@ -1710,7 +1710,7 @@ app.post('/api/orders/:id/exchange-invoices',requireStaffPermission('exchange_pa
       const exchange={id,invoice_number:id,original_order_id:original.id,original_order_number:original.order_number,
         original_waybill:String(original.waybill_number),new_waybill:newWaybill,courier_name:String(poolRow.courier_name||original.courier_name||'Fardar'),
         customer_name:String(original.customer_name||''),phone:String(original.phone||''),whatsapp:String(original.whatsapp||original.phone||''),
-        address:String(original.address||''),city:String(original.city||''),district:String(original.district||''),items:original.items,
+        address:String(original.address||''),city:String(original.city||''),fardar_city:String(original.fardar_city||''),district:String(original.district||''),items:original.items,
         order_total:orderTotal,delivery_fee:deliveryFee,refund_amount:refundAmount,status:'Pending Refund',created_at:createdAt,
         created_by:String(actor?.display_name||actor?.username||'Admin')};
       const assigned={...poolRow,status:'Assigned',assigned_order_id:id,assigned_order_number:id,assigned_at:createdAt,exchange_invoice:exchange};
