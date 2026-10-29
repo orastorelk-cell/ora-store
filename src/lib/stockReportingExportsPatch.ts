@@ -54,13 +54,16 @@ export const stockReportingExportsPatch = () => ({
       const to = [
         '      const movement=stockMovementBySku.get(row.sku) || {totalPacked:0,todayPacked:0,todayPurchased:0};',
         '      const adjustmentNet=stockReportAdjustmentNetForSku(row.sku);',
-        '      const reportAvailable=purchases.length ? totalPurchased+adjustmentNet-movement.totalPacked : row.available;',
+        '      // Historical purchase receipts may exist only in a different browser.',
+        '      // Never subtract lifetime packed orders from incomplete local history.',
+        '      const reportAvailable=row.available;',
         '      const currentPhysical=reportAvailable + row.packing;',
-        "      const stockHealth=reportAvailable<0?'SHORTAGE':reportAvailable===0?'OUT OF STOCK':reportAvailable<=5?'LOW STOCK':'STOCK OK';",
+        "      const stockHealth=reportAvailable<=0?'OUT OF STOCK':reportAvailable<=5?'LOW STOCK':'STOCK OK';",
         '      return {',
         '        ...row,',
         '        available:reportAvailable,',
-        '        shortage:Math.max(0,-reportAvailable),',
+        '        shortage:0,',
+        '        historyIncomplete:movement.totalPacked>totalPurchased+Math.max(0,adjustmentNet),',
       ].join('\n');
       if (text.includes(from)) text = text.replace(from, to);
     }
@@ -174,6 +177,25 @@ export const stockReportingExportsPatch = () => ({
         ].join('\n');
         text = text.replace(marker, controls);
       }
+    }
+
+    // A missing old Purchasing ledger should be visible as an audit warning,
+    // never represented as genuine negative physical inventory.
+    if (!text.includes('INCOMPLETE PURCHASE HISTORY • RECONCILE BEFORE DISPATCH')) {
+      const header = [
+        '              <p className="mt-2 text-[10px] text-neutral-500">',
+        "                Showing {stockItemReportRows.length} of {stockByItemCodeRows.length} item code{stockByItemCodeRows.length===1?'':'s'}",
+        '              </p>',
+      ].join('\n');
+      const notice = [
+        header,
+        '              {stockItemReportRows.some(row=>row.historyIncomplete) && (',
+        '                <p role="alert" className="mt-3 rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-200">',
+        '                  INCOMPLETE PURCHASE HISTORY • RECONCILE BEFORE DISPATCH — Historical packed quantities exceed the purchase receipts available in this browser. The Stock Report now displays the shared saved stock balance instead of a calculated negative shortage. Historical stock cannot be verified without a trusted inventory count or backup.',
+        '                </p>',
+        '              )}',
+      ].join('\n');
+      if (text.includes(header)) text = text.replace(header,notice);
     }
 
     // Negative balance visual cue in the stock table/report.
