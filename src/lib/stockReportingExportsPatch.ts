@@ -54,13 +54,14 @@ export const stockReportingExportsPatch = () => ({
       const to = [
         '      const movement=stockMovementBySku.get(row.sku) || {totalPacked:0,todayPacked:0,todayPurchased:0};',
         '      const adjustmentNet=stockReportAdjustmentNetForSku(row.sku);',
-        '      const reportAvailable=purchases.length ? totalPurchased+adjustmentNet-movement.totalPacked : row.available;',
+        '      const reportAvailable=row.available;',
         '      const currentPhysical=reportAvailable + row.packing;',
-        "      const stockHealth=reportAvailable<0?'SHORTAGE':reportAvailable===0?'OUT OF STOCK':reportAvailable<=5?'LOW STOCK':'STOCK OK';",
+        "      const stockHealth=reportAvailable<=0?'OUT OF STOCK':reportAvailable<=5?'LOW STOCK':'STOCK OK';",
         '      return {',
         '        ...row,',
         '        available:reportAvailable,',
-        '        shortage:Math.max(0,-reportAvailable),',
+        '        shortage:0,',
+        '        historyIncomplete:movement.totalPacked>totalPurchased+Math.max(0,adjustmentNet),',
       ].join('\n');
       if (text.includes(from)) text = text.replace(from, to);
     }
