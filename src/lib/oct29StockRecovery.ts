@@ -92,3 +92,24 @@ export const planOct29StockRecovery=(proofs:PurchaseProof[],products:any[],order
   }
   return result;
 };
+
+/** Apply every variant under its parent atomically, without changing untouched SKUs. */
+export const applyOct29StockRecoveryLines=(products:any[],lines:StockRecoveryLine[])=>{
+  const byProduct=new Map<string,StockRecoveryLine[]>();
+  for(const item of lines)byProduct.set(item.product_id,[...(byProduct.get(item.product_id)||[]),item]);
+  return products.map(product=>{
+    const updates=byProduct.get(String(product.id));
+    if(!updates?.length)return product;
+    if(updates.some(line=>Boolean(line.variant_id))){
+      if(updates.some(line=>!line.variant_id))err('Cannot mix parent and variant recovery for one product.');
+      const variants=(product.variants||[]).map((v:any)=>{
+        const line=updates.find(entry=>entry.variant_id===String(v.id));
+        return line?{...v,stock_quantity:line.expected,status:line.expected>0?'Active':'Out of Stock'}:v;
+      });
+      const total=variants.reduce((sum:number,v:any)=>sum+Number(v.stock_quantity||0),0);
+      return {...product,variants,stock_quantity:total,status:total>0?'Active':'Out of Stock'};
+    }
+    if(updates.length!==1)err('Duplicate base product recovery.');
+    return {...product,stock_quantity:updates[0].expected,status:updates[0].expected>0?'Active':'Out of Stock'};
+  });
+};
