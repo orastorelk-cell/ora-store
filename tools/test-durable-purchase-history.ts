@@ -19,6 +19,8 @@ assert(worker.includes("const credited=creditReturnStock(target,row.quantity_add
 assert(worker.includes("key:receiptKey,payload:receipt"));
 assert(worker.includes('stock_changed:false'),'old history migration must NOT credit stock a second time');
 assert(worker.includes('sameLine(receipt,line)'),'repeated old bills must be rejected');
+assert(worker.includes('if(parsed.some(line=>'), 'one duplicate variant plus one new variant must block the ENTIRE bill');
+assert(!worker.includes('if(parsed.every(line=>'), 'partial duplicate bill must never credit repeated stock again');
 assert(route.includes("pathname==='/api/admin/inventory-history'"));
 assert(context.includes("if(!inventoryHistoryReady)throw new Error"));
 assert(context.includes("const commitInventoryPurchaseBatch=async("));
