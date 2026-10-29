@@ -114,6 +114,7 @@ export const waybillAutoAssignmentServerGuardPatch = () => ({
         const wasWaiting=Boolean(o.stock_waiting_since) ||
           Boolean(o.call_center_updated_at && Date.now()-new Date(o.call_center_updated_at).getTime()>10*60*1000);
         const updated={...o,
+          ...(newlyAllocated?{items:normalizeOrderMissingStockVariants(o,products).items}:{}),
           ...(newlyWaiting?{stock_waiting_since:o.stock_waiting_since||now}:{}),
           ...(newlyAllocated?{stock_allocated:true,stock_status:'Allocated' as const,stock_allocated_at:now,stock_allocated_by:'System FIFO Allocator',
             ...(wasWaiting&&!o.invoice_pack_batch_id?{invoice_pack_batch_id:restockBatchId}:{})}:{})} as Order;
