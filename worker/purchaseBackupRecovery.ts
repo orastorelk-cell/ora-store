@@ -63,12 +63,17 @@ export const purchaseBackupRecoveryHandler=async(request:Request,env:unknown,use
       const start=Math.min(168,Math.max(0,Number(input.searchParams.get('cursor')||0)));
       if(!Number.isInteger(start))return reply({error:'Invalid backup cursor.'},400);
       const slots=Array.from({length:Math.max(0,Math.min(12,168-start))},(_,i)=>start+i);
+      const [current,durable]=await Promise.all([readDataTable(env,'purchase_orders'),readDataTable(env,'admin_data_store')]);
+      const journals=durable.filter(row=>String(row.key||'').startsWith('inventory-purchase-v1:')&&row.payload?.phase==='complete')
+        .flatMap(row=>row.payload.purchases||[]);
+      const effective=[...current,...journals];
       const found=await Promise.all(slots.map(async slot=>{
         try{
           const rows=await purchaseBackupRows(env,slot);
           if(!rows)return null;
-          const valid=rows.filter(validPurchase);
-          return {slot,count:valid.length,oldest:minDate(valid),newest:maxDate(valid)};
+          const valid=rows.filter(validPurchase),plan=candidates(valid,effective);
+          return {slot,count:valid.length,oldest:minDate(valid),newest:maxDate(valid),
+            missing_count:plan.additions.length,conflict_count:plan.conflicts.length};
         }catch(error:any){return {slot,error:String(error?.message||error)};}
       }));
       return reply({ok:true,slots:found.filter(Boolean),cursor:start,next_cursor:start+slots.length<168?start+slots.length:null});
@@ -77,8 +82,10 @@ export const purchaseBackupRecoveryHandler=async(request:Request,env:unknown,use
     const slot=checkedSlot(body?.slot);
     const backup=await purchaseBackupRows(env,slot);
     if(!backup)return reply({error:'No stored R2 Purchasing History backup exists in this slot. Nothing was changed.'},404);
-    const live=await readDataTable(env,'purchase_orders');
-    const plan=candidates(backup,live);
+    const [live,admin]=await Promise.all([readDataTable(env,'purchase_orders'),readDataTable(env,'admin_data_store')]);
+    const journal=admin.filter(row=>String(row.key||'').startsWith('inventory-purchase-v1:')&&row.payload?.phase==='complete')
+      .flatMap(row=>row.payload.purchases||[]);
+    const plan=candidates(backup,[...live,...journal]);
     const snapshot=()=>({
       slot,backup_count:backup.filter(validPurchase).length,live_count:live.length,
       missing_count:plan.additions.length,duplicate_count:plan.duplicates.length,
@@ -92,7 +99,7 @@ export const purchaseBackupRecoveryHandler=async(request:Request,env:unknown,use
        body?.expected_backup_count!==backup.filter(validPurchase).length)
       return reply({error:'Backup or purchase history changed after preview. Preview again.'},409);
     const saved=await replaceDataTable(env,'purchase_orders',existing=>{
-      const latest=candidates(backup,existing as Row[]);
+      const latest=candidates(backup,[...existing as Row[],...journal]);
       if(latest.conflicts.length)throw Object.assign(new Error('Purchasing conflicts detected while restoring. No records were saved.'),{status:409});
       // This is a receipt audit migration only. Never credit stock, allocate
       // waybills, change an order or generate an invoice from a backup.
