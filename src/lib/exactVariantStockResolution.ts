@@ -49,3 +49,17 @@ export const normalizeOrderMissingStockVariants=<T extends {items?:any[]}>(order
   });
   return changed?{...order,items} as T:order;
 };
+
+/** Protect existing explicit variant IDs from a conflicting saved colour SKU. */
+export const hasConflictingVariantOrderItems=(order:{items?:any[]},products:ProductLike[])=>{
+  const byId=new Map(products.map(p=>[String(p.id),p] as const));
+  const contradicts=(item:any)=>{
+    if(!item?.variant_id||!item?.sku)return false;
+    const product=byId.get(String(item.product_id||''));
+    if(!product?.variants?.length)return false;
+    const matchingSku=product.variants.filter(v=>key(v.sku)===key(item.sku));
+    return matchingSku.length===1&&String(matchingSku[0].id)!==String(item.variant_id);
+  };
+  return (order.items||[]).some(item=>contradicts(item)||
+    (item.bundle_components||[]).some(contradicts));
+};
