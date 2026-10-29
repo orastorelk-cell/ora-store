@@ -8403,21 +8403,19 @@ Suitable For:
                 });
 
                 const billImageUrl = purchaseBillFile ? await uploadPublicImage(purchaseBillFile, 'purchase-bill') : '';
-                const firstPoNumber=purchaseOrders.length+1;
-                validated.forEach((line,index)=>{
-                  addPurchaseOrder({
-                    supplier_name:purchaseForm.supplier_name,
-                    product_id:line.product.id,
-                    variant_id:line.variant?.id,
-                    quantity_added:line.quantity_added,
-                    unit_buying_price:line.unit_buying_price,
-                    invoice_ref:purchaseForm.invoice_ref,
-                    bill_image_url:billImageUrl || undefined,
-                    notes:purchaseForm.notes,
-                    performed_by:adminUser?.name || 'Admin',
-                    po_number:`PO-${new Date().getFullYear()}-${String(firstPoNumber+index).padStart(4,'0')}`,
-                  });
-                });
+                // Commit one supplier's complete bill once, server-first.
+                // A retry must never count the same purchase twice.
+                await addPurchaseOrdersBatch(validated.map(line=>({
+                  supplier_name:purchaseForm.supplier_name,
+                  product_id:line.product.id,
+                  variant_id:line.variant?.id,
+                  quantity_added:line.quantity_added,
+                  unit_buying_price:line.unit_buying_price,
+                  invoice_ref:purchaseForm.invoice_ref,
+                  bill_image_url:billImageUrl || undefined,
+                  notes:purchaseForm.notes,
+                  performed_by:adminUser?.name || 'Admin',
+                })));
 
                 setPurchaseBillFile(null);
                 setPurchaseLines([]);
