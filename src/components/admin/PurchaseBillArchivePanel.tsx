@@ -79,7 +79,7 @@ export const PurchaseBillArchivePanel=()=>{
       const variant=product?.variants?.find(item=>item.id===line.variant_id);
       return {line,index,product,variant};
     });
-    if(selected.some(item=>!item.product||item.product.variants?.length&&!item.variant||
+    if(selected.some(item=>!item.product||item.product.variants?.length&&!item.variant&&item.line.variant_id!=='__variant_split_unknown__'||
       !Number.isSafeInteger(item.line.quantity)||item.line.quantity<=0||
       !Number.isFinite(item.line.unit_buying_price)||item.line.unit_buying_price<0))
       return setSaveMessage('Search for an item code, choose the exact item/variant, then enter a valid quantity and buying cost for every line.');
@@ -100,7 +100,7 @@ export const PurchaseBillArchivePanel=()=>{
           quantity_added:line.quantity,unit_buying_price:line.unit_buying_price,
           total_cost:line.quantity*line.unit_buying_price,invoice_ref:invoiceRef.trim()||undefined,
           bill_image_url:entryPhoto.url,
-          notes:[notes.trim(),'Recovered from archived bill photo: '+entryPhoto.key].filter(Boolean).join(' • '),
+          notes:[notes.trim(),line.variant_id==='__variant_split_unknown__'?'Variant quantities were not split on the bill; saved as combined product quantity.':'','Recovered from archived bill photo: '+entryPhoto.key].filter(Boolean).join(' • '),
           performed_by:'Historical bill recovery',created_at:createdAt
         };
       });
@@ -128,7 +128,7 @@ export const PurchaseBillArchivePanel=()=>{
     <h3 className="text-sm font-bold text-sky-200">Original Purchase Bill Photo Archive</h3>
     <p className="mt-1 text-xs text-neutral-400">
       Open a bill, search by Item Code or name, and save verified purchase lines to history only.
-      Current stock and product buying prices are not changed.
+      Current stock and product buying prices are not changed. If the bill does not split variant quantities, save the combined item total without assigning guessed quantities.
     </p>
     <div className="mt-3 flex flex-wrap items-center gap-3">
       <button type="button" disabled={busy} onClick={()=>void scan()}
@@ -169,7 +169,7 @@ export const PurchaseBillArchivePanel=()=>{
       Load More Original Bill Photos
     </button>}
     {checked&&photos.length>0&&<p className="mt-3 text-xs text-amber-200">
-      Check supplier, printed date, item code/variant, quantity and unit cost on each bill before saving.
+      Check supplier, printed date, item code/variant, quantity and unit cost on each bill before saving. If Pink/Grey are known but their quantities are not, record the bill's combined total without guessing the split.
       Saved bills disappear from the review list and can be shown again with the saved bills filter.
     </p>}
     {entryPhoto&&<div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-3 sm:p-6">
@@ -237,7 +237,8 @@ export const PurchaseBillArchivePanel=()=>{
                   {variants.length>0&&<label className="text-[11px] font-bold">Exact variant
                     <select value={line.variant_id} onChange={e=>updateLine(line.key,{variant_id:e.target.value})}
                       className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-900 px-2 py-2 text-xs">
-                      <option value="">Select variant</option>
+                      <option value="">Select exact variant</option>
+                      <option value="__variant_split_unknown__">Variants known, quantity split unknown — save total only</option>
                       {variants.map(variant=><option key={variant.id} value={variant.id}>{variant.sku+' — '+variant.option_value}</option>)}
                     </select>
                   </label>}
