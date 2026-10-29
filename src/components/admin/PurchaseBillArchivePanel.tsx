@@ -123,7 +123,7 @@ export const PurchaseBillArchivePanel=()=>{
     finally{setSaving(false);}
   };
   const savedCount=photos.filter(photo=>savedPhotoUrls.has(photo.url)).length;
-  const visiblePhotos=photos.filter(photo=>showSaved||!savedPhotoUrls.has(photo.url));
+  const visiblePhotos=photos.filter(photo=>showSaved?savedPhotoUrls.has(photo.url):!savedPhotoUrls.has(photo.url));
   return <section className="rounded-2xl border border-sky-500/40 bg-neutral-900 p-4 text-neutral-200">
     <h3 className="text-sm font-bold text-sky-200">Original Purchase Bill Photo Archive</h3>
     <p className="mt-1 text-xs text-neutral-400">
@@ -217,6 +217,7 @@ export const PurchaseBillArchivePanel=()=>{
                       value={searchText}
                       placeholder="Type Item Code or Item Name..."
                       onFocus={()=>setActiveSearchKey(line.key)}
+                      onBlur={()=>setActiveSearchKey(null)}
                       onChange={e=>{
                         const value=e.target.value;
                         setItemQueries(previous=>({...previous,[line.key]:value}));
@@ -226,6 +227,7 @@ export const PurchaseBillArchivePanel=()=>{
                       className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-xs" />
                     {activeSearchKey===line.key&&<div role="listbox" className="absolute z-20 mt-1 max-h-52 w-full overflow-y-auto rounded-lg border border-neutral-700 bg-neutral-950 shadow-xl">
                       {matches.length?matches.map(item=><button key={item.id} type="button" role="option"
+                        onMouseDown={event=>event.preventDefault()}
                         onClick={()=>chooseProduct(line,item)}
                         className="block w-full border-b border-neutral-800 px-3 py-2 text-left text-xs hover:bg-neutral-800">
                         <b className="text-emerald-200">{item.sku}</b> — {item.name_en}
