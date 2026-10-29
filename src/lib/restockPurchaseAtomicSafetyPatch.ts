@@ -31,7 +31,7 @@ export const restockPurchaseAtomicSafetyPatch = () => ({
     notes?: string;
     performed_by?: string;
     po_number?: string;
-  }>) => void;
+  }>) => Promise<void>;
 `;
         text = text.replace(settingsTypeMarker, batchType + settingsTypeMarker);
       }
@@ -44,84 +44,11 @@ export const restockPurchaseAtomicSafetyPatch = () => ({
         const categoryImplementationAt = text.indexOf(categoryImplementationMarker);
         if (categoryImplementationAt < 0) throw new Error('[O-RA atomic purchase] purchase implementation insertion marker not found');
         const batchFunction = `
-  const addPurchaseOrdersBatch=(rows:Array<{supplier_name:string;product_id:string;variant_id?:string;quantity_added:number;unit_buying_price:number;invoice_ref?:string;bill_image_url?:string;notes?:string;performed_by?:string;po_number?:string;}>)=>{
-    if(!rows.length)return;
-
-    // Build the complete purchase against a private inventory clone first. If any
-    // line is invalid, throw BEFORE React/localStorage/shared-catalog state changes.
-    const workingProducts=cloneInventoryProducts(products);
-    const productMap=new Map(workingProducts.map(product=>[product.id,product] as [string,Product]));
-    const purchases:PurchaseOrder[]=[];
-    const logs:StockHistory[]=[];
-    const basePoNumber=purchaseOrders.length+1;
-    const year=new Date().getFullYear();
-
-    rows.forEach((poData,rowIndex)=>{
-      const product=productMap.get(poData.product_id);
-      if(!product)throw new Error('Selected product was not found.');
-      const quantity=Math.floor(Number(poData.quantity_added||0));
-      if(!Number.isFinite(quantity)||quantity<=0)throw new Error('Purchase quantity must be greater than zero.');
-      const unitCost=Number(poData.unit_buying_price);
-      if(!Number.isFinite(unitCost)||unitCost<0)throw new Error('Purchase buying price is invalid.');
-      if(normalizedProductType(product)==='bundle')throw new Error('Add purchases to component products, not the bundle.');
-      const variant=poData.variant_id?variantById(product,poData.variant_id):undefined;
-      if(normalizedProductType(product)==='variant'&&!variant)throw new Error('Select the exact variant/color for this purchase.');
-
-      const now=new Date().toISOString();
-      const before=variant?Number(variant.stock_quantity||0):Number(product.stock_quantity||0);
-      const credit=creditReturnStock(variant||product,quantity);
-      const after=credit.stock_quantity;
-      const poNumber=String(poData.po_number||'').trim()||('PO-'+year+'-'+String(basePoNumber+rowIndex).padStart(4,'0'));
-
-      purchases.push({
-        id:'po-'+Date.now()+'-'+rowIndex+'-'+Math.random().toString(36).slice(2,7),
-        po_number:poNumber,
-        supplier_name:String(poData.supplier_name||'').trim(),
-        product_id:product.id,
-        product_name:product.name_en,
-        sku:variant?.sku||product.sku,
-        variant_id:variant?.id,
-        variant_name:variant?.option_value,
-        variant_sku:variant?.sku,
-        quantity_added:quantity,
-        unit_buying_price:unitCost,
-        total_cost:quantity*unitCost,
-        invoice_ref:String(poData.invoice_ref||'').trim()||undefined,
-        bill_image_url:String(poData.bill_image_url||'').trim()||undefined,
-        notes:String(poData.notes||'').trim()||undefined,
-        performed_by:poData.performed_by||adminUser?.name||'Admin',
-        created_at:now,
-      });
-
-      if(variant){
-        product.variants=(product.variants||[]).map(current=>current.id===variant.id?{...current,stock_quantity:after,return_stock_debt:credit.return_stock_debt,status:(after>0?'Active':'Out of Stock') as Product['status']}:current);
-        product.stock_quantity=(product.variants||[]).reduce((sum,current)=>sum+Number(current.stock_quantity||0),0);
-        product.status=product.stock_quantity>0?'Active':'Out of Stock';
-      }else{
-        product.stock_quantity=after;
-        product.return_stock_debt=credit.return_stock_debt;
-        product.status=after>0?'Active':'Out of Stock';
-      }
-
-      logs.push({
-        id:'stk-purchase-batch-'+Date.now()+'-'+rowIndex+'-'+Math.random().toString(36).slice(2,7),
-        product_id:product.id,
-        product_name:product.name_en+(variant?' - '+variant.option_value:''),
-        change_type:'Purchase Inflow',
-        quantity,
-        previous_stock:before,
-        new_stock:after,
-        reason:poNumber+' • '+String(poData.supplier_name||'').trim(),
-        performed_by:poData.performed_by||adminUser?.name||'Admin',
-        created_at:now,
-      });
-    });
-
-    // Exactly three React updates for the whole day: inventory, purchase history,
-    // and stock history. FIFO therefore evaluates the final combined stock once.
-    setProducts(Array.from(productMap.values()));
-    setPurchaseOrders(prev=>[...[...purchases].reverse(),...prev]);
-    setStockHistory(prev=>[...[...logs].reverse(),...prev]);
+  // Daily multi-shop purchase is one idempotent server transaction.
+  // Never credit inventory in local React state before the shared R2
+  // purchase receipt and catalog mutation have both been committed.
+  const addPurchaseOrdersBatch=async(rows:Array<{supplier_name:string;product_id:string;variant_id?:string;quantity_added:number;unit_buying_price:number;invoice_ref?:string;bill_image_url?:string;notes?:string;performed_by?:string;po_number?:string;}>)=>{
+    await commitInventoryPurchaseBatch(rows);
   };
 `;
         text = text.slice(0, categoryImplementationAt) + batchFunction + text.slice(categoryImplementationAt);
@@ -174,7 +101,7 @@ export const restockPurchaseAtomicSafetyPatch = () => ({
           po_number: poNumber,
         };
       }));
-      addPurchaseOrdersBatch(dailyBatchRows);`;
+      await addPurchaseOrdersBatch(dailyBatchRows);`;
       if (text.includes(oldMutation)) text = text.replace(oldMutation, atomicMutation);
       else if (!text.includes('addPurchaseOrdersBatch(dailyBatchRows);')) throw new Error('[O-RA atomic purchase] daily purchase mutation marker not found');
 
