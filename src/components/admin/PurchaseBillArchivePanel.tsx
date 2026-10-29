@@ -3,7 +3,7 @@ import {useStore} from '../../context/StoreContext';
 import {staffJsonRequest} from '../../lib/staffRequest';
 import type {Product} from '../../types';
 
-type Photo={key:string;url:string;size:number;uploaded_at:string|null};
+type Photo={key:string;url:string;size:number;uploaded_at:string|null;review_status:'pending'|'already_entered'};
 type Line={key:string;product_id:string;variant_id:string;quantity:number;unit_buying_price:number};
 const endpoint='/api/admin/purchase-bill-archive';
 const historyEndpoint='/api/admin/inventory-history';
@@ -23,9 +23,11 @@ export const PurchaseBillArchivePanel=()=>{
   const [photos,setPhotos]=useState<Photo[]>([]);
   const [savedPhotoUrls,setSavedPhotoUrls]=useState<Set<string>>(new Set());
   const [showSaved,setShowSaved]=useState(false);
+  const [reviewFilter,setReviewFilter]=useState<'pending'|'already_entered'|'all'>('pending');
   const [cursor,setCursor]=useState<string|null>(null);
   const [checked,setChecked]=useState(false);
   const [busy,setBusy]=useState(false);
+  const [savingReviewKey,setSavingReviewKey]=useState('');
   const [message,setMessage]=useState('');
   const [entryPhoto,setEntryPhoto]=useState<Photo|null>(null);
   const [purchaseDate,setPurchaseDate]=useState('');
@@ -57,6 +59,20 @@ export const PurchaseBillArchivePanel=()=>{
       if(!response.photos.length&&!next)setMessage('No purchase-bill images found in this Cloudflare media bucket.');
     }catch(error:any){setMessage(error?.message||'Original bill image archive not accessible.');}
     finally{setBusy(false);}
+  };
+  const setReviewStatus=async(photo:Photo,status:'pending'|'already_entered')=>{
+    if(savingReviewKey)return;setSavingReviewKey(photo.key);setMessage('');
+    try{
+      const token=localStorage.getItem('ora_staff_session_token');
+      if(!token)throw new Error('Super Admin login is required.');
+      const response=await staffJsonRequest(endpoint,{
+        method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},
+        body:JSON.stringify({key:photo.key,status})
+      });
+      if(response?.ok!==true||response.key!==photo.key||response.status!==status)throw new Error(response?.error||'Bill review mark was not confirmed.');
+      setPhotos(previous=>previous.map(item=>item.key===photo.key?{...item,review_status:status}:item));
+    }catch(error:any){setMessage(error?.message||'Could not save the bill review mark.');}
+    finally{setSavingReviewKey('');}
   };
   const openEntry=(photo:Photo)=>{
     setEntryPhoto(photo);setPurchaseDate(photoDate(photo.key));setSupplier('');setInvoiceRef('');setNotes('');
@@ -123,7 +139,9 @@ export const PurchaseBillArchivePanel=()=>{
     finally{setSaving(false);}
   };
   const savedCount=photos.filter(photo=>savedPhotoUrls.has(photo.url)).length;
-  const visiblePhotos=photos.filter(photo=>showSaved?savedPhotoUrls.has(photo.url):!savedPhotoUrls.has(photo.url));
+  const pendingCount=photos.filter(photo=>!savedPhotoUrls.has(photo.url)&&photo.review_status==='pending').length;
+  const enteredCount=photos.filter(photo=>!savedPhotoUrls.has(photo.url)&&photo.review_status==='already_entered').length;
+  const visiblePhotos=photos.filter(photo=>showSaved?savedPhotoUrls.has(photo.url):!savedPhotoUrls.has(photo.url)&&(reviewFilter==='all'||photo.review_status===reviewFilter));
   return <section className="rounded-2xl border border-sky-500/40 bg-neutral-900 p-4 text-neutral-200">
     <h3 className="text-sm font-bold text-sky-200">Original Purchase Bill Photo Archive</h3>
     <p className="mt-1 text-xs text-neutral-400">
@@ -135,31 +153,43 @@ export const PurchaseBillArchivePanel=()=>{
         className="rounded-lg border border-sky-500 px-3 py-2 text-xs font-bold disabled:opacity-50">
         {busy?'Checking original images…':'Find Old Purchasing Bill Photos'}
       </button>
-      <span className="text-xs text-neutral-400">{checked?visiblePhotos.length+' to review • '+savedCount+' saved':'Not scanned'}</span>
+      <span className="text-xs text-neutral-400">{checked?pendingCount+' to check • '+enteredCount+' already entered • '+savedCount+' saved':'Not scanned'}</span>
       {checked&&savedCount>0&&<button type="button" onClick={()=>setShowSaved(value=>!value)}
         className="rounded-lg border border-neutral-600 px-3 py-2 text-xs font-bold">
         {showSaved?'Hide saved bills':'Show saved bills ('+savedCount+')'}
       </button>}
     </div>
+    {checked&&!showSaved&&<div className="mt-3 flex flex-wrap gap-2" role="tablist" aria-label="Bill review status">
+      {([['pending','Need to check',pendingCount],['already_entered','Already entered',enteredCount],['all','All unsaved bills',pendingCount+enteredCount]] as const).map(([value,label,count])=><button key={value} type="button" role="tab" aria-selected={reviewFilter===value} onClick={()=>setReviewFilter(value)}
+        className={`rounded-lg border px-3 py-2 text-xs font-bold ${reviewFilter===value?'border-sky-400 bg-sky-950 text-sky-100':'border-neutral-700 text-neutral-300'}`}>
+        {label} ({count})
+      </button>)}
+    </div>}
     {message&&<p role="status" className="mt-3 text-xs text-emerald-200">{message}</p>}
     {checked&&photos.length>0&&visiblePhotos.length===0&&
-      <p className="mt-3 text-xs text-neutral-400">All archived bills have been saved to Purchase History. Use “Show saved bills” to review them.</p>}
+      <p className="mt-3 text-xs text-neutral-400">{showSaved?'No bills are marked as saved to Purchase History.':reviewFilter==='pending'?'No bills need checking. Use “Already entered” to review bills you marked.':reviewFilter==='already_entered'?'No bills are marked as already entered.':'All archived bills have been saved to Purchase History. Use “Show saved bills” to review them.'}</p>}
     {visiblePhotos.length>0&&<div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
       {visiblePhotos.map(photo=>{
         const isSaved=savedPhotoUrls.has(photo.url);
         return <div key={photo.key} className="overflow-hidden rounded-xl border border-neutral-700">
-          <button type="button" onClick={()=>openEntry(photo)} aria-label="View bill and enter historical purchase"
-            className="block w-full">
+          {photo.review_status==='already_entered'?<a href={photo.url} target="_blank" rel="noopener noreferrer" aria-label="Open bill marked already entered">
+            <img src={photo.url} alt="Open original supplier bill marked already entered" className="h-36 w-full object-contain bg-neutral-950" loading="lazy" />
+          </a>:<button type="button" onClick={()=>openEntry(photo)} aria-label="View bill and enter historical purchase" className="block w-full">
             <img src={photo.url} alt="View original supplier bill and enter its purchase details" className="h-36 w-full object-contain bg-neutral-950" loading="lazy" />
-          </button>
+          </button>}
           <div className="p-2 text-[11px] text-neutral-300">
             <p>Archive date: {formatDate(photoDate(photo.key))}</p>
             <p className="text-neutral-500">{photo.uploaded_at?new Date(photo.uploaded_at).toLocaleString('en-LK'):'Upload time not saved'}</p>
-            {isSaved?<p className="mt-2 rounded-lg bg-emerald-500/10 px-2 py-2 text-center font-bold text-emerald-200">Saved to Purchase History</p>:
+            {!isSaved&&<p className={`mt-1 font-bold ${photo.review_status==='already_entered'?'text-emerald-300':'text-amber-200'}`}>{photo.review_status==='already_entered'?'Already entered before':'Needs checking'}</p>}
+            {isSaved?<p className="mt-2 rounded-lg bg-emerald-500/10 px-2 py-2 text-center font-bold text-emerald-200">Saved to Purchase History</p>:photo.review_status==='already_entered'?<p className="mt-2 rounded-lg bg-sky-500/10 px-2 py-2 text-center font-bold text-sky-200">Marked — no entry form</p>:
               <button type="button" onClick={()=>openEntry(photo)}
                 className="mt-2 w-full rounded-lg border border-emerald-500/70 px-2 py-2 text-xs font-bold text-emerald-200 hover:bg-emerald-500/10">
                 View Bill & Enter Purchase
               </button>}
+            {!isSaved&&<button type="button" disabled={!!savingReviewKey} onClick={()=>void setReviewStatus(photo,photo.review_status==='already_entered'?'pending':'already_entered')}
+              className={`mt-2 w-full rounded-lg border px-2 py-2 text-xs font-bold disabled:opacity-50 ${photo.review_status==='already_entered'?'border-neutral-600 text-neutral-300':'border-sky-500 text-sky-200'}`}>
+              {savingReviewKey===photo.key?'Saving mark…':photo.review_status==='already_entered'?'Move back to Need to check':'Mark as already entered'}
+            </button>}
           </div>
         </div>;
       })}
@@ -170,7 +200,7 @@ export const PurchaseBillArchivePanel=()=>{
     </button>}
     {checked&&photos.length>0&&<p className="mt-3 text-xs text-amber-200">
       Check supplier, printed date, item code/variant, quantity and unit cost on each bill before saving. If Pink/Grey are known but their quantities are not, record the bill's combined total without guessing the split.
-      Saved bills disappear from the review list and can be shown again with the saved bills filter.
+      Mark “Already entered” when you remember adding that bill before; it moves out of the check list. This mark only organizes these photos and does not add purchase rows or change stock. Saved bills disappear from the review list and can be shown again with the saved bills filter.
     </p>}
     {entryPhoto&&<div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-3 sm:p-6">
       <section role="dialog" aria-modal="true" aria-label="Add historical purchase from bill photo"
