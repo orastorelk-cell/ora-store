@@ -186,7 +186,7 @@ export const stockReportingExportsPatch = () => ({
         '              <p className="mt-2 text-[10px] text-neutral-500">',
         "                Showing {stockItemReportRows.length} of {stockByItemCodeRows.length} item code{stockByItemCodeRows.length===1?'':'s'}",
         '              </p>',
-      ].join('\\n');
+      ].join('\n');
       const notice = [
         header,
         '              {stockItemReportRows.some(row=>row.historyIncomplete) && (',
@@ -194,7 +194,7 @@ export const stockReportingExportsPatch = () => ({
         '                  INCOMPLETE PURCHASE HISTORY • RECONCILE BEFORE DISPATCH — Historical packed quantities exceed the purchase receipts available in this browser. The Stock Report now displays the shared saved stock balance instead of a calculated negative shortage. Historical stock cannot be verified without a trusted inventory count or backup.',
         '                </p>',
         '              )}',
-      ].join('\\n');
+      ].join('\n');
       if (text.includes(header)) text = text.replace(header,notice);
     }
 
