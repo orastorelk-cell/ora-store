@@ -27,6 +27,7 @@ import { profitFacebookLeadMatch } from './profitFacebookLeadMatch';
 import { staffPurchasesHandler } from './staffPurchases';
 import { inventoryHistoryHandler,readDurablePurchasingHistory } from './inventoryHistory';
 import { purchaseBackupRecoveryHandler } from './purchaseBackupRecovery';
+import { purchaseBillArchiveHandler } from './purchaseBillArchive';
 import { r2Oct29StockRecoveryHandler } from './r2Oct29StockRecovery';
 import { r2AtomicFifoHandler } from './r2AtomicFifo';
 import { orderItemEditHandler } from './orderItemEdit';
@@ -275,6 +276,11 @@ export const withR2DataFallback=async(request:Request,env:unknown,_ctx:any,next:
       const user=await verifyActiveStaff(request,env);
       if(!user)return json({error:'Login session required.'},401);
       return r2Oct29StockRecoveryHandler(request,env,user);
+    }
+    if(new URL(request.url).pathname==='/api/admin/purchase-bill-archive'){
+      const user=await verifyActiveStaff(request,env);
+      if(!user)return json({error:'Login required.'},401);
+      return purchaseBillArchiveHandler(request,env,user);
     }
     if(new URL(request.url).pathname==='/api/admin/purchasing-backup-recovery'){
       const user=await verifyActiveStaff(request,env);
