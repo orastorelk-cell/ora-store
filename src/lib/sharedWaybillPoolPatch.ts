@@ -71,16 +71,25 @@ export const sharedWaybillPoolPatch=()=>({
   };
 
 `+text.slice(end);
-    const allocator='  useEffect(() => {\n    const allocatorSignature=JSON.stringify({';
-    if(!text.includes(allocator))throw new Error('Shared pool allocator marker missing.');
-    text=text.replace(allocator,"  useEffect(() => {\n    if(!sharedWaybillPoolReady||!sharedStoreReady||!sharedOrdersReady||!adminUser||!getStaffSessionToken())return;\n    const allocatorSignature=JSON.stringify({waybillPoolRetry,");
-    text=text.replace('  }, [orders, products, waybillRecords]);','  }, [orders, products, waybillRecords, sharedWaybillPoolReady, sharedStoreReady, sharedOrdersReady, waybillPoolRetry]);');
+    const stockReady="    if(!adminUser || !sharedStoreReady || !sharedOrdersReady || returnStockTransactionPending)return;\n    const allocatorSignature=JSON.stringify({";
+    const originalAllocator='  useEffect(() => {\n    const allocatorSignature=JSON.stringify({';
+    if(text.includes(stockReady)){
+      text=text.replace(stockReady,"    if(!adminUser || !sharedStoreReady || !sharedOrdersReady || returnStockTransactionPending || !sharedWaybillPoolReady || !getStaffSessionToken())return;\n    const allocatorSignature=JSON.stringify({waybillPoolRetry,");
+    }else if(text.includes(originalAllocator)){
+      text=text.replace(originalAllocator,"  useEffect(() => {\n    if(!sharedWaybillPoolReady||!sharedStoreReady||!sharedOrdersReady||!adminUser||!getStaffSessionToken())return;\n    const allocatorSignature=JSON.stringify({waybillPoolRetry,");
+    }else throw new Error('Shared pool allocator marker missing.');
+    const currentDeps='  }, [orders, products, waybillRecords, sharedStoreReady, sharedOrdersReady, adminUser?.id, returnStockTransactionPending]);';
+    const legacyDeps='  }, [orders, products, waybillRecords]);';
+    const sharedDeps='  }, [orders, products, waybillRecords, sharedWaybillPoolReady, sharedStoreReady, sharedOrdersReady, adminUser?.id, returnStockTransactionPending, waybillPoolRetry]);';
+    if(text.includes(currentDeps))text=text.replace(currentDeps,sharedDeps);
+    else if(text.includes(legacyDeps))text=text.replace(legacyDeps,sharedDeps);
+    else throw new Error('Shared pool allocator dependencies missing.');
     text=text.replace('importWaybillCsv: (csvText: string, courierName?: string) => { importedCount: number; duplicateCount: number };','importWaybillCsv: (csvText: string, courierName?: string) => Promise<{ importedCount: number; duplicateCount: number }>;');
     text=text.replace('  const importWaybillCsv = (csvText: string,','  const importWaybillCsv = async (csvText: string,');
     const automaticStart='    if(readyWithoutWaybill.length){\n      void (async()=>{\n        for(const ready of readyWithoutWaybill){';
     if(!text.includes(automaticStart))throw new Error('Automatic waybill queue marker missing.');
     text=text.replace(automaticStart,'    if(readyWithoutWaybill.length&&!automaticWaybillRunRef.current){\n      automaticWaybillRunRef.current=true;\n      void (async()=>{\n        for(const ready of readyWithoutWaybill){');
-    const automaticEnd='      })();\n    }\n  }, [orders, products, waybillRecords, sharedWaybillPoolReady, sharedStoreReady, sharedOrdersReady, waybillPoolRetry]);';
+    const automaticEnd='      })();\n    }\n  }, [orders, products, waybillRecords, sharedWaybillPoolReady, sharedStoreReady, sharedOrdersReady, adminUser?.id, returnStockTransactionPending, waybillPoolRetry]);';
     if(!text.includes(automaticEnd))throw new Error('Automatic waybill completion marker missing.');
     text=text.replace(automaticEnd,String.raw`      })().finally(()=>{
         automaticWaybillRunRef.current=false;
@@ -89,7 +98,7 @@ export const sharedWaybillPoolPatch=()=>({
         },5000);
       });
     }
-  }, [orders, products, waybillRecords, sharedWaybillPoolReady, sharedStoreReady, sharedOrdersReady, waybillPoolRetry]);`);
+  }, [orders, products, waybillRecords, sharedWaybillPoolReady, sharedStoreReady, sharedOrdersReady, adminUser?.id, returnStockTransactionPending, waybillPoolRetry]);`);
     const importMarker='    if (additions.length) setWaybillRecords((prev) => [...prev, ...additions]);';
     if(!text.includes(importMarker))throw new Error('Durable waybill import marker missing.');
     text=text.replace(importMarker,String.raw`    for(let offset=0;offset<additions.length;offset+=50)await confirmCsvRequestWithRetry(sharedStaffRequest,'/api/courier/waybills/import',{method:'POST',body:JSON.stringify({records:additions.slice(offset,offset+50)})});
