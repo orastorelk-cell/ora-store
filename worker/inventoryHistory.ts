@@ -44,15 +44,22 @@ const mergeHistory=async(env:unknown,table:'purchase_orders'|'stock_history',inc
     return {rows:added?next:existing,result:{added,conflicts}};
   });
 
+export const readDurablePurchasingHistory=async(env:unknown)=>{
+  const [storedPurchases,storedHistory,admin]=await Promise.all([
+    readDataTable(env,'purchase_orders'),readDataTable(env,'stock_history'),readDataTable(env,'admin_data_store')
+  ]);
+  const receipts=admin.filter(row=>String(row.key||'').startsWith('inventory-purchase-v1:')&&row.payload?.phase==='complete');
+  const byId=<T extends Row>(rows:T[])=>[...new Map(rows.map(row=>[String(row.id),row])).values()];
+  return {
+    purchases:byId([...storedPurchases,...receipts.flatMap(row=>row.payload.purchases||[])]),
+    stock_history:byId([...storedHistory,...receipts.flatMap(row=>row.payload.stock_history||[])])
+  };
+};
 export const inventoryHistoryHandler=async(request:Request,env:unknown,user:Row)=>{
   if(user.role!=='admin')return reply({error:'Only Super Admin can recover or inspect full Purchasing History.'},403);
   if(request.method==='GET'){
-    const [storedPurchases,storedHistory,admin]=await Promise.all([readDataTable(env,'purchase_orders'),readDataTable(env,'stock_history'),readDataTable(env,'admin_data_store')]);
-    const receipts=admin.filter(row=>String(row.key||'').startsWith('inventory-purchase-v1:')&&row.payload?.phase==='complete');
-    const byId=<T extends Row>(rows:T[])=>[...new Map(rows.map(row=>[String(row.id),row])).values()];
-    const purchases=byId([...storedPurchases,...receipts.flatMap(row=>row.payload.purchases||[])]);
-    const history=byId([...storedHistory,...receipts.flatMap(row=>row.payload.stock_history||[])]);
-    return reply({ok:true,purchases,stock_history:history,purchase_count:purchases.length,server_authoritative:true});
+    const {purchases,stock_history}=await readDurablePurchasingHistory(env);
+    return reply({ok:true,purchases,stock_history,purchase_count:purchases.length,server_authoritative:true});
   }
   if(request.method!=='POST')return reply({error:'Use GET or POST.'},405);
   const raw=await request.text();
