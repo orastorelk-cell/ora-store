@@ -1,7 +1,7 @@
 import { readDataTable,replaceDataTable } from './cloudflareData';
 import { cancellationInProgress } from './r2OrderCancellation';
 import { returnPackingInProgress,sharedReturnInventory } from '../src/lib/returnSheets';
-import { OCT29_RECOVERY_KEY,planOct29StockRecovery,type PurchaseProof,type StockRecoveryLine } from '../src/lib/oct29StockRecovery';
+import { OCT29_RECOVERY_KEY,planOct29StockRecovery,applyOct29StockRecoveryLines,type PurchaseProof,type StockRecoveryLine } from '../src/lib/oct29StockRecovery';
 
 type Row=Record<string,any>;
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
@@ -50,24 +50,7 @@ export const r2Oct29StockRecoveryHandler=async(request:Request,env:unknown,user:
     const nowPlan=plan(proofs,current,orders);
     if(JSON.stringify(nowPlan)!==JSON.stringify(preview))
       fail('Stock/Returns history changed since preview. Preview again.');
-    // BLACK and GREY share one parent product. Group all exact variant
-    // corrections before replacing that parent (never lose one of the four).
-    const changed=new Map<string,StockRecoveryLine[]>();
-    for(const item of nowPlan)changed.set(item.product_id,[...(changed.get(item.product_id)||[]),item]);
-    const products=(row.payload.products as Row[]).map(product=>{
-      const entries=changed.get(String(product.id));
-      if(!entries?.length)return product;
-      if(entries.some(item=>item.variant_id)){
-        const variants=(product.variants||[]).map((v:Row)=>{
-          const entry=entries.find(item=>item.variant_id===String(v.id));
-          return entry?{...v,stock_quantity:entry.expected,status:entry.expected>0?'Active':'Out of Stock'}:v;
-        });
-        const total=variants.reduce((n:number,v:Row)=>n+Number(v.stock_quantity||0),0);
-        return {...product,variants,stock_quantity:total,status:total>0?'Active':'Out of Stock'};
-      }
-      const entry=entries[0];
-      return {...product,stock_quantity:entry.expected,status:entry.expected>0?'Active':'Out of Stock'};
-    });
+    const products=applyOct29StockRecoveryLines(row.payload.products,nowPlan);
     const at=new Date().toISOString();
     const state={...row.payload,products,version:version+1,updated_at:at};
     const recovery={phase:'complete',at,actor:String(user.display_name||user.username||user.id),
