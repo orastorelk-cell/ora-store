@@ -62,7 +62,7 @@ assert(ui.includes('Restore Oct 29 Stock (4 original receipts)'));
 assert(ui.includes("action:'preview'")&&ui.includes("action:'commit'"));
 assert(worker.includes('OCT29_RECOVERY_KEY')&&worker.includes('replaceDataTable('));
 assert(worker.includes('applyOct29StockRecoveryLines('));
-assert(worker.includes('No stock was changed.')||worker.includes('No stock was changed'));
+assert(worker.includes('Nothing was changed.')&&worker.includes('already_saved'));
 transformSync(ui,{loader:'tsx',format:'esm',target:'es2022'});
 transformSync(context,{loader:'tsx',format:'esm',target:'es2022'});
 transformSync(worker,{loader:'ts',format:'esm',target:'es2022'});
