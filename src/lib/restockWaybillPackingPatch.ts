@@ -20,8 +20,28 @@ export const restockWaybillPackingPatch = () => ({
 
       const marker = "    if(allocatedIds.size){\n      setOrders(prev=>prev.map(o=>{\n        if(!allocatedIds.has(o.id)) return o;\n        const updated={...o,stock_allocated:true,stock_status:'Allocated' as const,stock_allocated_at:now,stock_allocated_by:'System FIFO Allocator'} as Order;";
       const replacement = "    if(allocatedIds.size){\n      // Reserve one durable packing batch for orders released by this restock.\n      // A waybill may arrive later; the invoice queue keeps this batch ID.\n      const restockBatchId='PACK-RESTOCK-'+now.replace(/[^0-9]/g,'').slice(0,17);\n      setOrders(prev=>prev.map(o=>{\n        if(!allocatedIds.has(o.id)) return o;\n        const wasWaiting=Boolean(o.stock_waiting_since) || (o.call_center_updated_at ? Date.now()-new Date(o.call_center_updated_at).getTime()>10*60*1000 : false);\n        const updated={...o,stock_allocated:true,stock_status:'Allocated' as const,stock_allocated_at:now,stock_allocated_by:'System FIFO Allocator',...(wasWaiting && !o.invoice_pack_batch_id ? {invoice_pack_batch_id:restockBatchId}: {})} as Order;";
-      if (!text.includes(marker)) throw new Error('[O-RA restock packing] FIFO marker not found');
-      text = text.replace(marker, replacement);
+      if(text.includes('WAYBILL AUTO ASSIGN SERVER GUARD')){
+        // Its server-first FIFO replacement already creates PACK-RESTOCK
+        // IDs. Do not inject a second local assignment or restore the
+        // obsolete client-side waybill allocation path.
+        if(!text.includes("const restockBatchId='PACK-RESTOCK-'"))
+          throw new Error('[O-RA restock packing] server-first FIFO restock batch missing');
+      }else if(text.includes(marker)){
+        text=text.replace(marker,replacement);
+      }else if(!text.includes("const restockBatchId='PACK-RESTOCK-'")){
+        // Current FIFO allocator updates allocations and waybills together,
+        // rather than through the old separate setOrders block.
+        const insertBefore="    const postStockOrders=confirmedActive.map(order=>";
+        const newBatchLine="    const restockBatchId='PACK-RESTOCK-'+now.replace(/[^0-9]/g,'').slice(0,17);\n";
+        if(!text.includes(insertBefore))
+          throw new Error('[O-RA restock packing] FIFO update insertion marker not found');
+        text=text.replace(insertBefore,newBatchLine+insertBefore);
+        const currentOrderUpdate="        ...(newlyAllocated?{stock_allocated:true,stock_status:'Allocated' as const,stock_allocated_at:now,stock_allocated_by:'System FIFO Allocator'}:{}),";
+        const safeOrderUpdate="        ...(newlyAllocated?{stock_allocated:true,stock_status:'Allocated' as const,stock_allocated_at:now,stock_allocated_by:'System FIFO Allocator',...(!o.invoice_pack_batch_id&&Boolean(o.stock_waiting_since)?{invoice_pack_batch_id:restockBatchId}:{})}:{}),";
+        if(!text.includes(currentOrderUpdate))
+          throw new Error('[O-RA restock packing] current FIFO setOrders marker not found');
+        text=text.replace(currentOrderUpdate,safeOrderUpdate);
+      }
     }
 
     if (id.endsWith('/src/components/admin/AdminDashboard.tsx')) {
