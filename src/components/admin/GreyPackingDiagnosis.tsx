@@ -33,13 +33,13 @@ export const GreyPackingDiagnosis=({orders,products}:{orders:Order[];products:Pr
           '. Check their Waybill / Invoice status below.');
         return;
       }
-      const prompt='CORRECT ORIGINAL R0008-GREY STOCK (NOT A NEW PURCHASE)\\n\\n'+
-        'Original purchased: 5 × Rs. 280\\n'+
-        'Already allocated after recovery: '+line.already_allocated+'\\n'+
-        'Current shared stock: '+line.current+'\\n'+
-        'Verified remaining: '+line.expected+'\\n'+
+      const prompt='CORRECT ORIGINAL R0008-GREY STOCK (NOT A NEW PURCHASE)\n\n'+
+        'Original purchased: 5 × Rs. 280\n'+
+        'Already allocated after recovery: '+line.already_allocated+'\n'+
+        'Current shared stock: '+line.current+'\n'+
+        'Verified remaining: '+line.expected+'\n'+
         'Missing units to restore ONCE: +'+checked.missing+
-        '\\n\\nNo new purchase or duplicate invoice will be made. Continue?';
+        '\n\nNo new purchase or duplicate invoice will be made. Continue?';
       if(!window.confirm(prompt))return;
       const committed=await request({action:'commit-grey-gap',version:checked.version,lines:checked.lines});
       if(!committed?.ok||!Array.isArray(committed.lines))
