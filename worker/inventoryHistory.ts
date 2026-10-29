@@ -258,6 +258,14 @@ export const inventoryHistoryHandler=async(request:Request,env:unknown,user:Row)
   // auto-generates an invoice. Existing receipts are immutable by ID.
   const bucket=dataBucket(env);
   if(!bucket&&cleanPurchases.length)return reply({error:'Purchase History R2 backup is unavailable. Nothing was confirmed as saved.'},503);
+  if(cleanPurchases.length){
+    const existingPurchases=await readDataTable(env,'purchase_orders');
+    const conflicts=cleanPurchases.filter(item=>{
+      const previous=existingPurchases.find(row=>String(row.id)===String(item.id));
+      return Boolean(previous&&!equal(previous,item));
+    }).map(item=>String(item.id));
+    if(conflicts.length)return reply({ok:true,added_purchases:0,added_history:0,conflicts,stock_changed:false,r2_backup_saved:false},409);
+  }
   try{if(bucket)await writePurchaseHistoryBackup(bucket,cleanPurchases);}catch(error:any){return reply({error:error?.message||'Purchase History R2 backup failed. Nothing was confirmed as saved.'},Number(error?.status)||503);}
   const p=cleanPurchases.length?await mergeHistory(env,'purchase_orders',cleanPurchases):{added:0,conflicts:[]};
   const h=cleanHistory.length?await mergeHistory(env,'stock_history',cleanHistory):{added:0,conflicts:[]};
