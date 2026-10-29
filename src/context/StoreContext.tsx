@@ -110,7 +110,7 @@ interface StoreContextType {
     notes?: string;
     performed_by?: string;
     po_number?: string;
-  }) => void;
+  }) => Promise<void>;
   settings: StoreSettings;
   /** True after the authoritative shared storefront state has finished its first load attempt. */
   sharedStoreReady: boolean;
@@ -686,6 +686,45 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     localStorage.setItem('ora_purchase_orders', JSON.stringify(purchaseOrders));
   }, [purchaseOrders]);
+
+  // Inventory history is no longer browser-specific. The server is authoritative,
+  // while legacy local receipts are recoverable audit facts. Importing a legacy
+  // receipt NEVER increases the current physical stock a second time.
+  useEffect(()=>{
+    if(!adminUser||!getStaffSessionToken()||!sharedStoreReady)return;
+    let active=true;
+    const sync=async()=>{
+      try{
+        const localPurchases=purchaseOrders.slice(),localLogs=stockHistory.slice();
+        const remote=await sharedStaffRequest('/api/admin/inventory-history');
+        if(!remote?.ok||!Array.isArray(remote.purchases)||!Array.isArray(remote.stock_history))return;
+        const remotePurchaseIds=new Set<string>(remote.purchases.map((p:PurchaseOrder)=>String(p.id)));
+        const remoteHistoryIds=new Set<string>(remote.stock_history.map((h:StockHistory)=>String(h.id)));
+        const missingP=localPurchases.filter(p=>!remotePurchaseIds.has(String(p.id)));
+        const missingH=localLogs.filter(h=>!remoteHistoryIds.has(String(h.id))&&String(h.change_type)!=='Order Deduction');
+        for(let i=0;i<Math.max(missingP.length,missingH.length);i+=100){
+          await sharedStaffRequest('/api/admin/inventory-history',{
+            method:'POST',body:JSON.stringify({action:'merge-history',purchases:missingP.slice(i,i+100),stock_history:missingH.slice(i,i+100)})
+          });
+        }
+        if(!active)return;
+        setPurchaseOrders(previous=>{
+          const result=new Map<string,PurchaseOrder>(remote.purchases.map((p:PurchaseOrder)=>[String(p.id),p]));
+          for(const p of previous)if(!result.has(String(p.id)))result.set(String(p.id),p);
+          return [...result.values()].sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+        });
+        setStockHistory(previous=>{
+          const result=new Map<string,StockHistory>(remote.stock_history.map((h:StockHistory)=>[String(h.id),h]));
+          for(const h of previous)if(!result.has(String(h.id)))result.set(String(h.id),h);
+          return [...result.values()].sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+        });
+      }catch(error:any){console.warn('Durable Purchasing History sync failed; local audit cache preserved:',error?.message||error);}
+    };
+    void sync();
+    return()=>{active=false};
+    // One server history read per authenticated session, not per purchase.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[adminUser?.id,sharedStoreReady]);
 
   useEffect(() => {
     localStorage.setItem('ora_settings', JSON.stringify(settings));
@@ -3468,32 +3507,52 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const adjustStock=(productId:string,quantityChange:number,reason:string,performedBy='Admin',variantId?:string)=>{ const now=new Date().toISOString(); setProducts(prev=>prev.map(p=>{ if(p.id!==productId)return p; if(normalizedProductType(p)==='bundle')throw new Error('Bundle stock is calculated from component products. Adjust component stock instead.'); if(normalizedProductType(p)==='variant'){ if(!variantId)throw new Error('Select the exact color / variant before changing stock.'); const target=variantById(p,variantId); if(!target)throw new Error('Variant not found.'); const before=Number(target.stock_quantity||0),after=Math.max(0,before+quantityChange); const variants=(p.variants||[]).map(v=>v.id===variantId?{...v,stock_quantity:after,status:(after<=0?'Out of Stock':'Active') as Product['status']}:v); const total=variants.reduce((n,v)=>n+Number(v.stock_quantity||0),0); setStockHistory(logs=>[{id:`stk-${Date.now()}-${variantId}`,product_id:p.id,product_name:`${p.name_en} - ${target.option_value}`,change_type:quantityChange>=0?'Increase':'Decrease',quantity:Math.abs(quantityChange),previous_stock:before,new_stock:after,reason,performed_by:performedBy,created_at:now},...logs]); logActivity({action:'Variant Stock Adjusted',module:'Stock',target_id:p.id,target_label:`${p.name_en} - ${target.option_value}`,details:`${quantityChange>=0?'+':''}${quantityChange}; ${reason}`}); return {...p,variants,stock_quantity:total,status:total<=0?'Out of Stock':'Active'}; } const before=Number(p.stock_quantity||0),after=Math.max(0,before+quantityChange); setStockHistory(logs=>[{id:`stk-${Date.now()}`,product_id:p.id,product_name:p.name_en,change_type:quantityChange>=0?'Increase':'Decrease',quantity:Math.abs(quantityChange),previous_stock:before,new_stock:after,reason,performed_by:performedBy,created_at:now},...logs]); return {...p,stock_quantity:after,status:after<=0?'Out of Stock':'Active'}; })); };
 
-  const addPurchaseOrder=(poData:{supplier_name:string;product_id:string;variant_id?:string;quantity_added:number;unit_buying_price:number;invoice_ref?:string;bill_image_url?:string;notes?:string;performed_by?:string;po_number?:string;})=>{
-    const product=products.find(p=>p.id===poData.product_id);
-    if(!product)throw new Error('Selected product was not found.');
-    if(poData.quantity_added<=0)throw new Error('Purchase quantity must be greater than zero.');
-    if(normalizedProductType(product)==='bundle')throw new Error('Add purchases to component products, not the bundle.');
-    const variant=poData.variant_id?variantById(product,poData.variant_id):undefined;
-    if(normalizedProductType(product)==='variant'&&!variant)throw new Error('Select the exact variant/color for this purchase.');
-    const now=new Date().toISOString(),before=variant?Number(variant.stock_quantity||0):Number(product.stock_quantity||0),credit=creditReturnStock(variant||product,poData.quantity_added),after=credit.stock_quantity,poNumber=poData.po_number?.trim()||`PO-${new Date().getFullYear()}-${String(purchaseOrders.length+1).padStart(4,'0')}`;
-    const purchase:PurchaseOrder={id:`po-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,po_number:poNumber,supplier_name:poData.supplier_name.trim(),product_id:product.id,product_name:product.name_en,sku:variant?.sku||product.sku,variant_id:variant?.id,variant_name:variant?.option_value,variant_sku:variant?.sku,quantity_added:poData.quantity_added,unit_buying_price:poData.unit_buying_price,total_cost:poData.quantity_added*poData.unit_buying_price,invoice_ref:poData.invoice_ref?.trim(),bill_image_url:poData.bill_image_url?.trim(),notes:poData.notes?.trim(),performed_by:poData.performed_by||adminUser?.name||'Admin',created_at:now};
-    setPurchaseOrders(prev=>[purchase,...prev]);
-    // A Purchase / Stock In records the bill cost and increases physical stock only.
-    // It must never change the saved product/variant buying price, selling price,
-    // discount/offer state, or auto-priced bundle prices. Price changes stay an
-    // explicit manual action in Supplier Price / Special Offer or Product Edit.
-    setProducts(prev=>prev.map(p=>{
-      if(p.id!==product.id)return p;
-      if(variant){
-        const variants=(p.variants||[]).map(v=>
-          v.id===variant.id ? {...v,stock_quantity:after,return_stock_debt:credit.return_stock_debt,status:(after>0?'Active':'Out of Stock') as Product['status']} : v
-        );
-        const total=variants.reduce((n,v)=>n+Number(v.stock_quantity||0),0);return{...p,variants,stock_quantity:total,status:total>0?'Active':'Out of Stock'};
-      }
-      return{...p,stock_quantity:after,return_stock_debt:credit.return_stock_debt,status:after>0?'Active':'Out of Stock'};
+  type InventoryPurchaseInput={supplier_name:string;product_id:string;variant_id?:string;quantity_added:number;unit_buying_price:number;invoice_ref?:string;bill_image_url?:string;notes?:string;performed_by?:string;po_number?:string};
+  // All Purchase/Stock In entries commit on the shared server first. A single
+  // operation ID is kept until the server acknowledges the stock + receipt.
+  // Retrying an uncertain response can NEVER add stock twice.
+  const commitInventoryPurchaseBatch=async(rows:InventoryPurchaseInput[]):Promise<void>=>{
+    if(!rows.length)return;
+    if(!adminUser||!getStaffSessionToken()||!sharedStoreReady)
+      throw new Error('Sign in and load shared stock before purchasing.');
+    if(!sharedStoreSnapshotRef.current || sharedStoreSnapshotRef.current.products!==products)
+      throw new Error('Unsaved product changes or stale stock are present. Wait for Website changes saved, then Refresh Stock before purchasing.');
+    await storefrontPublishQueueRef.current;
+    const key='ora_inventory_purchase_pending_v1:'+adminUser.id;
+    const intent=rows.map(row=>({
+      supplier_name:String(row.supplier_name||'').trim(),product_id:String(row.product_id||''),
+      ...(row.variant_id?{variant_id:row.variant_id}:{}),
+      quantity_added:Number(row.quantity_added),unit_buying_price:Number(row.unit_buying_price),
+      invoice_ref:String(row.invoice_ref||'').trim(),bill_image_url:String(row.bill_image_url||'').trim(),
+      notes:String(row.notes||'').trim()
     }));
-    setStockHistory(prev=>[{id:`stk-purchase-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,product_id:product.id,product_name:`${product.name_en}${variant?` - ${variant.option_value}`:''}`,change_type:'Purchase Inflow',quantity:poData.quantity_added,previous_stock:before,new_stock:after,reason:`${poNumber} • ${poData.supplier_name}`,performed_by:poData.performed_by||adminUser?.name||'Admin',created_at:now},...prev]);
+    const fingerprint=JSON.stringify(intent);
+    let pending:{id:string;fingerprint:string;items:typeof intent}|null=null;
+    try{pending=JSON.parse(localStorage.getItem(key)||'null')}catch{}
+    if(pending?.fingerprint!==undefined&&pending.fingerprint!==fingerprint)
+      throw new Error('An earlier Purchase is awaiting confirmation. Retry its exact original items before starting another purchase; no stock was added in this attempt.');
+    if(!pending){
+      pending={id:crypto.randomUUID(),fingerprint,items:intent};
+      localStorage.setItem(key,JSON.stringify(pending));
+      if(localStorage.getItem(key)!==JSON.stringify(pending))
+        throw new Error('Purchase retry safety could not be stored. Nothing was submitted.');
+    }
+    const result=await sharedStaffRequest('/api/admin/inventory-history',{
+      method:'POST',body:JSON.stringify({action:'purchase-stock',operation_id:pending.id,items:pending.items})
+    });
+    if(result?.ok!==true||!result?.state||!Array.isArray(result?.purchases)||!Array.isArray(result?.stock_history))
+      throw new Error('Server stock/Purchase acknowledgement was invalid. Retry the same saved purchase, not a new one.');
+    // A stale in-browser Stock Ledger must not recalculate these verified server
+    // values; the shared product snapshot now owns the sellable stock count.
+    applySharedStorefrontState(result.state,true);
+    const ids=new Set<string>(result.purchases.map((p:PurchaseOrder)=>String(p.id)));
+    setPurchaseOrders(previous=>[...result.purchases,...previous.filter(po=>!ids.has(String(po.id)))]);
+    const logIds=new Set<string>(result.stock_history.map((log:StockHistory)=>String(log.id)));
+    setStockHistory(previous=>[...result.stock_history,...previous.filter(log=>!logIds.has(String(log.id)))]);
+    localStorage.removeItem(key);
   };
+  const addPurchaseOrder=async(poData:InventoryPurchaseInput)=>commitInventoryPurchaseBatch([poData]);
+
 
   // Category CRUD
   const addCategory = (categoryData: Omit<Category, 'id'>): Category => {
