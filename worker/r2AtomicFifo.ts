@@ -47,7 +47,7 @@ export const inventoryDemand=(order:Row,products:Row[]):Need[]=>{
   }
   return [...result.values()];
 };
-const inventoryApply=(products:Row[],needs:Need[],order:Row,at:string)=>{
+export const applyAtomicFifoInventory=(products:Row[],needs:Need[],order:Row,at:string)=>{
   const copies=products.map(p=>({...p,variants:(p.variants||[]).map((v:Row)=>({...v}))}));
   const byId=new Map(copies.map(p=>[String(p.id),p]));
   const logs:Row[]=[];
@@ -108,7 +108,7 @@ export const r2AtomicFifoAllocation=async(env:unknown,id:string,user:Row)=>{
     const requirements=inventoryDemand(selected,catalog.payload.products);
     if(!requirements.length)fail('No physical stock requirements for this order.');
     const at=new Date().toISOString();
-    const changed=inventoryApply(catalog.payload.products,requirements,selected,at);
+    const changed=applyAtomicFifoInventory(catalog.payload.products,requirements,selected,at);
     const state={...catalog.payload,products:changed.products,
       version:Number(catalog.payload.version||0)+1,updated_at:at};
     const receipt={phase:'reserved',order_id:id,order_number:selected.order_number,
