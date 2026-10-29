@@ -50,16 +50,22 @@ export const r2Oct29StockRecoveryHandler=async(request:Request,env:unknown,user:
     const nowPlan=plan(proofs,current,orders);
     if(JSON.stringify(nowPlan)!==JSON.stringify(preview))
       fail('Stock/Returns history changed since preview. Preview again.');
-    const changed=new Map(nowPlan.map(item=>[item.product_id,item]));
+    // BLACK and GREY share one parent product. Group all exact variant
+    // corrections before replacing that parent (never lose one of the four).
+    const changed=new Map<string,StockRecoveryLine[]>();
+    for(const item of nowPlan)changed.set(item.product_id,[...(changed.get(item.product_id)||[]),item]);
     const products=(row.payload.products as Row[]).map(product=>{
-      const entry=changed.get(String(product.id));
-      if(!entry)return product;
-      if(entry.variant_id){
-        const variants=(product.variants||[]).map((v:Row)=>String(v.id)===entry.variant_id
-          ?{...v,stock_quantity:entry.expected,status:entry.expected>0?'Active':'Out of Stock'}:v);
+      const entries=changed.get(String(product.id));
+      if(!entries?.length)return product;
+      if(entries.some(item=>item.variant_id)){
+        const variants=(product.variants||[]).map((v:Row)=>{
+          const entry=entries.find(item=>item.variant_id===String(v.id));
+          return entry?{...v,stock_quantity:entry.expected,status:entry.expected>0?'Active':'Out of Stock'}:v;
+        });
         const total=variants.reduce((n:number,v:Row)=>n+Number(v.stock_quantity||0),0);
         return {...product,variants,stock_quantity:total,status:total>0?'Active':'Out of Stock'};
       }
+      const entry=entries[0];
       return {...product,stock_quantity:entry.expected,status:entry.expected>0?'Active':'Out of Stock'};
     });
     const at=new Date().toISOString();
