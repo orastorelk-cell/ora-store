@@ -1,4 +1,5 @@
 import { stockConsumedItems, stockItemQuantities } from '../lib/orderStockQuantities';
+import { normalizeOrderMissingStockVariants, hasConflictingVariantOrderItems } from '../lib/exactVariantStockResolution';
 import { creditReturnStock } from '../lib/returnSheets';
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { savePublicOrder } from '../lib/publicOrderSave';
@@ -2256,8 +2257,17 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const now=new Date().toISOString();
 
     for(const order of waiting){
+      // Never deduct another colour when a historic order has contradictory
+      // product colour/SKU data; it needs manual item reconciliation first.
+      if(hasConflictingVariantOrderItems(order,products)){
+        console.warn('FIFO allocation held: conflicting variant ID and Item Code',order.order_number);
+        continue;
+      }
       const groupedReq=new Map<string,InventoryRequirement>();
-      for(const item of stockConsumedItems(order)){
+      // Resolve historical order snapshots that retained R0008-GREY SKU but lost its
+      // variant_id. Exact, unique SKU/colour only; no guessing or price changes.
+      const stockOrder=normalizeOrderMissingStockVariants(order,products);
+      for(const item of stockConsumedItems(stockOrder)){
         for(const req of inventoryRequirementsForOrderItem(item)){
           const key=`${req.product_id}::${req.variant_id||'base'}`;
           const prev=groupedReq.get(key);
