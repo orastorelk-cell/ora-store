@@ -433,6 +433,11 @@ export function buildPaidWaybillProfitReport(input: {
       const sales = valid ? amount(item.subtotal) ?? (unit === null ? null : round(unit * qty)) : null;
       if (!valid || sales === null || unit === null) row.issues.push(`${item.sku || item.product_name}: sale price / quantity needs review.`);
       if (purchasing === null) row.issues.push(`${item.sku || item.product_name}: no usable Purchasing price was found for this item type.`);
+      // A latest-price fallback is an ESTIMATE, not the FIFO cost of an old
+      // delivered order. Incomplete historical receipts must not produce
+      // a deceptively exact net profit or downloadable "verified" totals.
+      if (allocations.some(allocation => allocation.costBasis === 'latest-purchase'))
+        row.issues.push(`${item.sku || item.product_name}: historical Purchasing cost is missing; latest buying price is only an estimate. Recover receipts before reporting final profit.`);
       return { name: `${item.product_name}${item.variant_name ? ` - ${item.variant_name}` : ''}`, sku: item.sku, quantity: qty, unitSale: unit, sales, purchasing, allocations };
     });
     if (!row.items.length) row.issues.push('This order has no items.');
