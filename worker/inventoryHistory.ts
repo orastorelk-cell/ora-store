@@ -1,4 +1,7 @@
 import { readDataTable, replaceDataTable } from './cloudflareData';
+import { creditReturnStock, returnPackingInProgress } from '../src/lib/returnSheets';
+import { cancellationInProgress } from './r2OrderCancellation';
+import { normalizedProductType } from '../src/lib/productVariants';
 
 /**
  * Durable history mirror. Imported browser records are receipts/audit facts,
@@ -44,14 +47,105 @@ const mergeHistory=async(env:unknown,table:'purchase_orders'|'stock_history',inc
 export const inventoryHistoryHandler=async(request:Request,env:unknown,user:Row)=>{
   if(user.role!=='admin')return reply({error:'Only Super Admin can recover or inspect full Purchasing History.'},403);
   if(request.method==='GET'){
-    const [purchases,history]=await Promise.all([readDataTable(env,'purchase_orders'),readDataTable(env,'stock_history')]);
-    return reply({ok:true,purchases,stock_history:history,purchase_count:purchases.length});
+    const [storedPurchases,storedHistory,admin]=await Promise.all([readDataTable(env,'purchase_orders'),readDataTable(env,'stock_history'),readDataTable(env,'admin_data_store')]);
+    const receipts=admin.filter(row=>String(row.key||'').startsWith('inventory-purchase-v1:')&&row.payload?.phase==='complete');
+    const byId=<T extends Row>(rows:T[])=>[...new Map(rows.map(row=>[String(row.id),row])).values()];
+    const purchases=byId([...storedPurchases,...receipts.flatMap(row=>row.payload.purchases||[])]);
+    const history=byId([...storedHistory,...receipts.flatMap(row=>row.payload.stock_history||[])]);
+    return reply({ok:true,purchases,stock_history:history,purchase_count:purchases.length,server_authoritative:true});
   }
   if(request.method!=='POST')return reply({error:'Use GET or POST.'},405);
   const raw=await request.text();
   if(raw.length>1_200_000)return reply({error:'History recovery chunk is too large.'},413);
   let body:any;try{body=JSON.parse(raw)}catch{return reply({error:'Invalid history JSON.'},400)}
-  if(body?.action!=='merge-history')return reply({error:'Only idempotent history recovery is supported; this endpoint never alters stock.'},400);
+  if(body?.action==='purchase-stock'){
+    const id=String(body.operation_id||'');
+    if(!/^[A-Za-z0-9_-]{16,100}$/.test(id))return reply({error:'Invalid stock-purchase operation ID.'},400);
+    const items=body.items;
+    if(!Array.isArray(items)||!items.length||items.length>100)return reply({error:'Select 1-100 Purchase / Stock In lines.'},400);
+    const parsed:Row[]=[];
+    for(const row of items){
+      if(!row||typeof row!=='object'||typeof row.product_id!=='string'||!row.product_id||
+        typeof row.supplier_name!=='string'||!row.supplier_name.trim()||
+        row.supplier_name.length>200||typeof row.variant_id!=='undefined'&&typeof row.variant_id!=='string'||
+        !Number.isSafeInteger(row.quantity_added)||row.quantity_added<=0||row.quantity_added>1000000||
+        typeof row.unit_buying_price!=='number'||!Number.isFinite(row.unit_buying_price)||row.unit_buying_price<0||row.unit_buying_price>1e9||
+        String(row.invoice_ref||'').length>180||String(row.notes||'').length>2000||
+        String(row.bill_image_url||'').length>900)
+        return reply({error:'Invalid purchase line. Nothing was saved.'},400);
+      parsed.push({
+        supplier_name:row.supplier_name.trim(),product_id:row.product_id,
+        ...(row.variant_id?{variant_id:row.variant_id}:{}),
+        quantity_added:row.quantity_added,unit_buying_price:row.unit_buying_price,
+        invoice_ref:String(row.invoice_ref||'').trim(),bill_image_url:String(row.bill_image_url||'').trim(),
+        notes:String(row.notes||'').trim()
+      });
+    }
+    const identity=JSON.stringify(parsed);
+    const receiptKey='inventory-purchase-v1:'+id;
+    const result=await replaceDataTable(env,'admin_data_store',rows=>{
+      const previous=rows.find(row=>String(row.key)===receiptKey)?.payload;
+      if(previous){
+        if(previous.identity!==identity)throw Object.assign(new Error('Purchase operation already exists with different details. Do not resubmit.'),{status:409});
+        const catalog=rows.find(row=>row.key==='storefront-state-v1')?.payload;
+        return {rows,result:{ok:true,already_saved:true,stock_changed:false,purchases:previous.purchases,stock_history:previous.stock_history,
+          state:catalog}};
+      }
+      if(returnPackingInProgress(rows)||cancellationInProgress(rows as any[]))
+        throw Object.assign(new Error('A stock/returns transaction is in progress; retry the same purchase operation.'),{status:409});
+      const catalog=rows.find(row=>row.key==='storefront-state-v1');
+      if(!catalog?.payload||!Array.isArray(catalog.payload.products))
+        throw Object.assign(new Error('Shared stock catalog unavailable. Nothing was saved.'),{status:503});
+      const products=(catalog.payload.products as Row[]).map(p=>({...p,variants:Array.isArray(p.variants)?p.variants.map((v:Row)=>({...v})):[]}));
+      const byProduct=new Map(products.map(p=>[String(p.id),p]));
+      const at=new Date().toISOString(),actor=String(user.display_name||user.username||user.id);
+      const purchases:Row[]=[],logs:Row[]=[];
+      // Validate the COMPLETE transaction on private copies before saving anything.
+      parsed.forEach((row,index)=>{
+        const product=byProduct.get(row.product_id);
+        if(!product)throw Object.assign(new Error('Selected Item Code no longer exists. Refresh stock.'),{status:409});
+        const type=normalizedProductType(product as any);
+        if(type==='bundle')throw Object.assign(new Error('Add stock to the bundle components, not the bundle itself.'),{status:400});
+        const variants=product.variants as Row[];
+        const v=type==='variant'?variants.find(v=>String(v.id)===row.variant_id):null;
+        if(type==='variant'&&!v||type!=='variant'&&row.variant_id)
+          throw Object.assign(new Error('Exact colour/variant is required.'),{status:400});
+        const target=v||product,before=Number(target.stock_quantity||0);
+        const credited=creditReturnStock(target,row.quantity_added);
+        const after=credited.stock_quantity;
+        const sku=String(target.sku||product.sku||'');
+        const label=String(product.name_en||sku)+(v?' - '+String(v.option_value||''):'');
+        const receiptId='stock-in:'+id+':'+index;
+        if(v){
+          product.variants=variants.map(old=>old.id===v.id?{...v,stock_quantity:after,return_stock_debt:credited.return_stock_debt,status:after>0?'Active':'Out of Stock'}:old);
+          product.stock_quantity=(product.variants as Row[]).reduce((sum,current)=>sum+Number(current.stock_quantity||0),0);
+          product.status=product.stock_quantity>0?'Active':'Out of Stock';
+        }else{
+          product.stock_quantity=after;product.return_stock_debt=credited.return_stock_debt;
+          product.status=after>0?'Active':'Out of Stock';
+        }
+        const poNumber='PO-'+at.slice(0,4)+'-'+id.slice(0,8).toUpperCase()+'-'+(index+1);
+        purchases.push({
+          id:receiptId,po_number:poNumber,supplier_name:row.supplier_name,product_id:product.id,
+          product_name:product.name_en,sku,variant_id:v?.id,variant_name:v?.option_value,variant_sku:v?.sku,
+          quantity_added:row.quantity_added,unit_buying_price:row.unit_buying_price,
+          total_cost:row.quantity_added*row.unit_buying_price,invoice_ref:row.invoice_ref||undefined,
+          bill_image_url:row.bill_image_url||undefined,notes:row.notes||undefined,performed_by:actor,created_at:at,
+        });
+        logs.push({
+          id:'history:'+receiptId,product_id:product.id,variant_id:v?.id,product_name:label,
+          change_type:'Purchase Inflow',quantity:row.quantity_added,previous_stock:before,new_stock:after,
+          reason:poNumber+' • '+row.supplier_name,performed_by:actor,created_at:at,
+        });
+      });
+      const state={...catalog.payload,products,version:Number(catalog.payload.version||0)+1,updated_at:at};
+      const receipt={phase:'complete',identity,operation_id:id,purchases,stock_history:logs,created_at:at};
+      return {rows:[...rows.map(row=>row===catalog?{...catalog,payload:state,updated_at:at}:row),
+          {key:receiptKey,payload:receipt,updated_at:at}],result:{ok:true,already_saved:false,stock_changed:true,purchases,stock_history:logs,state}};
+    });
+    return reply(result);
+  }
+  if(body?.action!=='merge-history')return reply({error:'Only signed purchase-stock or idempotent history recovery is supported.'},400);
   const purchases=Array.isArray(body.purchases)?body.purchases:[],history=Array.isArray(body.stock_history)?body.stock_history:[];
   if(purchases.length>100||history.length>100)return reply({error:'Use batches of 100 history entries.'},400);
   if(purchases.some((row:any)=>!validEntry(row,'purchase'))||history.some((row:any)=>!validEntry(row,'audit')))
