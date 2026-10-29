@@ -49,10 +49,11 @@ export const readDurablePurchasingHistory=async(env:unknown)=>{
     readDataTable(env,'purchase_orders'),readDataTable(env,'stock_history'),readDataTable(env,'admin_data_store')
   ]);
   const receipts=admin.filter(row=>String(row.key||'').startsWith('inventory-purchase-v1:')&&row.payload?.phase==='complete');
+  const fifo=admin.filter(row=>String(row.key||'').startsWith('fifo-stock-allocation-v1:')&&row.payload?.stock_changed_once===true);
   const byId=<T extends Row>(rows:T[])=>[...new Map(rows.map(row=>[String(row.id),row])).values()];
   return {
     purchases:byId([...storedPurchases,...receipts.flatMap(row=>row.payload.purchases||[])]),
-    stock_history:byId([...storedHistory,...receipts.flatMap(row=>row.payload.stock_history||[])])
+    stock_history:byId([...storedHistory,...receipts.flatMap(row=>row.payload.stock_history||[]),...fifo.flatMap(row=>row.payload.logs||[])])
   };
 };
 export const inventoryHistoryHandler=async(request:Request,env:unknown,user:Row)=>{
