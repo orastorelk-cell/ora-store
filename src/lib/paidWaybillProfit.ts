@@ -275,9 +275,11 @@ function profitCatalogLookup(products: readonly ProfitCatalogProduct[]) {
     || bySku.get(skuKey(selection.main_sku)) || byId.get(String(selection.product_id));
 }
 export function mergeProfitPurchaseHistory(local: PurchaseOrder[], saved: PurchaseOrder[]): PurchaseOrder[] {
-  // Browser corrections take precedence over older restored records with the same ID.
-  const byId = new Map(saved.map(purchase => [String(purchase.id), purchase]));
-  for (const purchase of local) byId.set(String(purchase.id), purchase);
+  // Server receipts (including recovered R2 backups and atomic Purchase In)
+  // supersede an old browser's stale local cache. Legacy browser-only receipts
+  // remain visible as unverified candidates until migrated to the server.
+  const byId = new Map(local.map(purchase => [String(purchase.id), purchase]));
+  for (const purchase of saved) byId.set(String(purchase.id), purchase);
   return [...byId.values()];
 }
 
