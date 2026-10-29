@@ -109,14 +109,14 @@ export const PurchaseBillArchivePanel=()=>{
         headers:{authorization:'Bearer '+token,'content-type':'application/json'},
         body:JSON.stringify({action:'merge-history',purchases:records})
       },30000);
-      if(response?.ok!==true||response?.stock_changed!==false)
+      if(response?.ok!==true||response?.stock_changed!==false||response?.r2_backup_saved!==true)
         throw new Error(response?.error||'History-only save was not confirmed. No stock change is assumed.');
       if(Array.isArray(response.conflicts)&&response.conflicts.length){
         setSaveMessage((Number(response.added_purchases)>0?Number(response.added_purchases)+' new line(s) saved. ':'')+'Some line IDs already exist with different details. Check Purchase History before retrying; no stock was changed.');
         return;
       }
       setSavedPhotoUrls(previous=>new Set([...previous,entryPhoto.url]));
-      setMessage('Bill saved to Purchase History only and removed from the unprocessed list. Stock and product buying prices were not changed.');
+      setMessage('Bill saved to Purchase History and its separate R2 data backup; removed from the unprocessed list. Stock and product buying prices were not changed.');
       setEntryPhoto(null);
       setSaveMessage('');
     }catch(error:any){setSaveMessage(error?.message||'History-only save failed. No stock was changed.');}
@@ -127,7 +127,7 @@ export const PurchaseBillArchivePanel=()=>{
   return <section className="rounded-2xl border border-sky-500/40 bg-neutral-900 p-4 text-neutral-200">
     <h3 className="text-sm font-bold text-sky-200">Original Purchase Bill Photo Archive</h3>
     <p className="mt-1 text-xs text-neutral-400">
-      Open a bill, search by Item Code or name, and save verified purchase lines to history only.
+      Open a bill, search by Item Code or name, and save verified purchase lines to Purchase History and a separate R2 data backup.
       Current stock and product buying prices are not changed. If the bill does not split variant quantities, save the combined item total without assigning guessed quantities.
     </p>
     <div className="mt-3 flex flex-wrap items-center gap-3">
