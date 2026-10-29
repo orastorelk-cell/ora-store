@@ -16,7 +16,7 @@ const products:any[]=[
 ];
 const ids=['bag','bag','holder','coat'],variants=['black','grey',undefined,undefined];
 const proofs=OCT29_STOCK_RECEIPTS.map((r,i)=>({
- po_number:r.po,sku:r.sku,quantity:r.qty,product_id:ids[i],
+ po_number:r.po,sku:r.sku,quantity:r.qty,unit_buying_price:r.unit,product_id:ids[i],
  ...(variants[i]?{variant_id:variants[i]}:{}),
  created_at:at,log_id:'stk-'+i,log_created_at:at,
  log_reason:r.po+' • supplier',log_previous_stock:0,
