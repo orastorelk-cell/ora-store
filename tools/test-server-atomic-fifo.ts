@@ -52,6 +52,9 @@ assert(worker.includes("const existing=rows.find(row=>row.key===receiptKey(id))?
 assert(worker.includes('already_saved:true'));
 assert(worker.includes('stock_changed_once:true'));
 assert(worker.includes("replaceDataTable(env,'order_snapshots'"));
+assert(worker.includes("readDataTable(env,'stock_history')"),'pre-migration Stock Audit must block repeat deduction');
+assert(worker.includes("selected.stock_allocated_at||selected.stock_status==='Allocated'"));
+assert(worker.includes("This order already has a historic FIFO Stock Audit deduction"));
 assert(inventory.includes("startsWith('fifo-stock-allocation-v1:')"));
 assert(routes.includes("pathname==='/api/orders/stock/allocate'"));
 assert(diagnosis.includes('Duplicate FIFO stock deductions detected'));
