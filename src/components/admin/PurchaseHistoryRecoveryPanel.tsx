@@ -1,4 +1,5 @@
 import React,{useState} from 'react';
+import {PurchaseBillArchivePanel} from './PurchaseBillArchivePanel';
 import { staffJsonRequest } from '../../lib/staffRequest';
 import type { PurchaseOrder } from '../../types';
 
@@ -81,7 +82,7 @@ export const PurchaseHistoryRecoveryPanel=({purchases,isAdmin}:{purchases:Purcha
   };
   const candidates=slots.filter(row=>!row.error&&Number(row.missing_count)>0)
     .sort((a,b)=>(b.missing_count||0)-(a.missing_count||0)||(b.count||0)-(a.count||0)).slice(0,20);
-  return <section className="rounded-2xl border border-amber-500/30 bg-neutral-900 p-4 text-neutral-200">
+  return <div className="space-y-4"><PurchaseBillArchivePanel /><section className="rounded-2xl border border-amber-500/30 bg-neutral-900 p-4 text-neutral-200">
     <h3 className="text-sm font-black text-amber-300">Recover Missing Old Purchasing History — Cloudflare R2</h3>
     <p className="mt-1 text-xs text-neutral-400">Browser-only old purchases may have disappeared. Search seven days of existing server backup slots.
       Restore verified old Purchase IDs only; actual Stock, order allocations and invoices will NOT be changed.</p>
@@ -116,5 +117,5 @@ export const PurchaseHistoryRecoveryPanel=({purchases,isAdmin}:{purchases:Purcha
       <summary>Unavailable backup slots ({slots.filter(s=>s.error).length})</summary>
       {slots.filter(s=>s.error).map(s=><p key={s.slot}>Slot {s.slot}: {s.error}</p>)}
     </details>}
-  </section>;
+  </section></div>;
 };
