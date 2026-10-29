@@ -119,17 +119,16 @@ export const PurchaseBillArchivePanel=()=>{
     {message&&<p role="status" className="mt-3 text-xs text-amber-200">{message}</p>}
     {photos.length>0&&<div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
       {photos.map(photo=><div key={photo.key} className="overflow-hidden rounded-xl border border-neutral-700">
-        <a href={photo.url} target="_blank" rel="noopener noreferrer">
-          <img src={photo.url} alt="Original supplier bill image" className="h-36 w-full object-contain bg-neutral-950" loading="lazy" />
-        </a>
+        <button type="button" onClick={()=>openEntry(photo)} aria-label="View bill and enter historical purchase"
+          className="block w-full">
+          <img src={photo.url} alt="View original supplier bill and enter its purchase details" className="h-36 w-full object-contain bg-neutral-950" loading="lazy" />
+        </button>
         <div className="p-2 text-[11px] text-neutral-300">
           <p>Archive date: {formatDate(photoDate(photo.key))}</p>
           <p className="text-neutral-500">{photo.uploaded_at?new Date(photo.uploaded_at).toLocaleString('en-LK'):'Upload time not saved'}</p>
-          <a className="mt-1 block break-words text-sky-300 underline" href={photo.url}
-            target="_blank" rel="noopener noreferrer">Open original bill photo</a>
           <button type="button" onClick={()=>openEntry(photo)}
             className="mt-2 w-full rounded-lg border border-emerald-500/70 px-2 py-2 text-xs font-bold text-emerald-200 hover:bg-emerald-500/10">
-            Add Verified Lines — History Only
+            View Bill & Enter Purchase
           </button>
         </div>
       </div>)}
