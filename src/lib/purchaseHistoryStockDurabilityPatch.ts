@@ -1,170 +1,22 @@
-const replaceRequired = (text: string, from: string, to: string, label: string) => {
-  if (text.includes(to)) return text;
-  if (!text.includes(from)) throw new Error(`[O-RA purchase stock authority] ${label} marker not found`);
-  return text.replace(from, to);
-};
-
+/**
+ * Previous behavior rebuilt EVERY product's sellable stock as
+ * localStorage Purchasing History - every historic allocated order.
+ * Purchasing History was browser-local and incomplete after changing browsers:
+ * a browser holding only today's four receipts erased years of starting stock
+ * and propagated zero stock to the shared server catalog. The FIFO "hard cap"
+ * duplicated the exact same unsafe calculation.
+ *
+ * We must not use incomplete/non-authoritative history to rewrite live stock.
+ * Actual stock remains the shared server catalog updated by purchase/returns
+ * and order reservation. Historical purchases are now synced to a durable R2
+ * receipt ledger for audit, NEVER replayed as a second stock credit.
+ *
+ * A later historical stock adjustment requires verified opening balances and
+ * an explicit audit/reconciliation operation; guessing from partial receipts
+ * is dangerous and may create duplicate invoices.
+ */
 export const purchaseHistoryStockDurabilityPatch = () => ({
-  name: 'ora-purchase-history-stock-authority-patch',
-  enforce: 'pre' as const,
-  transform(code: string, rawId: string) {
-    const id = rawId.split('?')[0].replace(/\\/g, '/');
-    if (!id.endsWith('/src/context/StoreContext.tsx')) return null;
-
-    let text = code;
-
-    if (!text.includes('PURCHASE LEDGER STOCK AUTHORITY')) {
-      const marker = "  const fifoAllocatorSignatureRef = useRef<string>('');";
-      const block = [
-        '  // PURCHASE LEDGER STOCK AUTHORITY',
-        '  // Once an exact Item Code has Purchase History, Purchase History becomes the',
-        '  // stock source of truth. Product-form starting stock is NOT counted again on',
-        '  // top of Purchase / Stock In. This prevents over-allocation and extra invoices.',
-        '  useEffect(()=>{',
-        '    if(!purchaseOrders.length)return;',
-        "    const skuKey=(value:unknown)=>String(value||'').trim().toUpperCase();",
-        '    const purchasedBySku=new Map<string,number>();',
-        '    purchaseOrders.forEach(po=>{',
-        '      const key=skuKey(po.variant_sku||po.sku);',
-        '      if(!key)return;',
-        '      purchasedBySku.set(key,(purchasedBySku.get(key)||0)+Math.max(0,Number(po.quantity_added||0)));',
-        '    });',
-        '',
-        '    const allocatedBySku=new Map<string,number>();',
-        '    const addAllocated=(sku:unknown,qty:unknown)=>{',
-        '      const key=skuKey(sku); const amount=Math.max(0,Number(qty||0));',
-        '      if(!key||!amount)return;',
-        '      allocatedBySku.set(key,(allocatedBySku.get(key)||0)+amount);',
-        '    };',
-        '    orders.filter(order=>order.stock_allocated && order.order_status!==\'Cancelled\' && !order.is_duplicate_order && !order.is_test_order).forEach(order=>{',
-        '      stockConsumedItems(order).forEach(item=>{',
-        '        const orderQty=Math.max(1,Number(item.quantity||1));',
-        '        addAllocated(item.sku||item.main_sku,orderQty);',
-        "        if(item.product_type==='bundle'&&Array.isArray(item.bundle_components)){",
-        '          item.bundle_components.forEach(component=>addAllocated(component.sku,orderQty*Math.max(1,Number(component.quantity_per_bundle||1))));',
-        '        }',
-        '      });',
-        '    });',
-        '',
-        '    const exactAdjustmentNet=(product:Product,variant?:ProductVariant)=>stockHistory.reduce((sum,log)=>{',
-        '      if(String(log.product_id)!==String(product.id))return sum;',
-        "      if(log.change_type!=='Increase'&&log.change_type!=='Decrease')return sum;",
-        '      if(variant){',
-        '        if(log.variant_id!==undefined && String(log.variant_id)!==String(variant.id))return sum;',
-        "        const label=String(log.product_name||'').toLowerCase();",
-        "        const option=String(variant.option_value||'').trim().toLowerCase();",
-        "        const idText=String(log.id||'');",
-        '        if(option&&!label.includes(option)&&!idText.includes(String(variant.id)))return sum;',
-        '      }',
-        '      const amount=Math.max(0,Number(log.quantity||0));',
-        "      return sum+(log.change_type==='Increase'?amount:-amount);",
-        '    },0);',
-        '',
-        '    setProducts(current=>{',
-        '      let changed=false;',
-        '      const next=current.map(product=>{',
-        '        const type=normalizedProductType(product);',
-        "        if(type==='bundle')return product;",
-        "        if(type==='variant'&&(product.variants||[]).length){",
-        '          let variantChanged=false;',
-        '          const variants=(product.variants||[]).map(variant=>{',
-        '            const key=skuKey(variant.sku);',
-        '            if(!purchasedBySku.has(key))return variant;',
-        '            const target=Math.max(0,(purchasedBySku.get(key)||0)+exactAdjustmentNet(product,variant)-(allocatedBySku.get(key)||0));',
-        '            const currentStock=Math.max(0,Number(variant.stock_quantity||0));',
-        '            if(currentStock===target)return variant;',
-        '            changed=true; variantChanged=true;',
-        "            return {...variant,stock_quantity:target,status:(target<=0?'Out of Stock':'Active') as ProductVariant['status']};",
-        '          });',
-        '          if(!variantChanged)return product;',
-        '          const total=variants.reduce((sum,row)=>sum+Math.max(0,Number(row.stock_quantity||0)),0);',
-        "          return {...product,variants,stock_quantity:total,status:total<=0?'Out of Stock':'Active'};",
-        '        }',
-        '        const key=skuKey(product.sku);',
-        '        if(!purchasedBySku.has(key))return product;',
-        '        const target=Math.max(0,(purchasedBySku.get(key)||0)+exactAdjustmentNet(product)-(allocatedBySku.get(key)||0));',
-        '        const currentStock=Math.max(0,Number(product.stock_quantity||0));',
-        '        if(currentStock===target)return product;',
-        '        changed=true;',
-        "        return {...product,stock_quantity:target,status:target<=0?'Out of Stock':'Active'};",
-        '      });',
-        '      return changed?next:current;',
-        '    });',
-        '  },[purchaseOrders,orders,stockHistory]);',
-        '',
-        marker,
-      ].join('\n');
-      text = replaceRequired(text, marker, block, 'FIFO allocator marker');
-    }
-
-    if (!text.includes('PURCHASE LEDGER FIFO HARD CAP')) {
-      const from = '    const inventory=cloneInventoryProducts(products);\n    const productMap=new Map(inventory.map(p=>[p.id,p] as [string,Product]));';
-      const to = [
-        '    const inventory=cloneInventoryProducts(products);',
-        '    // PURCHASE LEDGER FIFO HARD CAP',
-        '    // Re-cap the allocator working copy BEFORE checking any waiting order. This is',
-        '    // independent of React state timing, so a stale visible stock number can never',
-        '    // let an extra confirmed order allocate or become invoice-ready.',
-        "    const fifoSkuKey=(value:unknown)=>String(value||'').trim().toUpperCase();",
-        '    const fifoPurchasedBySku=new Map<string,number>();',
-        '    purchaseOrders.forEach(po=>{',
-        '      const key=fifoSkuKey(po.variant_sku||po.sku);',
-        '      if(!key)return;',
-        '      fifoPurchasedBySku.set(key,(fifoPurchasedBySku.get(key)||0)+Math.max(0,Number(po.quantity_added||0)));',
-        '    });',
-        '    const fifoAllocatedBySku=new Map<string,number>();',
-        '    const fifoAddAllocated=(sku:unknown,qty:unknown)=>{',
-        '      const key=fifoSkuKey(sku); const amount=Math.max(0,Number(qty||0));',
-        '      if(!key||!amount)return;',
-        '      fifoAllocatedBySku.set(key,(fifoAllocatedBySku.get(key)||0)+amount);',
-        '    };',
-        '    orders.filter(order=>order.stock_allocated && order.order_status!==\'Cancelled\' && !order.is_duplicate_order && !order.is_test_order).forEach(order=>{',
-        '      stockConsumedItems(order).forEach(item=>{',
-        '        const orderQty=Math.max(1,Number(item.quantity||1));',
-        '        fifoAddAllocated(item.sku||item.main_sku,orderQty);',
-        "        if(item.product_type==='bundle'&&Array.isArray(item.bundle_components)){",
-        '          item.bundle_components.forEach(component=>fifoAddAllocated(component.sku,orderQty*Math.max(1,Number(component.quantity_per_bundle||1))));',
-        '        }',
-        '      });',
-        '    });',
-        '    const fifoAdjustmentNet=(product:Product,variant?:ProductVariant)=>stockHistory.reduce((sum,log)=>{',
-        '      if(String(log.product_id)!==String(product.id))return sum;',
-        "      if(log.change_type!=='Increase'&&log.change_type!=='Decrease')return sum;",
-        '      if(variant){',
-        '        if(log.variant_id!==undefined && String(log.variant_id)!==String(variant.id))return sum;',
-        "        const label=String(log.product_name||'').toLowerCase();",
-        "        const option=String(variant.option_value||'').trim().toLowerCase();",
-        "        const idText=String(log.id||'');",
-        '        if(option&&!label.includes(option)&&!idText.includes(String(variant.id)))return sum;',
-        '      }',
-        '      const amount=Math.max(0,Number(log.quantity||0));',
-        "      return sum+(log.change_type==='Increase'?amount:-amount);",
-        '    },0);',
-        '    inventory.forEach(product=>{',
-        '      const type=normalizedProductType(product);',
-        "      if(type==='bundle')return;",
-        "      if(type==='variant'&&(product.variants||[]).length){",
-        '        product.variants=(product.variants||[]).map(variant=>{',
-        '          const key=fifoSkuKey(variant.sku);',
-        '          if(!fifoPurchasedBySku.has(key))return variant;',
-        '          const ledger=Math.max(0,(fifoPurchasedBySku.get(key)||0)+fifoAdjustmentNet(product,variant)-(fifoAllocatedBySku.get(key)||0));',
-        "          return {...variant,stock_quantity:ledger,status:(ledger<=0?'Out of Stock':'Active') as ProductVariant['status']};",
-        '        });',
-        '        product.stock_quantity=(product.variants||[]).reduce((sum,row)=>sum+Math.max(0,Number(row.stock_quantity||0)),0);',
-        "        product.status=product.stock_quantity<=0?'Out of Stock':'Active';",
-        '        return;',
-        '      }',
-        '      const key=fifoSkuKey(product.sku);',
-        '      if(!fifoPurchasedBySku.has(key))return;',
-        '      const ledger=Math.max(0,(fifoPurchasedBySku.get(key)||0)+fifoAdjustmentNet(product)-(fifoAllocatedBySku.get(key)||0));',
-        '      product.stock_quantity=ledger;',
-        "      product.status=ledger<=0?'Out of Stock':'Active';",
-        '    });',
-        '    const productMap=new Map(inventory.map(p=>[p.id,p] as [string,Product]));',
-      ].join('\n');
-      text = replaceRequired(text, from, to, 'FIFO inventory hard cap');
-    }
-
-    return { code: text, map: null };
-  },
+  name:'ora-purchase-history-stock-authority-safe',
+  enforce:'pre' as const,
+  transform(_code:string,_rawId:string){return null;},
 });
