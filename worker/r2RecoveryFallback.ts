@@ -25,7 +25,7 @@ import { SHEET_CONFIRM_API } from '../src/lib/sheetConfirmState';
 import { r2CourierPaymentsHandler } from './r2CourierPayments';
 import { profitFacebookLeadMatch } from './profitFacebookLeadMatch';
 import { staffPurchasesHandler } from './staffPurchases';
-import { inventoryHistoryHandler } from './inventoryHistory';
+import { inventoryHistoryHandler,readDurablePurchasingHistory } from './inventoryHistory';
 import { purchaseBackupRecoveryHandler } from './purchaseBackupRecovery';
 import { r2Oct29StockRecoveryHandler } from './r2Oct29StockRecovery';
 import { orderItemEditHandler } from './orderItemEdit';
@@ -263,7 +263,7 @@ export const withR2DataFallback=async(request:Request,env:unknown,_ctx:any,next:
     if(new URL(request.url).pathname==='/api/admin/profit-ad-costs'){
       const user=await verifyActiveStaff(request,env);
       if(!user)return json({error:'Login session required.'},401);
-      return profitAdCostHandler(request,r2ReturnStorage(env),user,()=>readDataTable(env,'purchase_orders'));
+      return profitAdCostHandler(request,r2ReturnStorage(env),user,async()=> (await readDurablePurchasingHistory(env)).purchases);
     }
     if(new URL(request.url).pathname==='/api/admin/recover-oct29-stock'){
       const user=await verifyActiveStaff(request,env);
