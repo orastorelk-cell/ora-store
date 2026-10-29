@@ -104,15 +104,19 @@ export const waybillAutoAssignmentServerGuardPatch = () => ({
     const readyWithoutWaybill=confirmedActive
       .filter(o=>o.stock_allocated && o.stock_status==='Allocated' && !o.waybill_number && !o.invoice_locked && o.order_status!=='Cancelled')
       .sort((a,b)=>new Date(a.created_at).getTime()-new Date(b.created_at).getTime());
-    if(!allocatedIds.size && !readyWithoutWaybill.length) return;
+    if(!allocatedIds.size && !readyWithoutWaybill.length && !newlyWaitingIds.size) return;
 
-    if(allocatedIds.size){
+    if(allocatedIds.size || newlyWaitingIds.size){
       const restockBatchId='PACK-RESTOCK-'+now.replace(/[^0-9]/g,'').slice(0,17);
       setOrders(prev=>prev.map(o=>{
-        if(!allocatedIds.has(o.id)) return o;
-        const wasWaiting=Boolean(o.stock_waiting_since);
-        const updated={...o,stock_allocated:true,stock_status:'Allocated' as const,stock_allocated_at:now,stock_allocated_by:'System FIFO Allocator',
-          ...(wasWaiting&&!o.invoice_pack_batch_id?{invoice_pack_batch_id:restockBatchId}:{})} as Order;
+        const newlyAllocated=allocatedIds.has(o.id), newlyWaiting=newlyWaitingIds.has(o.id);
+        if(!newlyAllocated && !newlyWaiting) return o;
+        const wasWaiting=Boolean(o.stock_waiting_since) ||
+          Boolean(o.call_center_updated_at && Date.now()-new Date(o.call_center_updated_at).getTime()>10*60*1000);
+        const updated={...o,
+          ...(newlyWaiting?{stock_waiting_since:o.stock_waiting_since||now}:{}),
+          ...(newlyAllocated?{stock_allocated:true,stock_status:'Allocated' as const,stock_allocated_at:now,stock_allocated_by:'System FIFO Allocator',
+            ...(wasWaiting&&!o.invoice_pack_batch_id?{invoice_pack_batch_id:restockBatchId}:{})}:{})} as Order;
         void mirrorOrderUpdate(updated);
         return updated;
       }));
