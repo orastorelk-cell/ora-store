@@ -137,6 +137,8 @@ export const r2AtomicFifoAllocation=async(env:unknown,id:string,user:Row)=>{
   return {ok:true,order:completed,state:planned.state,logs:planned.receipt.logs||[],already_saved:planned.already_saved,stock_changed:!planned.already_saved};
 };
 export const r2AtomicFifoHandler=async(request:Request,env:unknown,user:Row)=>{
+  if(user.role!=='admin'&&!['stock','packing','orders'].some(permission=>(user.permissions||[]).includes(permission)))
+    return json({error:'Stock/packing permission required.'},403);
   if(request.method!=='POST')return json({error:'POST required.'},405);
   const body:any=await request.json().catch(()=>null);
   if(typeof body?.order_id!=='string'||!body.order_id||body.order_id.length>150)
