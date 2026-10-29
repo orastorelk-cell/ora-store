@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { transformSync } from 'esbuild';
+import { loadConfigFromFile } from 'vite';
 import { OCT29_STOCK_RECEIPTS,planOct29StockRecovery,applyOct29StockRecoveryLines } from '../src/lib/oct29StockRecovery';
 
 const at='2026-10-29T13:12:16.000Z';
@@ -66,4 +67,32 @@ assert(worker.includes('Nothing was changed.')&&worker.includes('already_saved')
 transformSync(ui,{loader:'tsx',format:'esm',target:'es2022'});
 transformSync(context,{loader:'tsx',format:'esm',target:'es2022'});
 transformSync(worker,{loader:'ts',format:'esm',target:'es2022'});
+
+const vite=await loadConfigFromFile({command:'build',mode:'production'});
+assert(vite,'Vite config must load before deploying purchase recovery');
+let compiledContext=context,compiledUi=ui;
+for(const plugin of (vite!.config.plugins||[]).flat(Infinity) as any[]){
+  if(typeof plugin?.transform!=='function')continue;
+  for(const [type,source] of [['context',compiledContext],['ui',compiledUi]] as const){
+    const result=await plugin.transform(source,type==='context'
+      ?'/project/src/context/StoreContext.tsx'
+      :'/project/src/components/admin/AdminDashboard.tsx');
+    if(!result)continue;
+    const transformed=typeof result==='string'?result:result.code;
+    if(type==='context')compiledContext=transformed;
+    else compiledUi=transformed;
+  }
+}
+assert(compiledContext.includes('WAYBILL AUTO ASSIGN SERVER GUARD'));
+assert(compiledContext.includes('PACK-RESTOCK-'));
+assert(compiledContext.includes('stock_waiting_since:o.stock_waiting_since||now'));
+assert(compiledContext.includes('/api/orders/waybill/assign'),
+ 'auto-assigned waybills must be durably confirmed server-first');
+assert(compiledContext.includes('!o.invoice_generated_at'),
+ 'existing invoices must never be regenerated');
+assert(compiledUi.includes('Fardar Upload CSV'));
+assert(compiledUi.includes('INCOMPLETE PURCHASE HISTORY'));
+transformSync(compiledContext,{loader:'tsx',format:'esm',target:'es2022'});
+transformSync(compiledUi,{loader:'tsx',format:'esm',target:'es2022'});
+
 console.log('PASS: verified 4 old receipts; original zero, only post-purchase allocations; same parent variants; no double credit; stale or returns blocked; Packing UI and worker parse.');
