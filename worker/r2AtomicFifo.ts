@@ -91,6 +91,21 @@ export const r2AtomicFifoAllocation=async(env:unknown,id:string,user:Row)=>{
     return {ok:true,already_allocated:true,order:selected,state:null,stock_changed:false};
   }
   if(!previous&&!eligible(selected))fail('Order is not eligible for stock allocation.');
+  // Pre-migration FIFO had no durable allocation receipt and could debit
+  // stock before saving stock_allocated=true. Never replay a confirmed older
+  // debit after a failed browser/server mirror: those are the exact
+  // circumstances that doubled R0008-GREY for FB-000794.
+  if(!previous&&!selected.stock_allocated){
+    if(selected.stock_allocated_at||selected.stock_status==='Allocated')
+      fail('This order has an earlier stock allocation timestamp/status but no server receipt. Do NOT debit stock twice; reconcile its order snapshot.');
+    const legacyHistory=await readDataTable(env,'stock_history');
+    const orderNumber=String(selected.order_number||'');
+    const duplicate=legacyHistory.some(log=>
+      log.change_type==='Order Deduction'&&
+      String(log.reason||'').trim()==='FIFO stock allocated to '+orderNumber);
+    if(duplicate)
+      fail('This order already has a historic FIFO Stock Audit deduction. Do NOT deduct again; reconcile its allocated status and invoice.');
+  }
   const fingerprint=itemFingerprint(selected);
   const planned=await replaceDataTable(env,'admin_data_store',rows=>{
     const existing=rows.find(row=>row.key===receiptKey(id))?.payload;
