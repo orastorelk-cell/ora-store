@@ -7,7 +7,13 @@ export const safeVariantForStock=(product:ProductLike|undefined,variantId:unknow
   const existing=product.variants.find(v=>String(v.id)===String(variantId||'')) ;
   // A saved exact variant ID is authoritative unless the exact SKU clearly
   // contradicts it. Never automatically reassign a conflicting colour.
-  if(existing)return existing;
+  if(existing){
+    // Refuse an order that explicitly names another colour's SKU. A stale
+    // variant ID must not silently debit BLACK to print a GREY parcel.
+    const explicit=key(sku);
+    const other=product.variants.filter(v=>key(v.sku)===explicit && v.id!==existing.id);
+    return other.length ? undefined : existing;
+  }
   if(variantId)return undefined;
   const code=key(sku);
   const foundBySku=product.variants.filter(v=>key(v.sku)===code&&code!==key(product.sku));
