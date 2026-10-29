@@ -48,7 +48,7 @@ export const r2Oct29StockRecoveryHandler=async(request:Request,env:unknown,user:
       fail('GREY stock changed after preview. Refresh and preview again.');
     const latest=await getOrders(env);
     const originalSig=(items:Row[])=>JSON.stringify(items.map(o=>[o.id,o.stock_allocated,o.stock_allocated_at,o.order_status,
-      o.stock_quantity_correction,o.items]).sort((a,b)=>String(a[0]).localeCompare(String(b[0])));
+      o.stock_quantity_correction,o.items]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))));
     if(originalSig(latest)!==originalSig(orders))fail('An order changed since GREY preview. Retry preview.');
     const saved=await replaceDataTable(env,'admin_data_store',current=>{
       const done=current.find(row=>row.key===OCT29_GREY_GAP_KEY)?.payload;
