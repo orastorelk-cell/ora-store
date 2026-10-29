@@ -83,6 +83,19 @@ export const inventoryHistoryHandler=async(request:Request,env:unknown,user:Row)
     }
     const identity=JSON.stringify(parsed);
     const receiptKey='inventory-purchase-v1:'+id;
+    // Legacy Purchasing was browser-local. Once those receipts are migrated to
+    // the durable purchase_orders table, a second submission of the same
+    // supplier bill must not credit the stock twice.
+    const previousLegacy=await readDataTable(env,'purchase_orders');
+    const today=new Date(Date.now()+330*60_000).toISOString().slice(0,10);
+    const receiptDay=(date:unknown)=>{const millis=Date.parse(String(date||''));return Number.isFinite(millis)?new Date(millis+330*60_000).toISOString().slice(0,10):'';};
+    const sameLine=(old:Row,line:Row)=>receiptDay(old.created_at)===today
+      &&String(old.product_id)===String(line.product_id)
+      &&String(old.variant_id||'')===String(line.variant_id||'')
+      &&String(old.supplier_name||'').trim().toLowerCase()===String(line.supplier_name||'').trim().toLowerCase()
+      &&Number(old.quantity_added)===Number(line.quantity_added)
+      &&Number(old.unit_buying_price)===Number(line.unit_buying_price)
+      &&String(old.invoice_ref||'').trim()===String(line.invoice_ref||'').trim();
     const result=await replaceDataTable(env,'admin_data_store',rows=>{
       const previous=rows.find(row=>String(row.key)===receiptKey)?.payload;
       if(previous){
@@ -91,6 +104,10 @@ export const inventoryHistoryHandler=async(request:Request,env:unknown,user:Row)
         return {rows,result:{ok:true,already_saved:true,stock_changed:false,purchases:previous.purchases,stock_history:previous.stock_history,
           state:catalog}};
       }
+      const historical=rows.filter(row=>String(row.key||'').startsWith('inventory-purchase-v1:')&&row.payload?.phase==='complete')
+        .flatMap(row=>row.payload.purchases||[]);
+      if(parsed.every(line=>[...previousLegacy,...historical].some(receipt=>sameLine(receipt,line))))
+        throw Object.assign(new Error('Possible duplicate Purchase / Stock In today. These exact supplier/item/qty/cost lines were already recorded. Verify the earlier bill; use its unique invoice reference for a genuinely separate purchase. Nothing was added again.'),{status:409});
       if(returnPackingInProgress(rows)||cancellationInProgress(rows as any[]))
         throw Object.assign(new Error('A stock/returns transaction is in progress; retry the same purchase operation.'),{status:409});
       const catalog=rows.find(row=>row.key==='storefront-state-v1');
