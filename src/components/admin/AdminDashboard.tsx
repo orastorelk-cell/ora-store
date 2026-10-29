@@ -78,6 +78,7 @@ import {
 import { useStore } from '../../context/StoreContext';
 import PackingBatchMergePanel from './PackingBatchMergePanel';
 import { GreyPackingDiagnosis } from './GreyPackingDiagnosis';
+import { PurchaseHistoryRecoveryPanel } from './PurchaseHistoryRecoveryPanel';
 import {
   Product,
   Category,
@@ -4343,6 +4344,7 @@ Suitable For:
             </div>
           </div>
 
+          <PurchaseHistoryRecoveryPanel purchases={purchaseOrders} isAdmin={adminUser?.role==='admin'} />
           <div className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden overflow-x-auto">
             <div className="p-4 border-b border-neutral-800"><h3 className="font-bold text-white text-sm">Purchase History</h3></div>
             <table className="w-full text-left text-xs text-neutral-300">

@@ -43,7 +43,10 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
   const pages = Math.max(1, Math.ceil(filtered.length / 10)), currentPage = Math.min(page, pages);
   const visible = filtered.slice((currentPage - 1) * 10, currentPage * 10);
   const money = (value: number | null | undefined) => value === null || value === undefined ? 'Pending' : profitMoney(value);
-  const canCalculate = ready && !error && waybills.length > 0 && facebookStatus === 'ready' && Boolean(facebook) && !summary.invalid && !busy;
+  // Do not publish an exact net-profit number or PDF while historic
+  // purchasing cost/Fardar rows still require review.
+  const canCalculate = ready && !error && waybills.length > 0 && facebookStatus === 'ready'
+    && Boolean(facebook) && !summary.invalid && !busy && report.totals.review===0;
   const freshReport = () => {
     fbSequence.current++; waybillSequence.current++; metaSequence.current++; setVerifiedLeads({});
     setWaybills([]); setWaybillFile(''); setFacebook(null); setFacebookStatus('missing'); setTiktok(''); setBasis('auto'); setCalculated(false); setMessage(''); setSearch(''); setPage(1);
@@ -137,6 +140,9 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
     {(!ready || error) && <p role="alert" className="rounded-xl bg-amber-50 p-4 text-sm text-amber-800">{error || 'Loading saved payment, return and Purchasing records...'}</p>}
     {resetError && <div role="alert" className="rounded-xl bg-amber-50 p-4 text-sm text-amber-800"><p>{resetError}</p>{onResetPrevious && <button type="button" onClick={() => void onResetPrevious()} className="mt-2 underline">Retry previous-report reset</button>}</div>}
     {message && <p role="status" className="break-words rounded-xl bg-orange-50 p-4 text-sm text-orange-900">{message}</p>}
+    {report.totals.review>0 && waybills.length>0 && <p role="alert" className="rounded-xl border border-amber-400 bg-amber-50 p-4 text-sm font-semibold text-amber-950">
+      {report.totals.review} invoice(s) have incomplete Purchasing/Fardar/payment evidence. Do not treat latest stock buying prices as verified historic costs. Recover old Purchasing History, then Refresh System Records before exporting final profit.
+    </p>}
     <section className="rounded-2xl border bg-white p-5 shadow-sm">
       <h3 className="font-black">1. All Payment / Return Waybills</h3><p className="mt-2 text-sm text-gray-500">Payment sets සියල්ල සහ Return Complete waybills ඇතුළත් CSV එක තෝරන්න. එකම waybill එක දෙපාරක් ගණනය වෙන්නේ නැහැ.</p>
       <button type="button" onClick={() => waybillInput.current?.click()} disabled={Boolean(busy)} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-40"><Upload className="h-4 w-4" />Upload Waybill CSV</button>
