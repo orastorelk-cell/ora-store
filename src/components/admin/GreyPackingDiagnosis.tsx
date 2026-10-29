@@ -1,10 +1,10 @@
 import React,{useState} from 'react';
 import { staffJsonRequest } from '../../lib/staffRequest';
-import type { Order,Product } from '../../types';
+import type { Order,Product,StockHistory } from '../../types';
 import { safeVariantForStock } from '../../lib/exactVariantStockResolution';
 
 /** Read-only invoice diagnosis: purchasing is NOT a printable invoice by itself. */
-export const GreyPackingDiagnosis=({orders,products}:{orders:Order[];products:Product[]})=>{
+export const GreyPackingDiagnosis=({orders,products,stockHistory=[]}:{orders:Order[];products:Product[];stockHistory?:StockHistory[]})=>{
   const [repairing,setRepairing]=useState(false);
   const [message,setMessage]=useState('');
   const recoverMissingGrey=async()=>{
@@ -52,6 +52,18 @@ export const GreyPackingDiagnosis=({orders,products}:{orders:Order[];products:Pr
   const product=products.find(p=>(p.variants||[]).some(v=>String(v.sku).toUpperCase()==='R0008-GREY'));
   const grey=product?.variants?.find(v=>String(v.sku).toUpperCase()==='R0008-GREY');
   const remaining=Number(grey?.stock_quantity||0);
+  // Duplicate Stock Audit receipt detection (no speculative changes).
+  const greyAllocations=stockHistory.filter(log=>log.change_type==='Order Deduction' &&
+    String(log.product_id)===String(product?.id) &&
+    (String(log.variant_id||'')===String(grey?.id||'__none__') ||
+      String(log.product_name||'').toUpperCase().includes('GREY')) &&
+    /^FIFO stock allocated to FB-/i.test(String(log.reason||'')));
+  const auditByOrder=new Map<string,StockHistory[]>();
+  for(const log of greyAllocations){
+    const key=String(log.reason||'').trim();
+    auditByOrder.set(key,[...(auditByOrder.get(key)||[]),log]);
+  }
+  const duplicateDeductions=[...auditByOrder.entries()].filter(([,logs])=>logs.length>1);
   const candidates=orders.filter(order=>(order.items||[]).some(item=>{
     const direct=String(item.sku||'').toUpperCase()==='R0008-GREY' ||
       String(item.variant_id||'')===String(grey?.id||'__none__') ||
@@ -84,6 +96,12 @@ export const GreyPackingDiagnosis=({orders,products}:{orders:Order[];products:Pr
       Exact GREY item diagnosis. A purchase receipt is not itself an invoice. Only valid Confirmed orders
       with allocated stock and a current waybill enter Packing. This is read-only; it never adds stock.
     </p>
+    {duplicateDeductions.length>0&&<p role="alert" className="mt-3 rounded-lg border border-red-500/40 bg-red-900/20 p-3 text-xs font-bold text-red-200">
+      Duplicate FIFO stock deductions detected: {duplicateDeductions.map(([order,logs])=>
+        order.replace('FIFO stock allocated to ','')+' ('+logs.length+' deductions)').join(', ')}.
+      Do not add new Purchasing to compensate. Use the verified original GREY stock-gap check below;
+      reconcile each order's waybill and invoice status before printing.
+    </p>}
     <div className="mt-3">
       <button type="button" disabled={repairing} onClick={()=>void recoverMissingGrey()}
         className="rounded-xl border border-amber-500 bg-amber-500/10 px-4 py-2 text-xs font-bold text-amber-200 disabled:opacity-50">
