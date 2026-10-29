@@ -28,7 +28,8 @@
     "test:oct29-stock-recovery": "node --import tsx tools/test-oct29-stock-recovery.ts",
     "test:durable-purchasing": "node --import tsx tools/test-durable-purchase-history.ts",
     "test:grey-invoice-recovery": "node --import tsx tools/test-grey-stock-invoice-recovery.ts",
-    "check:worker-syntax": "node tools/check-worker-syntax.mjs"
+    "check:worker-syntax": "node tools/check-worker-syntax.mjs",
+    "test:purchase-backup-recovery": "node --import tsx tools/test-purchase-backup-recovery.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
