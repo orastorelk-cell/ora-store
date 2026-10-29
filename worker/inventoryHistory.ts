@@ -106,7 +106,10 @@ export const inventoryHistoryHandler=async(request:Request,env:unknown,user:Row)
       }
       const historical=rows.filter(row=>String(row.key||'').startsWith('inventory-purchase-v1:')&&row.payload?.phase==='complete')
         .flatMap(row=>row.payload.purchases||[]);
-      if(parsed.every(line=>[...previousLegacy,...historical].some(receipt=>sameLine(receipt,line))))
+      // ANY duplicate line blocks the entire new bill, even if the other lines are new.
+      // Otherwise one repeated variant (BLACK) plus one new variant (GREY)
+      // would silently add the repeated stock a second time.
+      if(parsed.some(line=>[...previousLegacy,...historical].some(receipt=>sameLine(receipt,line))))
         throw Object.assign(new Error('Possible duplicate Purchase / Stock In today. These exact supplier/item/qty/cost lines were already recorded. Verify the earlier bill; use its unique invoice reference for a genuinely separate purchase. Nothing was added again.'),{status:409});
       if(returnPackingInProgress(rows)||cancellationInProgress(rows as any[]))
         throw Object.assign(new Error('A stock/returns transaction is in progress; retry the same purchase operation.'),{status:409});
