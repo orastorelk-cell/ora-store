@@ -2028,7 +2028,7 @@ Suitable For:
           Math.abs(new Date(log.created_at).getTime()-new Date(purchase.created_at).getTime())<=15000);
         if(logs.length!==1)throw new Error(sku+': original 0 → '+qty+' Stock History receipt not found. No change was made.');
         const log=logs[0];
-        return {po_number:po,sku,quantity:qty,product_id:purchase.product_id,
+        return {po_number:po,sku,quantity:qty,unit_buying_price:Number(purchase.unit_buying_price),product_id:purchase.product_id,
           ...(purchase.variant_id?{variant_id:purchase.variant_id}:{}),
           created_at:purchase.created_at,log_id:String(log.id),
           log_created_at:log.created_at,log_reason:log.reason||'',
