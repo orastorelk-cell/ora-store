@@ -1,4 +1,4 @@
-import { activeData,dataBucket,readDataTable,replaceDataTable } from './cloudflareData';
+import { dataBucket,readDataTable,replaceDataTable } from './cloudflareData';
 type Row=Record<string,any>;
 const reply=(data:unknown,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
 const safeId=(value:unknown)=>String(value||'').trim();
@@ -53,7 +53,12 @@ export const purchaseBackupRecoveryHandler=async(request:Request,env:unknown,use
   if(user.role!=='admin')return reply({error:'Super Admin access required for Purchasing backup recovery.'},403);
   try{
     const input=new URL(request.url);
-    const action=request.method==='GET'?'scan':(await request.json() as any)?.action;
+    if(request.method!=='GET'&&request.method!=='POST')return reply({error:'Method not allowed.'},405);
+    const raw=request.method==='POST'?await request.text():'';
+    if(raw.length>12000)return reply({error:'Recovery preview request too large.'},413);
+    let body:any={};
+    if(raw){try{body=JSON.parse(raw);}catch{return reply({error:'Invalid JSON.'},400)}}
+    const action=request.method==='GET'?'scan':body?.action;
     if(action==='scan'){
       const start=Math.min(168,Math.max(0,Number(input.searchParams.get('cursor')||0)));
       if(!Number.isInteger(start))return reply({error:'Invalid backup cursor.'},400);
@@ -69,8 +74,32 @@ export const purchaseBackupRecoveryHandler=async(request:Request,env:unknown,use
       return reply({ok:true,slots:found.filter(Boolean),cursor:start,next_cursor:start+slots.length<168?start+slots.length:null});
     }
     if(action!=='preview'&&action!=='restore')return reply({error:'Only read-only preview or ledger-only restore is supported.'},400);
-    const body=(request as any).__bodyFallback; // parsed once by the handler below
-    // Re-read the POST body through a dedicated branch; this line is overwritten below.
-    return reply({error:'Invalid recovery body.'},400);
+    const slot=checkedSlot(body?.slot);
+    const backup=await purchaseBackupRows(env,slot);
+    if(!backup)return reply({error:'No stored R2 Purchasing History backup exists in this slot. Nothing was changed.'},404);
+    const live=await readDataTable(env,'purchase_orders');
+    const plan=candidates(backup,live);
+    const snapshot=()=>({
+      slot,backup_count:backup.filter(validPurchase).length,live_count:live.length,
+      missing_count:plan.additions.length,duplicate_count:plan.duplicates.length,
+      conflict_count:plan.conflicts.length,conflicts:plan.conflicts.slice(0,12),
+      oldest:minDate(plan.additions),newest:maxDate(plan.additions)
+    });
+    if(action==='preview')return reply({ok:true,preview:snapshot(),stock_changed:false});
+    if(plan.conflicts.length)return reply({error:'Historical purchase conflicts exist. No records restored. Review receipt IDs before continuing.',preview:snapshot()},409);
+    if(plan.additions.length>10000)return reply({error:'Too many records for one transaction. No records restored.'},413);
+    if(body?.expected_missing!==plan.additions.length||
+       body?.expected_backup_count!==backup.filter(validPurchase).length)
+      return reply({error:'Backup or purchase history changed after preview. Preview again.'},409);
+    const saved=await replaceDataTable(env,'purchase_orders',existing=>{
+      const latest=candidates(backup,existing as Row[]);
+      if(latest.conflicts.length)throw Object.assign(new Error('Purchasing conflicts detected while restoring. No records were saved.'),{status:409});
+      // This is a receipt audit migration only. Never credit stock, allocate
+      // waybills, change an order or generate an invoice from a backup.
+      return {rows:latest.additions.length?[...existing,...latest.additions]:existing,
+        result:{added:latest.additions.length,already_present:latest.duplicates.length}};
+    });
+    return reply({ok:true,...saved,source_slot:slot,stock_changed:false,invoices_changed:false,
+      message:'Historical Purchasing History receipts restored by ID only. Physical stock was not changed.'});
   }catch(error:any){return reply({error:String(error?.message||error)},Number(error?.status||503));}
 };
