@@ -1,7 +1,7 @@
 import { readDataTable,replaceDataTable } from './cloudflareData';
 import { cancellationInProgress } from './r2OrderCancellation';
 import { returnPackingInProgress,sharedReturnInventory } from '../src/lib/returnSheets';
-import { OCT29_RECOVERY_KEY,planOct29StockRecovery,applyOct29StockRecoveryLines,type PurchaseProof,type StockRecoveryLine } from '../src/lib/oct29StockRecovery';
+import { OCT29_RECOVERY_KEY,planOct29StockRecovery,applyOct29StockRecoveryLines,type PurchaseProof } from '../src/lib/oct29StockRecovery';
 
 type Row=Record<string,any>;
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
