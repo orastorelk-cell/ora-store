@@ -96,7 +96,7 @@ export const PurchaseBillArchivePanel=()=>{
       if(response?.ok!==true||response?.stock_changed!==false)
         throw new Error(response?.error||'History-only save was not confirmed. No stock change is assumed.');
       if(Array.isArray(response.conflicts)&&response.conflicts.length)
-        setSaveMessage('Some line IDs already exist with different details. Check Purchase History before retrying; no stock was changed.');
+        setSaveMessage((Number(response.added_purchases)>0?Number(response.added_purchases)+' new line(s) saved. ':'')+'Some line IDs already exist with different details. Check Purchase History before retrying; no stock was changed.');
       else if(Number(response.added_purchases)>0)
         setSaveMessage(response.added_purchases+' historical purchase line(s) saved. Stock and product buying prices were not changed. Reload the page to refresh Purchase History.');
       else setSaveMessage('These history line IDs were already saved. No duplicate rows or stock changes were made.');
