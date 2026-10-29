@@ -596,6 +596,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [lastPlacedOrder, setLastPlacedOrder] = useState<Order | null>(null);
   const [isAdminView, setIsAdminView] = useState(() => ['/system', '/ora-manager'].includes(String(window.location.pathname || '').replace(/\/+$/, '')));
   const [sharedStoreReady, setSharedStoreReady] = useState(false);
+  const [inventoryHistoryReady,setInventoryHistoryReady]=useState(false);
   const [returnPackingPending,setReturnPackingPending] = useState(false);
   const [returnStockTransactionPending,setReturnStockTransactionPending] = useState(false);
   const [returnPackingBatches,setReturnPackingBatches] = useState<{operation_id:string;batch_id:string;created_at:string;count:number}[]>([]);
@@ -692,6 +693,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // receipt NEVER increases the current physical stock a second time.
   useEffect(()=>{
     if(!adminUser||!getStaffSessionToken()||!sharedStoreReady)return;
+    setInventoryHistoryReady(false);
     let active=true;
     const sync=async()=>{
       try{
@@ -708,6 +710,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           });
         }
         if(!active)return;
+        setInventoryHistoryReady(true);
         setPurchaseOrders(previous=>{
           const result=new Map<string,PurchaseOrder>(remote.purchases.map((p:PurchaseOrder)=>[String(p.id),p]));
           for(const p of previous)if(!result.has(String(p.id)))result.set(String(p.id),p);
@@ -3513,6 +3516,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Retrying an uncertain response can NEVER add stock twice.
   const commitInventoryPurchaseBatch=async(rows:InventoryPurchaseInput[]):Promise<void>=>{
     if(!rows.length)return;
+    if(!inventoryHistoryReady)throw new Error('Purchasing History is still loading or could not be verified from the server. Do not add stock again; refresh the Inventory page.');
     if(!adminUser||!getStaffSessionToken()||!sharedStoreReady)
       throw new Error('Sign in and load shared stock before purchasing.');
     if(!sharedStoreSnapshotRef.current || sharedStoreSnapshotRef.current.products!==products)
