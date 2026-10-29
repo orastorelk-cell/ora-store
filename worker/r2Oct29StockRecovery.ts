@@ -39,6 +39,18 @@ export const r2Oct29StockRecoveryHandler=async(request:Request,env:unknown,user:
     message:'Only lost 29 Oct stock receipts; earlier stock deductions are never replayed.'});
   if(body.version!==version||JSON.stringify(body.lines)!==JSON.stringify(preview))
     fail('Stock or order allocations changed since preview. Refresh and preview again.');
+  // Orders and catalog are different durable tables. Reject a changed
+  // allocation snapshot immediately before attempting to update catalog.
+  // A concurrent order save must not lead to stock being credited twice.
+  const latestOrders=await getOrders(env);
+  const signature=(items:Row[])=>JSON.stringify(items.map(o=>[
+    o.id,o.order_status,o.stock_allocated,o.stock_allocated_at,
+    o.stock_quantity_correction,(o.items||[]).map((item:Row)=>[
+      item.product_id,item.variant_id,item.quantity,item.product_type,item.bundle_components,
+    ])
+  ]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))));
+  if(signature(latestOrders)!==signature(orders))
+    fail('An order stock allocation changed while confirming recovery. Refresh preview before saving.');
   const saved=await replaceDataTable(env,'admin_data_store',current=>{
     const prior=current.find(row=>row.key===OCT29_RECOVERY_KEY)?.payload;
     if(prior?.phase==='complete')return {rows:current,result:{already_saved:true,recovery:prior,state:stateFrom(current)!.payload}};
