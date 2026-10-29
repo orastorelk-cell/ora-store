@@ -1,4 +1,4 @@
-import { readDataTable, replaceDataTable } from './cloudflareData';
+import { dataBucket, readDataTable, replaceDataTable, type DataBucket } from './cloudflareData';
 import { creditReturnStock, returnPackingInProgress } from '../src/lib/returnSheets';
 import { cancellationInProgress } from './r2OrderCancellation';
 import { normalizedProductType } from '../src/lib/productVariants';
@@ -44,23 +44,96 @@ const mergeHistory=async(env:unknown,table:'purchase_orders'|'stock_history',inc
     return {rows:added?next:existing,result:{added,conflicts}};
   });
 
+const PURCHASE_HISTORY_BACKUP_ROOT='ora-data/purchase-history-backup-v1/';
+const PURCHASE_HISTORY_BACKUP_INDEX=PURCHASE_HISTORY_BACKUP_ROOT+'index.json';
+type PurchaseBackupIndex={format:'ora-purchase-history-backup-v1';records:Record<string,string>;updated_at:string};
+const backupRecordKey=(row:Row)=>{
+  const millis=Date.parse(String(row.created_at||''));
+  if(!Number.isFinite(millis))throw Object.assign(new Error('Purchase history backup needs a valid bill date.'),{status:400});
+  const day=new Date(millis).toISOString().slice(0,10).replace(/-/g,'/');
+  return PURCHASE_HISTORY_BACKUP_ROOT+'records/'+day+'/'+String(row.id)+'.json';
+};
+const readPurchaseHistoryBackup=async(bucket:DataBucket):Promise<Row[]>=>{
+  const object=await bucket.get(PURCHASE_HISTORY_BACKUP_INDEX);
+  if(!object)return [];
+  let index:PurchaseBackupIndex;
+  try{index=JSON.parse(await object.text()) as PurchaseBackupIndex;}catch{throw new Error('Purchase-history R2 backup index is not valid JSON.');}
+  if(index?.format!=='ora-purchase-history-backup-v1'||!index.records||typeof index.records!=='object'||Array.isArray(index.records))
+    throw new Error('Purchase-history R2 backup index has an unexpected format.');
+  const rows:Row[]=[];
+  for(const [id,key] of Object.entries(index.records)){
+    if(typeof key!=='string'||!key.startsWith(PURCHASE_HISTORY_BACKUP_ROOT+'records/'))continue;
+    const record=await bucket.get(key);
+    if(!record)throw new Error('A purchase-history R2 backup record is missing: '+id);
+    let row:Row;try{row=JSON.parse(await record.text()) as Row;}catch{throw new Error('A purchase-history R2 backup record is not valid JSON: '+id);}
+    if(String(row?.id||'')!==id||!validEntry(row,'purchase'))throw new Error('A purchase-history R2 backup record failed validation: '+id);
+    rows.push(row);
+  }
+  return rows;
+};
+const writePurchaseHistoryBackup=async(bucket:DataBucket,rows:Row[])=>{
+  if(!rows.length)return;
+  const keys=new Map<string,string>();
+  for(const row of rows){
+    const id=String(row.id),key=backupRecordKey(row),serialized=JSON.stringify(row);
+    const existing=await bucket.get(key);
+    if(existing){
+      let previous:Row;try{previous=JSON.parse(await existing.text()) as Row;}catch{throw Object.assign(new Error('Existing purchase-history R2 backup is unreadable: '+id),{status:409});}
+      if(!equal(previous,row))throw Object.assign(new Error('An R2 backup already exists for this purchase ID with different details: '+id),{status:409});
+      keys.set(id,key);continue;
+    }
+    const saved=await bucket.put(key,serialized,{httpMetadata:{contentType:'application/json',cacheControl:'no-store'},customMetadata:{oraPurchaseHistoryBackup:'1',recordId:id},onlyIf:{etagDoesNotMatch:'*'}});
+    if(!saved){
+      const raced=await bucket.get(key);
+      if(!raced||!equal(JSON.parse(await raced.text()),row))throw Object.assign(new Error('Could not confirm the R2 backup record: '+id),{status:503});
+    }
+    keys.set(id,key);
+  }
+  for(let attempt=0;attempt<8;attempt++){
+    const existing=await bucket.get(PURCHASE_HISTORY_BACKUP_INDEX);
+    let index:PurchaseBackupIndex={format:'ora-purchase-history-backup-v1',records:{},updated_at:new Date().toISOString()};
+    if(existing){
+      try{index=JSON.parse(await existing.text()) as PurchaseBackupIndex;}catch{throw Object.assign(new Error('Purchase-history R2 backup index is not readable; nothing was confirmed.'),{status:503});}
+      if(index?.format!=='ora-purchase-history-backup-v1'||!index.records||typeof index.records!=='object'||Array.isArray(index.records))
+        throw Object.assign(new Error('Purchase-history R2 backup index has an unexpected format.'),{status:503});
+    }
+    const records={...index.records};
+    for(const [id,key] of keys){
+      if(records[id]&&records[id]!==key)throw Object.assign(new Error('R2 backup index already contains a different path for purchase '+id),{status:409});
+      records[id]=key;
+    }
+    const next:PurchaseBackupIndex={format:'ora-purchase-history-backup-v1',records,updated_at:new Date().toISOString()};
+    const saved=await bucket.put(PURCHASE_HISTORY_BACKUP_INDEX,JSON.stringify(next),{
+      httpMetadata:{contentType:'application/json',cacheControl:'no-store'},
+      customMetadata:{oraPurchaseHistoryBackup:'index'},
+      onlyIf:existing?{etagMatches:existing.etag}:{etagDoesNotMatch:'*'}
+    });
+    if(saved)return;
+  }
+  throw Object.assign(new Error('Could not confirm the Purchase History R2 backup index. Please retry; stock was not changed.'),{status:503});
+};
+
 export const readDurablePurchasingHistory=async(env:unknown)=>{
   const [storedPurchases,storedHistory,admin]=await Promise.all([
     readDataTable(env,'purchase_orders'),readDataTable(env,'stock_history'),readDataTable(env,'admin_data_store')
   ]);
+  let backupPurchases:Row[]=[],backupWarning='';
+  const bucket=dataBucket(env);
+  if(bucket){try{backupPurchases=await readPurchaseHistoryBackup(bucket);}catch(error:any){backupWarning=error?.message||'Purchase-history R2 backup could not be read.';}}
   const receipts=admin.filter(row=>String(row.key||'').startsWith('inventory-purchase-v1:')&&row.payload?.phase==='complete');
   const fifo=admin.filter(row=>String(row.key||'').startsWith('fifo-stock-allocation-v1:')&&row.payload?.stock_changed_once===true);
   const byId=<T extends Row>(rows:T[])=>[...new Map(rows.map(row=>[String(row.id),row])).values()];
   return {
-    purchases:byId([...storedPurchases,...receipts.flatMap(row=>row.payload.purchases||[])]),
+    purchases:byId([...storedPurchases,...receipts.flatMap(row=>row.payload.purchases||[]),...backupPurchases]),
+    backup_warning:backupWarning,
     stock_history:byId([...storedHistory,...receipts.flatMap(row=>row.payload.stock_history||[]),...fifo.flatMap(row=>row.payload.logs||[])])
   };
 };
 export const inventoryHistoryHandler=async(request:Request,env:unknown,user:Row)=>{
   if(user.role!=='admin')return reply({error:'Only Super Admin can recover or inspect full Purchasing History.'},403);
   if(request.method==='GET'){
-    const {purchases,stock_history}=await readDurablePurchasingHistory(env);
-    return reply({ok:true,purchases,stock_history,purchase_count:purchases.length,server_authoritative:true});
+    const {purchases,stock_history,backup_warning}=await readDurablePurchasingHistory(env);
+    return reply({ok:true,purchases,stock_history,purchase_count:purchases.length,server_authoritative:true,r2_backup_warning:backup_warning||undefined});
   }
   if(request.method!=='POST')return reply({error:'Use GET or POST.'},405);
   const raw=await request.text();
@@ -183,8 +256,19 @@ export const inventoryHistoryHandler=async(request:Request,env:unknown,user:Row)
   const cleanPurchases=purchases.map(stripUnsafe),cleanHistory=history.map(stripUnsafe);
   // A ledger-only migration NEVER increments product stock, edits an order or
   // auto-generates an invoice. Existing receipts are immutable by ID.
+  const bucket=dataBucket(env);
+  if(!bucket&&cleanPurchases.length)return reply({error:'Purchase History R2 backup is unavailable. Nothing was confirmed as saved.'},503);
+  if(cleanPurchases.length){
+    const existingPurchases=await readDataTable(env,'purchase_orders');
+    const conflicts=cleanPurchases.filter(item=>{
+      const previous=existingPurchases.find(row=>String(row.id)===String(item.id));
+      return Boolean(previous&&!equal(previous,item));
+    }).map(item=>String(item.id));
+    if(conflicts.length)return reply({ok:true,added_purchases:0,added_history:0,conflicts,stock_changed:false,r2_backup_saved:false},409);
+  }
+  try{if(bucket)await writePurchaseHistoryBackup(bucket,cleanPurchases);}catch(error:any){return reply({error:error?.message||'Purchase History R2 backup failed. Nothing was confirmed as saved.'},Number(error?.status)||503);}
   const p=cleanPurchases.length?await mergeHistory(env,'purchase_orders',cleanPurchases):{added:0,conflicts:[]};
   const h=cleanHistory.length?await mergeHistory(env,'stock_history',cleanHistory):{added:0,conflicts:[]};
   return reply({ok:true,added_purchases:p.added,added_history:h.added,
-    conflicts:[...p.conflicts,...h.conflicts],stock_changed:false});
+    conflicts:[...p.conflicts,...h.conflicts],stock_changed:false,r2_backup_saved:cleanPurchases.length>0});
 };
