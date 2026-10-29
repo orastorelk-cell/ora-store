@@ -90,7 +90,7 @@ export const waybillAutoAssignmentServerGuardPatch = () => ({
     // remains automatic, but every automatic waybill now goes through the exact same
     // server-first assignment function and Supabase unique constraint as manual clicks.
     const autoStart = "    const postStockOrders=confirmedActive.map(order=>allocatedIds.has(order.id)?{...order,stock_allocated:true,stock_status:'Allocated' as const,stock_allocated_at:now,stock_allocated_by:'System FIFO Allocator'}:order);";
-    const autoEnd = "  }, [orders, products, waybillRecords]);";
+    const autoEnd = "  }, [orders, products, waybillRecords, sharedStoreReady, sharedOrdersReady, adminUser?.id, returnStockTransactionPending]);";
     const start = text.indexOf(autoStart);
     const end = text.indexOf(autoEnd, start);
     if (start < 0 || end < 0) {
@@ -107,9 +107,12 @@ export const waybillAutoAssignmentServerGuardPatch = () => ({
     if(!allocatedIds.size && !readyWithoutWaybill.length) return;
 
     if(allocatedIds.size){
+      const restockBatchId='PACK-RESTOCK-'+now.replace(/[^0-9]/g,'').slice(0,17);
       setOrders(prev=>prev.map(o=>{
         if(!allocatedIds.has(o.id)) return o;
-        const updated={...o,stock_allocated:true,stock_status:'Allocated' as const,stock_allocated_at:now,stock_allocated_by:'System FIFO Allocator'} as Order;
+        const wasWaiting=Boolean(o.stock_waiting_since);
+        const updated={...o,stock_allocated:true,stock_status:'Allocated' as const,stock_allocated_at:now,stock_allocated_by:'System FIFO Allocator',
+          ...(wasWaiting&&!o.invoice_pack_batch_id?{invoice_pack_batch_id:restockBatchId}:{})} as Order;
         void mirrorOrderUpdate(updated);
         return updated;
       }));
@@ -126,7 +129,7 @@ export const waybillAutoAssignmentServerGuardPatch = () => ({
         }
       })();
     }
-  }, [orders, products, waybillRecords]);`;
+  }, [orders, products, waybillRecords, sharedStoreReady, sharedOrdersReady, adminUser?.id, returnStockTransactionPending]);`;
 
     text = text.slice(0, start) + guardedBlock + text.slice(end + autoEnd.length);
     return { code: text, map: null };
