@@ -134,7 +134,7 @@ export const r2AtomicFifoAllocation=async(env:unknown,id:string,user:Row)=>{
         ?{invoice_pack_batch_id:'PACK-RESTOCK-'+at.replace(/[^0-9]/g,'').slice(0,17)}:{})};
     return {rows:rows.map(r=>r===row?{...row,payload:updated,updated_at:new Date().toISOString()}:r),result:updated};
   });
-  return {ok:true,order:completed,state:planned.state,already_saved:planned.already_saved,stock_changed:!planned.already_saved};
+  return {ok:true,order:completed,state:planned.state,logs:planned.receipt.logs||[],already_saved:planned.already_saved,stock_changed:!planned.already_saved};
 };
 export const r2AtomicFifoHandler=async(request:Request,env:unknown,user:Row)=>{
   if(request.method!=='POST')return json({error:'POST required.'},405);
