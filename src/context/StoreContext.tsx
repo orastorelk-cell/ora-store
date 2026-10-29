@@ -2194,6 +2194,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // FIFO stock + waybill allocator. Variants use their own stock. Bundles deduct real component stock.
   useEffect(() => {
+    // Do not consume stale local inventory before shared catalog/orders hydration.
+    if(!adminUser || !sharedStoreReady || !sharedOrdersReady || returnStockTransactionPending)return;
     const allocatorSignature=JSON.stringify({
       orders:orders.map(o=>[o.id,o.order_status,o.call_center_status,o.stock_allocated,o.waybill_number,o.invoice_locked,(o.items||[]).map(i=>[i.product_id,i.variant_id,i.product_type,i.quantity])]),
       products:products.map(p=>[p.id,p.stock_quantity,(p.variants||[]).map(v=>[v.id,v.stock_quantity,v.status])]),
@@ -2280,13 +2282,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return {...w,status:'Assigned',assigned_order_id:orderId,assigned_order_number:order?.order_number,assigned_at:now};
       }));
     }
-  }, [orders, products, waybillRecords]);
+  }, [orders, products, waybillRecords, sharedStoreReady, sharedOrdersReady, adminUser?.id, returnStockTransactionPending]);
 
 
   // AUTO INVOICE QUEUE:
   // Once a Confirmed order has full stock + a waybill, create/lock its invoice record
   // automatically so it appears in Packing Invoice Downloads. PDF download remains manual.
   useEffect(() => {
+    if(!adminUser || !sharedStoreReady || !sharedOrdersReady || returnStockTransactionPending)return;
     const ready = orders
       .filter(o =>
         o.order_status !== 'Cancelled' &&
@@ -2334,7 +2337,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       module:'Invoices',
       details:`${batch.length} invoice(s) moved to Packing Downloads • ${batchId}`
     });
-  }, [orders]);
+  }, [orders, sharedStoreReady, sharedOrdersReady, adminUser?.id, returnStockTransactionPending]);
 
 
   const updateOrderStatus = (orderId: string, status: OrderStatus) => {
