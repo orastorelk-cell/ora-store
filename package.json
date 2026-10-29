@@ -6,7 +6,7 @@
   "scripts": {
     "test:facebook-missing": "node --import tsx tools/test-facebook-missing-orders.ts && node --import tsx tools/test-facebook-missing-ui.tsx",
     "dev": "tsx server.ts",
-    "build": "node --import tsx tools/generate-confirm-sheet-plan.ts --check && vite build",
+    "build": "npm run check:worker-syntax && node --import tsx tools/generate-confirm-sheet-plan.ts --check && vite build",
     "test:sheet-confirm": "node --import tsx tools/generate-confirm-sheet-plan.ts --check && node --import tsx tools/test-sheet-confirm.ts",
     "test:profit-csv": "node --import tsx tools/test-current-csv-pending.ts && node --import tsx tools/test-current-csv-report.ts",
     "test:storefront-reliability": "node --import tsx tools/test-storefront-reliability.ts",
@@ -27,7 +27,8 @@
     "test:profit-tab": "node --import tsx tools/test-profit-tab-open.ts",
     "test:oct29-stock-recovery": "node --import tsx tools/test-oct29-stock-recovery.ts",
     "test:durable-purchasing": "node --import tsx tools/test-durable-purchase-history.ts",
-    "test:grey-invoice-recovery": "node --import tsx tools/test-grey-stock-invoice-recovery.ts"
+    "test:grey-invoice-recovery": "node --import tsx tools/test-grey-stock-invoice-recovery.ts",
+    "check:worker-syntax": "node tools/check-worker-syntax.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
