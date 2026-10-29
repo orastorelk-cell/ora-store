@@ -31,7 +31,7 @@ export const purchaseBackupRows=async(env:unknown,slot:number):Promise<Row[]|nul
   return rows as Row[];
 };
 const dateStamp=(str:unknown)=>String(str||'').slice(0,10);
-const candidates=(backup:Row[],live:Row[])=>{
+export const purchaseBackupCandidates=(backup:Row[],live:Row[])=>{
   const byId=new Map(live.map(row=>[safeId(row.id),row]));
   const byBill=new Map(live.filter(row=>row.po_number).map(row=>[String(row.po_number)+'|'+String(row.product_id)+'|'+String(row.variant_id||'')+'|'+dateStamp(row.created_at),row]));
   const additions:Row[]=[],duplicates:string[]=[],conflicts:string[]=[];
@@ -71,7 +71,7 @@ export const purchaseBackupRecoveryHandler=async(request:Request,env:unknown,use
         try{
           const rows=await purchaseBackupRows(env,slot);
           if(!rows)return null;
-          const valid=rows.filter(validPurchase),plan=candidates(valid,effective);
+          const valid=rows.filter(validPurchase),plan=purchaseBackupCandidates(valid,effective);
           return {slot,count:valid.length,oldest:minDate(valid),newest:maxDate(valid),
             missing_count:plan.additions.length,conflict_count:plan.conflicts.length};
         }catch(error:any){return {slot,error:String(error?.message||error)};}
@@ -85,7 +85,7 @@ export const purchaseBackupRecoveryHandler=async(request:Request,env:unknown,use
     const [live,admin]=await Promise.all([readDataTable(env,'purchase_orders'),readDataTable(env,'admin_data_store')]);
     const journal=admin.filter(row=>String(row.key||'').startsWith('inventory-purchase-v1:')&&row.payload?.phase==='complete')
       .flatMap(row=>row.payload.purchases||[]);
-    const plan=candidates(backup,[...live,...journal]);
+    const plan=purchaseBackupCandidates(backup,[...live,...journal]);
     const snapshot=()=>({
       slot,backup_count:backup.filter(validPurchase).length,live_count:live.length,
       missing_count:plan.additions.length,duplicate_count:plan.duplicates.length,
@@ -99,7 +99,7 @@ export const purchaseBackupRecoveryHandler=async(request:Request,env:unknown,use
        body?.expected_backup_count!==backup.filter(validPurchase).length)
       return reply({error:'Backup or purchase history changed after preview. Preview again.'},409);
     const saved=await replaceDataTable(env,'purchase_orders',existing=>{
-      const latest=candidates(backup,[...existing as Row[],...journal]);
+      const latest=purchaseBackupCandidates(backup,[...existing as Row[],...journal]);
       if(latest.conflicts.length)throw Object.assign(new Error('Purchasing conflicts detected while restoring. No records were saved.'),{status:409});
       // This is a receipt audit migration only. Never credit stock, allocate
       // waybills, change an order or generate an invoice from a backup.
