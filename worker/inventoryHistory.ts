@@ -122,12 +122,38 @@ export const readDurablePurchasingHistory=async(env:unknown)=>{
   if(bucket){try{backupPurchases=await readPurchaseHistoryBackup(bucket);}catch(error:any){backupWarning=error?.message||'Purchase-history R2 backup could not be read.';}}
   const receipts=admin.filter(row=>String(row.key||'').startsWith('inventory-purchase-v1:')&&row.payload?.phase==='complete');
   const fifo=admin.filter(row=>String(row.key||'').startsWith('fifo-stock-allocation-v1:')&&row.payload?.stock_changed_once===true);
+  const corrections=admin.filter(row=>String(row.key||'').startsWith('purchase-history-correction-v1:')&&row.payload?.purchase?.id);
   const byId=<T extends Row>(rows:T[])=>[...new Map(rows.map(row=>[String(row.id),row])).values()];
+  const correctedPurchases=corrections.map(row=>row.payload.purchase as Row);
+  const correctionHistory=corrections.flatMap(row=>Array.isArray(row.payload.stock_history)?row.payload.stock_history as Row[]:[]);
   return {
-    purchases:byId([...storedPurchases,...receipts.flatMap(row=>row.payload.purchases||[]),...backupPurchases]),
+    // Corrections are an append-only overlay. Original rows and bill images in
+    // purchase_orders/R2 remain intact for audit, while the corrected version
+    // is the current visible history row.
+    purchases:byId([...storedPurchases,...receipts.flatMap(row=>row.payload.purchases||[]),...backupPurchases,...correctedPurchases]),
     backup_warning:backupWarning,
-    stock_history:byId([...storedHistory,...receipts.flatMap(row=>row.payload.stock_history||[]),...fifo.flatMap(row=>row.payload.logs||[])])
+    stock_history:byId([...storedHistory,...receipts.flatMap(row=>row.payload.stock_history||[]),...fifo.flatMap(row=>row.payload.logs||[]),...correctionHistory])
   };
+};
+
+const CORRECTION_PREFIX='purchase-history-correction-v1:';
+const CORRECTION_OPERATION_PREFIX='purchase-history-correction-operation-v1:';
+const sameCorrection=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
+const writePurchaseCorrectionBackup=async(bucket:DataBucket,operationId:string,rows:Row[])=>{
+  const key='ora-data/purchase-history-corrections-v1/'+operationId+'.json';
+  const body=JSON.stringify({format:'ora-purchase-history-correction-v1',operation_id:operationId,corrected_at:new Date().toISOString(),purchases:rows});
+  const existing=await bucket.get(key);
+  if(existing){
+    let previous:Row;try{previous=JSON.parse(await existing.text()) as Row;}catch{throw Object.assign(new Error('The existing R2 correction backup is unreadable.'),{status:409});}
+    if(previous?.format!=='ora-purchase-history-correction-v1'||previous?.operation_id!==operationId||!sameCorrection(previous?.purchases,rows))throw Object.assign(new Error('A different R2 correction backup already uses this operation ID.'),{status:409});
+    return;
+  }
+  const saved=await bucket.put(key,body,{httpMetadata:{contentType:'application/json',cacheControl:'no-store'},customMetadata:{oraPurchaseHistoryCorrection:'1',operationId},onlyIf:{etagDoesNotMatch:'*'}});
+  if(!saved){
+    const raced=await bucket.get(key);
+    let previous:Row|null=null;try{if(raced)previous=JSON.parse(await raced.text()) as Row;}catch{}
+    if(!previous||previous?.format!=='ora-purchase-history-correction-v1'||previous?.operation_id!==operationId||!sameCorrection(previous?.purchases,rows))throw Object.assign(new Error('Could not confirm the R2 Purchase History correction backup.'),{status:503});
+  }
 };
 export const inventoryHistoryHandler=async(request:Request,env:unknown,user:Row)=>{
   if(user.role!=='admin')return reply({error:'Only Super Admin can recover or inspect full Purchasing History.'},403);
@@ -139,6 +165,106 @@ export const inventoryHistoryHandler=async(request:Request,env:unknown,user:Row)
   const raw=await request.text();
   if(raw.length>1_200_000)return reply({error:'History recovery chunk is too large.'},413);
   let body:any;try{body=JSON.parse(raw)}catch{return reply({error:'Invalid history JSON.'},400)}
+  if(body?.action==='correct-history'){
+    const operationId=String(body.operation_id||'');
+    if(!/^[A-Za-z0-9_-]{16,100}$/.test(operationId))return reply({error:'Invalid Purchase History correction ID.'},400);
+    const incoming=body.rows;
+    if(!Array.isArray(incoming)||!incoming.length||incoming.length>100)return reply({error:'Correct 1-100 Purchase History rows at a time.'},400);
+    const seen=new Set<string>(),rows:Row[]=[];
+    for(const row of incoming){
+      if(!row||typeof row!=='object'||typeof row.id!=='string'||!row.id.trim()||row.id.length>180||!/^[A-Za-z0-9:_-]+$/.test(row.id)||
+        typeof row.product_id!=='string'||!row.product_id||row.product_id.length>180||
+        typeof row.variant_id!=='undefined'&&typeof row.variant_id!=='string'||
+        typeof row.supplier_name!=='string'||row.supplier_name.length>300||
+        !Number.isSafeInteger(row.quantity_added)||row.quantity_added<0||row.quantity_added>1_000_000||
+        typeof row.unit_buying_price!=='number'||!Number.isFinite(row.unit_buying_price)||row.unit_buying_price<0||row.unit_buying_price>1e9||
+        !Number.isFinite(Date.parse(String(row.created_at||'')))||String(row.invoice_ref||'').length>180||String(row.notes||'').length>2000)
+        return reply({error:'Invalid Purchase History correction. Nothing was saved.'},400);
+      if(seen.has(row.id))return reply({error:'A Purchase History row was repeated in this correction.'},409);
+      seen.add(row.id);
+      rows.push({id:row.id,product_id:row.product_id,...(row.variant_id?{variant_id:row.variant_id}:{}),supplier_name:row.supplier_name.trim(),quantity_added:row.quantity_added,unit_buying_price:row.unit_buying_price,invoice_ref:String(row.invoice_ref||'').trim(),notes:String(row.notes||'').trim(),created_at:new Date(row.created_at).toISOString()});
+    }
+    const identity=JSON.stringify(rows),operationKey=CORRECTION_OPERATION_PREFIX+operationId;
+    const [history,admin]=await Promise.all([readDurablePurchasingHistory(env),readDataTable(env,'admin_data_store')]);
+    const priorOperation=admin.find(row=>String(row.key)===operationKey)?.payload;
+    if(priorOperation){
+      if(priorOperation.identity!==identity)return reply({error:'This correction ID was already used for different details. Refresh Purchase History before retrying.'},409);
+      const catalog=admin.find(row=>row.key==='storefront-state-v1')?.payload;
+      const current=await readDurablePurchasingHistory(env);
+      return reply({ok:true,already_saved:true,correctedCount:rows.length,netQuantityChange:Number(priorOperation.net_quantity_change||0),stock_adjusted:Boolean(priorOperation.stock_adjusted),deallocatedOrderNumbers:[],purchases:current.purchases,stock_history:current.stock_history,state:catalog});
+    }
+    const purchaseById=new Map(history.purchases.map((purchase:Row)=>[String(purchase.id),purchase] as [string,Row]));
+    const receiptRows=admin.filter(row=>String(row.key||'').startsWith('inventory-purchase-v1:')&&row.payload?.phase==='complete');
+    const creditedIds=new Set<string>(receiptRows.flatMap(row=>(row.payload.purchases||[]).map((purchase:Row)=>String(purchase.id))));
+    const catalogRow=admin.find(row=>row.key==='storefront-state-v1');
+    if(!catalogRow?.payload||!Array.isArray(catalogRow.payload.products))return reply({error:'Shared stock catalog unavailable. Nothing was saved.'},503);
+    if(returnPackingInProgress(admin)||cancellationInProgress(admin as any[]))return reply({error:'A stock / return transaction is in progress. Nothing was saved; retry after it completes.'},409);
+    const products=(catalogRow.payload.products as Row[]).map(product=>({...product,variants:Array.isArray(product.variants)?product.variants.map((variant:Row)=>({...variant})):[]}));
+    const productsById=new Map(products.map(product=>[String(product.id),product] as [string,Row]));
+    const corrections:Row[]=[],deltas=new Map<string,{product:Row;variant_id?:string;delta:number;sku:string;label:string}>();
+    for(const row of rows){
+      const original=purchaseById.get(row.id);
+      if(!original)return reply({error:'Purchase '+row.id+' is no longer available. Refresh Purchase History; no changes were saved.'},409);
+      const product=productsById.get(row.product_id);
+      if(!product||normalizedProductType(product as any)==='bundle')return reply({error:'Choose an existing non-bundle Item Code for '+String(original.po_number||row.id)+'. Nothing was saved.'},400);
+      const productType=normalizedProductType(product as any);
+      const variant=row.variant_id?product.variants.find((item:Row)=>String(item.id)===row.variant_id):undefined;
+      if(row.variant_id&&(productType!=='variant'||!variant))return reply({error:'The selected colour / variant no longer exists for this Item Code. Refresh and try again.'},409);
+      const stockCredited=creditedIds.has(row.id);
+      if(stockCredited&&productType==='variant'&&!variant)return reply({error:'Stock-credit Purchase rows require an exact colour / variant. Nothing was saved.'},400);
+      const oldProduct=productsById.get(String(original.product_id));
+      const oldVariant=original.variant_id?oldProduct?.variants.find((item:Row)=>String(item.id)===String(original.variant_id)):undefined;
+      if(stockCredited){
+        if(!oldProduct||normalizedProductType(oldProduct as any)==='variant'&&!oldVariant)return reply({error:'The original stock-credit Item Code / variant cannot be found. Nothing was saved.'},409);
+        const addDelta=(targetProduct:Row,targetVariant:Row|undefined,delta:number)=>{
+          if(!delta)return;
+          const variantId=targetVariant?String(targetVariant.id):undefined,key=String(targetProduct.id)+'::'+String(variantId||'base');
+          const sku=String(targetVariant?.sku||targetProduct.sku||original.variant_sku||original.sku||'');
+          const label=String(targetProduct.name_en||sku)+(targetVariant?' - '+String(targetVariant.option_value||''):'');
+          const old=deltas.get(key);deltas.set(key,{product:targetProduct,variant_id:variantId,delta:(old?.delta||0)+delta,sku,label});
+        };
+        addDelta(oldProduct,oldVariant,-Math.max(0,Number(original.quantity_added||0)));
+        addDelta(product,variant,row.quantity_added);
+      }
+      corrections.push({...original,...row,product_name:String(product.name_en||original.product_name||''),sku:String(product.sku||original.sku||''),variant_id:variant?.id,variant_name:variant?.option_value,variant_sku:variant?.sku,total_cost:row.quantity_added*row.unit_buying_price,invoice_ref:row.invoice_ref||undefined,notes:row.notes||undefined});
+    }
+    const stockHistory:Row[]=[],now=new Date().toISOString();
+    for(const change of deltas.values()){
+      if(!change.delta)continue;
+      const target=change.variant_id?change.product.variants.find((item:Row)=>String(item.id)===change.variant_id):change.product;
+      if(!target)return reply({error:'A Purchase variant no longer exists. Nothing was saved.'},409);
+      const before=Math.max(0,Number(target.stock_quantity||0)),after=before+change.delta;
+      if(after<0)return reply({error:change.sku+': available stock is '+before+', so this correction cannot safely remove '+Math.abs(change.delta)+'. Nothing was saved.'},409);
+      target.stock_quantity=after;target.status=after>0?'Active':'Out of Stock';
+      if(change.variant_id){change.product.variants=change.product.variants.map((item:Row)=>String(item.id)===change.variant_id?target:item);change.product.stock_quantity=change.product.variants.reduce((sum:number,item:Row)=>sum+Math.max(0,Number(item.stock_quantity||0)),0);change.product.status=change.product.stock_quantity>0?'Active':'Out of Stock';}
+      stockHistory.push({id:'stock-history-purchase-correction:'+operationId+':'+stockHistory.length,product_id:change.product.id,product_name:change.label,change_type:'Adjustment',quantity:Math.abs(change.delta),previous_stock:before,new_stock:after,reason:'Purchase History correction • '+change.sku,performed_by:String(user.display_name||user.username||user.id),created_at:now});
+    }
+    const bucket=dataBucket(env);
+    if(!bucket)return reply({error:'Purchase History correction backup is unavailable. Nothing was saved.'},503);
+    try{await writePurchaseCorrectionBackup(bucket,operationId,corrections);}catch(error:any){return reply({error:error?.message||'Purchase History correction backup failed. Nothing was saved.'},Number(error?.status)||503);}
+    try{
+      await replaceDataTable(env,'admin_data_store',current=>{
+        const operation=current.find(row=>String(row.key)===operationKey)?.payload;
+        if(operation){if(operation.identity!==identity)throw Object.assign(new Error('This correction ID was already used for different details.'),{status:409});return{rows:current,result:undefined};}
+        if(returnPackingInProgress(current)||cancellationInProgress(current as any[]))throw Object.assign(new Error('A stock / return transaction is in progress. Nothing was saved; retry after it completes.'),{status:409});
+        const liveCatalog=current.find(row=>row.key==='storefront-state-v1');
+        if(!liveCatalog?.payload||Number(liveCatalog.payload.version||0)!==Number(catalogRow.payload.version||0)||String(liveCatalog.updated_at||'')!==String(catalogRow.updated_at||''))throw Object.assign(new Error('Shared stock changed while this correction was being prepared. Refresh Inventory & Stock and try again.'),{status:409});
+        const latest=new Map(current.filter(row=>String(row.key||'').startsWith(CORRECTION_PREFIX)).map(row=>[String(row.payload?.purchase?.id),row.payload.purchase] as [string,Row]));
+        for(const row of rows){const before=purchaseById.get(row.id)!,after=latest.get(row.id);if(after&&!sameCorrection(after,before))throw Object.assign(new Error('Another correction changed '+String(before.po_number||row.id)+'. Refresh before saving.'),{status:409});}
+        const result=current.slice();
+        if(deltas.size&&Array.from(deltas.values()).some(change=>change.delta!==0)){const nextCatalog={...catalogRow,payload:{...catalogRow.payload,products,version:Number(catalogRow.payload.version||0)+1,updated_at:now},updated_at:now};const catalogAt=result.findIndex(row=>row.key==='storefront-state-v1');result[catalogAt]=nextCatalog;}
+        for(let i=0;i<corrections.length;i++){
+          const purchase=corrections[i],key=CORRECTION_PREFIX+purchase.id,index=result.findIndex(row=>String(row.key)===key);
+          const payload={purchase,stock_history:stockHistory.filter(log=>String(log.id).startsWith('stock-history-purchase-correction:'+operationId+':'))};
+          const saved={key,payload,updated_at:now};if(index>=0)result[index]=saved;else result.push(saved);
+        }
+        result.push({key:operationKey,payload:{identity,operation_id:operationId,purchase_ids:corrections.map(row=>row.id),net_quantity_change:corrections.reduce((sum,row)=>sum+Number(row.quantity_added||0)-Number(purchaseById.get(row.id)?.quantity_added||0),0),stock_adjusted:stockHistory.length>0,created_at:now},updated_at:now});
+        return{rows:result,result:undefined};
+      });
+    }catch(error:any){return reply({error:error?.message||'Purchase History correction did not save. Refresh before retrying.'},Number(error?.status)||503);}
+    const saved=await readDurablePurchasingHistory(env),state=(await readDataTable(env,'admin_data_store')).find(row=>row.key==='storefront-state-v1')?.payload;
+    return reply({ok:true,correctedCount:corrections.length,netQuantityChange:corrections.reduce((sum,row)=>sum+Number(row.quantity_added||0)-Number(purchaseById.get(row.id)?.quantity_added||0),0),stock_adjusted:stockHistory.length>0,deallocatedOrderNumbers:[],purchases:saved.purchases,stock_history:saved.stock_history,state});
+  }
   if(body?.action==='purchase-stock'){
     const id=String(body.operation_id||'');
     if(!/^[A-Za-z0-9_-]{16,100}$/.test(id))return reply({error:'Invalid stock-purchase operation ID.'},400);
@@ -185,12 +311,16 @@ export const inventoryHistoryHandler=async(request:Request,env:unknown,user:Row)
         return {rows,result:{ok:true,already_saved:true,stock_changed:false,purchases:previous.purchases,stock_history:previous.stock_history,
           state:catalog}};
       }
+      const currentCorrections=new Map(rows.filter(row=>String(row.key||'').startsWith(CORRECTION_PREFIX)&&row.payload?.purchase?.id)
+        .map(row=>[String(row.payload.purchase.id),row.payload.purchase] as [string,Row]));
+      const effective=(purchase:Row)=>currentCorrections.get(String(purchase.id))||purchase;
+      const effectiveLegacy=previousLegacy.map(effective);
       const historical=rows.filter(row=>String(row.key||'').startsWith('inventory-purchase-v1:')&&row.payload?.phase==='complete')
-        .flatMap(row=>row.payload.purchases||[]);
+        .flatMap(row=>(row.payload.purchases||[]).map(effective));
       // ANY duplicate line blocks the entire new bill, even if the other lines are new.
       // Otherwise one repeated variant (BLACK) plus one new variant (GREY)
       // would silently add the repeated stock a second time.
-      if(parsed.some(line=>[...previousLegacy,...historical].some(receipt=>sameLine(receipt,line))))
+      if(parsed.some(line=>[...effectiveLegacy,...historical].some(receipt=>sameLine(receipt,line))))
         throw Object.assign(new Error('Possible duplicate Purchase / Stock In today. These exact supplier/item/qty/cost lines were already recorded. Verify the earlier bill; use its unique invoice reference for a genuinely separate purchase. Nothing was added again.'),{status:409});
       if(returnPackingInProgress(rows)||cancellationInProgress(rows as any[]))
         throw Object.assign(new Error('A stock/returns transaction is in progress; retry the same purchase operation.'),{status:409});
