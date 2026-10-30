@@ -60,14 +60,21 @@ const readPurchaseHistoryBackup=async(bucket:DataBucket):Promise<Row[]>=>{
   try{index=JSON.parse(await object.text()) as PurchaseBackupIndex;}catch{throw new Error('Purchase-history R2 backup index is not valid JSON.');}
   if(index?.format!=='ora-purchase-history-backup-v1'||!index.records||typeof index.records!=='object'||Array.isArray(index.records))
     throw new Error('Purchase-history R2 backup index has an unexpected format.');
+  const entries=Object.entries(index.records).filter(([,key])=>typeof key==='string'&&key.startsWith(PURCHASE_HISTORY_BACKUP_ROOT+'records/'));
   const rows:Row[]=[];
-  for(const [id,key] of Object.entries(index.records)){
-    if(typeof key!=='string'||!key.startsWith(PURCHASE_HISTORY_BACKUP_ROOT+'records/'))continue;
-    const record=await bucket.get(key);
-    if(!record)throw new Error('A purchase-history R2 backup record is missing: '+id);
-    let row:Row;try{row=JSON.parse(await record.text()) as Row;}catch{throw new Error('A purchase-history R2 backup record is not valid JSON: '+id);}
-    if(String(row?.id||'')!==id||!validEntry(row,'purchase'))throw new Error('A purchase-history R2 backup record failed validation: '+id);
-    rows.push(row);
+  // R2 reads are network-bound. A serial walk across the whole backup index
+  // made Purchase History corrections exceed the browser request timeout.
+  // Keep bounded concurrency so large archives stay within Worker subrequest
+  // limits while still completing quickly.
+  for(let offset=0;offset<entries.length;offset+=24){
+    const batch=await Promise.all(entries.slice(offset,offset+24).map(async([id,key])=>{
+      const record=await bucket.get(key);
+      if(!record)throw new Error('A purchase-history R2 backup record is missing: '+id);
+      let row:Row;try{row=JSON.parse(await record.text()) as Row;}catch{throw new Error('A purchase-history R2 backup record is not valid JSON: '+id);}
+      if(String(row?.id||'')!==id||!validEntry(row,'purchase'))throw new Error('A purchase-history R2 backup record failed validation: '+id);
+      return row;
+    }));
+    rows.push(...batch);
   }
   return rows;
 };
@@ -262,8 +269,14 @@ export const inventoryHistoryHandler=async(request:Request,env:unknown,user:Row)
         return{rows:result,result:undefined};
       });
     }catch(error:any){return reply({error:error?.message||'Purchase History correction did not save. Refresh before retrying.'},Number(error?.status)||503);}
-    const saved=await readDurablePurchasingHistory(env),state=(await readDataTable(env,'admin_data_store')).find(row=>row.key==='storefront-state-v1')?.payload;
-    return reply({ok:true,correctedCount:corrections.length,netQuantityChange:corrections.reduce((sum,row)=>sum+Number(row.quantity_added||0)-Number(purchaseById.get(row.id)?.quantity_added||0),0),stock_adjusted:stockHistory.length>0,deallocatedOrderNumbers:[],purchases:saved.purchases,stock_history:saved.stock_history,state});
+    // We already loaded the authoritative ledger before validating the edit and
+    // committed the correction overlay above. Re-reading every R2 backup just
+    // to build the response doubled request latency and caused browser timeouts.
+    const correctedById=new Map(corrections.map(row=>[String(row.id),row] as [string,Row]));
+    const purchases=[...new Map(history.purchases.map((row:Row)=>[String(row.id),correctedById.get(String(row.id))||row])).values()];
+    const stock_history=[...new Map([...history.stock_history,...stockHistory].map((row:Row)=>[String(row.id),row])).values()];
+    const state=stockHistory.length?{...catalogRow.payload,products,version:Number(catalogRow.payload.version||0)+1,updated_at:now}:catalogRow.payload;
+    return reply({ok:true,correctedCount:corrections.length,netQuantityChange:corrections.reduce((sum,row)=>sum+Number(row.quantity_added||0)-Number(purchaseById.get(row.id)?.quantity_added||0),0),stock_adjusted:stockHistory.length>0,deallocatedOrderNumbers:[],purchases,stock_history,state});
   }
   if(body?.action==='purchase-stock'){
     const id=String(body.operation_id||'');
