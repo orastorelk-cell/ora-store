@@ -2,6 +2,7 @@ import { dataBucket, readDataTable, replaceDataTable, type DataBucket } from './
 import { creditReturnStock, returnPackingInProgress } from '../src/lib/returnSheets';
 import { cancellationInProgress } from './r2OrderCancellation';
 import { normalizedProductType } from '../src/lib/productVariants';
+import { stockConsumedItems } from '../src/lib/orderStockQuantities';
 
 /**
  * Durable history mirror. Imported browser records are receipts/audit facts,
@@ -165,6 +166,12 @@ const writePurchaseCorrectionBackup=async(bucket:DataBucket,operationId:string,r
 export const inventoryHistoryHandler=async(request:Request,env:unknown,user:Row)=>{
   if(user.role!=='admin')return reply({error:'Only Super Admin can recover or inspect full Purchasing History.'},403);
   if(request.method==='GET'){
+    if(new URL(request.url).searchParams.get('stock-counts')==='1'){
+      const rows=await readDataTable(env,'admin_data_store');
+      const sessions=rows.filter(row=>String(row.key||'').startsWith('stock-count-session-v1:')&&row.payload?.format==='ora-stock-count-session-v1')
+        .map(row=>row.payload as Row).sort((a,b)=>Date.parse(String(b.counted_at||''))-Date.parse(String(a.counted_at||''))).slice(0,20);
+      return reply({ok:true,stock_count_sessions:sessions});
+    }
     const {purchases,stock_history,backup_warning}=await readDurablePurchasingHistory(env);
     return reply({ok:true,purchases,stock_history,purchase_count:purchases.length,server_authoritative:true,r2_backup_warning:backup_warning||undefined});
   }
@@ -172,6 +179,61 @@ export const inventoryHistoryHandler=async(request:Request,env:unknown,user:Row)
   const raw=await request.text();
   if(raw.length>1_200_000)return reply({error:'History recovery chunk is too large.'},413);
   let body:any;try{body=JSON.parse(raw)}catch{return reply({error:'Invalid history JSON.'},400)}
+  if(body?.action==='stock-count-session'){
+    const sessionId=String(body.session_id||'');
+    const countedBy=String(body.counted_by||'').trim(),notes=String(body.notes||'').trim();
+    const incoming=body.rows;
+    if(!/^[A-Za-z0-9_-]{16,100}$/.test(sessionId)||!countedBy||countedBy.length>120||notes.length>500||!Array.isArray(incoming)||!incoming.length||incoming.length>500)
+      return reply({error:'Enter a staff name and 1-500 valid stock counts.'},400);
+    const admin=await readDataTable(env,'admin_data_store');
+    const catalog=admin.find(row=>row.key==='storefront-state-v1')?.payload;
+    if(!catalog||!Array.isArray(catalog.products))return reply({error:'Shared stock catalog unavailable. No count was saved.'},503);
+    const products=catalog.products as Row[];
+    const productsById=new Map(products.map(product=>[String(product.id),product] as [string,Row]));
+    const orders=(await readDataTable(env,'order_snapshots')).map(row=>row.payload).filter(Boolean);
+    const packingBySku=new Map<string,number>();
+    const addPacking=(sku:unknown,quantity:unknown)=>{
+      const key=String(sku||'').trim().toUpperCase(),amount=Math.max(0,Number(quantity||0));
+      if(key&&amount)packingBySku.set(key,(packingBySku.get(key)||0)+amount);
+    };
+    try{
+      orders.filter(order=>order.stock_allocated&&order.stock_status==='Allocated'&&order.order_status!=='Cancelled'&&order.order_status!=='Shipped'&&order.order_status!=='Delivered'&&order.dispatch_status!=='Handed Over'&&!order.is_duplicate_order&&!order.is_test_order)
+        .forEach(order=>stockConsumedItems(order).forEach((item:any)=>{
+          const orderQty=Math.max(1,Number(item.quantity||1));addPacking(item.sku||item.main_sku,orderQty);
+          if(item.product_type==='bundle'&&Array.isArray(item.bundle_components))item.bundle_components.forEach((component:any)=>addPacking(component.sku,orderQty*Math.max(1,Number(component.quantity_per_bundle||1))));
+        }));
+    }catch(error:any){return reply({error:error?.message||'Packing quantities need review. No count was saved.'},409);}
+    const keys=new Set<string>(),countRows:Row[]=[];
+    for(const row of incoming){
+      if(!row||typeof row!=='object'||typeof row.product_id!=='string'||!Number.isSafeInteger(row.actual_qty)||row.actual_qty<0||row.actual_qty>1_000_000||typeof row.sku!=='string'||row.sku.length>180)
+        return reply({error:'A stock count row is invalid. No count was saved.'},400);
+      const product=productsById.get(row.product_id);
+      if(!product||normalizedProductType(product as any)==='bundle')return reply({error:'Choose an existing non-bundle Item Code. No count was saved.'},400);
+      const variant=typeof row.variant_id==='string'?product.variants?.find((item:Row)=>String(item.id)===row.variant_id):undefined;
+      if(normalizedProductType(product as any)==='variant'&&!variant)return reply({error:'Choose the exact colour / variant before saving this stock count.'},400);
+      if(row.variant_id&&(!variant||normalizedProductType(product as any)!=='variant'))return reply({error:'The selected Item Code / variant does not match.'},409);
+      const sku=String(variant?.sku||product.sku||'').trim().toUpperCase();
+      if(sku!==String(row.sku).trim().toUpperCase())return reply({error:'The Item Code changed while counting. Refresh the stock list and retry.'},409);
+      const identityKey=String(product.id)+'::'+String(variant?.id||'base');
+      if(keys.has(identityKey))return reply({error:'The same Item Code was included more than once.'},409);
+      keys.add(identityKey);
+      const available=Math.max(0,Number(variant?.stock_quantity??product.stock_quantity??0));
+      const packing=Math.max(0,Number(packingBySku.get(sku)||0));
+      countRows.push({product_id:String(product.id),...(variant?{variant_id:String(variant.id)}:{}),sku,name:String(product.name_en||sku),variant:String(variant?.option_value||''),expected_available:available,expected_packing:packing,expected_qty:available+packing,actual_qty:row.actual_qty,difference:row.actual_qty-(available+packing)});
+    }
+    const countedAt=new Date().toISOString(),recordedBy=String(user.display_name||user.username||user.id),key='stock-count-session-v1:'+sessionId;
+    const identity=JSON.stringify({counted_by:countedBy,notes,rows:countRows.map(row=>({product_id:row.product_id,variant_id:row.variant_id,sku:row.sku,actual_qty:row.actual_qty}))});
+    const session={format:'ora-stock-count-session-v1',session_id:sessionId,counted_at:countedAt,counted_by:countedBy,recorded_by:recordedBy,notes,identity,rows:countRows};
+    const saved=await replaceDataTable(env,'admin_data_store',existing=>{
+      const prior=existing.find(row=>String(row.key)===key);
+      if(prior){
+        if(prior.payload?.identity!==identity)return{rows:existing,result:{ok:false,status:409,error:'This count session ID already contains different counts. Refresh before retrying.'}};
+        return{rows:existing,result:{ok:true,already_saved:true,session:prior.payload}};
+      }
+      return{rows:[...existing,{key,payload:session,updated_at:countedAt}],result:{ok:true,already_saved:false,session}};
+    });
+    return reply(saved,saved.ok?200:Number(saved.status)||409);
+  }
   if(body?.action==='correct-history'){
     const operationId=String(body.operation_id||'');
     if(!/^[A-Za-z0-9_-]{16,100}$/.test(operationId))return reply({error:'Invalid Purchase History correction ID.'},400);
