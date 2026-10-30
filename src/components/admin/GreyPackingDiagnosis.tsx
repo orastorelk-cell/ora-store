@@ -1,54 +1,9 @@
-import React,{useState} from 'react';
-import { staffJsonRequest } from '../../lib/staffRequest';
+import React from 'react';
 import type { Order,Product,StockHistory } from '../../types';
 import { safeVariantForStock } from '../../lib/exactVariantStockResolution';
 
 /** Read-only invoice diagnosis: purchasing is NOT a printable invoice by itself. */
 export const GreyPackingDiagnosis=({orders,products,stockHistory=[]}:{orders:Order[];products:Product[];stockHistory?:StockHistory[]})=>{
-  const [repairing,setRepairing]=useState(false);
-  const [message,setMessage]=useState('');
-  const recoverMissingGrey=async()=>{
-    if(repairing)return;
-    setRepairing(true);setMessage('');
-    try{
-      const request=async(data:unknown)=>{
-        const token=localStorage.getItem('ora_staff_session_token')||'';
-        if(!token)throw new Error('Super Admin login is required.');
-        return staffJsonRequest('/api/admin/recover-oct29-stock',{
-          method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+token},
-          body:JSON.stringify(data)
-        });
-      };
-      const checked=await request({action:'preview-grey-gap'});
-      if(!checked?.ok||!Array.isArray(checked.lines)||checked.lines.length!==1)
-        throw new Error('Could not verify the original GREY +5 stock recovery.');
-      if(checked.already_saved){
-        setMessage('GREY stock gap repair was already recorded. It cannot be credited again. Check order allocations/waybills.');
-        return;
-      }
-      const line=checked.lines[0];
-      if(!checked.missing){
-        setMessage('No missing GREY stock in the verified receipt. '+line.already_allocated+
-          ' units already allocated to orders: '+(checked.allocated_orders||[]).join(', ')+
-          '. Check their Waybill / Invoice status below.');
-        return;
-      }
-      const prompt='CORRECT ORIGINAL R0008-GREY STOCK (NOT A NEW PURCHASE)\n\n'+
-        'Original purchased: 5 × Rs. 280\n'+
-        'Already allocated after recovery: '+line.already_allocated+'\n'+
-        'Current shared stock: '+line.current+'\n'+
-        'Verified remaining: '+line.expected+'\n'+
-        'Missing units to restore ONCE: +'+checked.missing+
-        '\n\nNo new purchase or duplicate invoice will be made. Continue?';
-      if(!window.confirm(prompt))return;
-      const committed=await request({action:'commit-grey-gap',version:checked.version,lines:checked.lines});
-      if(!committed?.ok||!Array.isArray(committed.lines))
-        throw new Error('The server did not confirm the GREY stock repair.');
-      window.alert('Original GREY stock gap checked and saved. Reloading for FIFO invoice allocation.');
-      window.location.reload();
-    }catch(error:any){setMessage(error?.message||'GREY stock repair could not be verified. No changes were made.');}
-    finally{setRepairing(false);}
-  };
   const product=products.find(p=>(p.variants||[]).some(v=>String(v.sku).toUpperCase()==='R0008-GREY'));
   const grey=product?.variants?.find(v=>String(v.sku).toUpperCase()==='R0008-GREY');
   const remaining=Number(grey?.stock_quantity||0);
@@ -99,16 +54,8 @@ export const GreyPackingDiagnosis=({orders,products,stockHistory=[]}:{orders:Ord
     {duplicateDeductions.length>0&&<p role="alert" className="mt-3 rounded-lg border border-red-500/40 bg-red-900/20 p-3 text-xs font-bold text-red-200">
       Duplicate FIFO stock deductions detected: {duplicateDeductions.map(([order,logs])=>
         order.replace('FIFO stock allocated to ','')+' ('+logs.length+' deductions)').join(', ')}.
-      Do not add new Purchasing to compensate. Use the verified original GREY stock-gap check below;
-      reconcile each order's waybill and invoice status before printing.
+      Do not add new Purchasing to compensate. Check each order's waybill and invoice status before printing.
     </p>}
-    <div className="mt-3">
-      <button type="button" disabled={repairing} onClick={()=>void recoverMissingGrey()}
-        className="rounded-xl border border-amber-500 bg-amber-500/10 px-4 py-2 text-xs font-bold text-amber-200 disabled:opacity-50">
-        {repairing?'Verifying original GREY receipt…':'Check & Restore Missing R0008-GREY Stock (No New Purchase)'}
-      </button>
-      {message&&<p role="status" className="mt-2 text-xs text-amber-200">{message}</p>}
-    </div>
     {!candidates.length?<p className="mt-3 text-amber-300">No matching GREY orders are present in the current server-loaded order list. No GREY invoice can be generated until a Confirmed GREY order exists.</p>:
     <div className="mt-3 max-h-80 overflow-auto">
       <table className="w-full text-left text-xs">
