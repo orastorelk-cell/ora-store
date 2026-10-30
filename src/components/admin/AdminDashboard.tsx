@@ -1,6 +1,4 @@
 import { stockConsumedItems, stockItemQuantities } from '../../lib/orderStockQuantities';
-import { OCT29_STOCK_RECEIPTS, type PurchaseProof } from '../../lib/oct29StockRecovery';
-import { staffJsonRequest } from '../../lib/staffRequest';
 import { OrderStockCorrectionsPanel } from './OrderStockCorrectionsPanel';
 import { StaffPurchasesPanel } from './StaffPurchasesPanel';
 import { OrderItemEditorPanel } from './OrderItemEditorPanel';
@@ -2009,61 +2007,6 @@ Suitable For:
   const deliveredProfit = deliveredRevenue - deliveredCost;
   const inventoryValue = products.filter((product) => normalizedProductType(product) !== 'bundle').reduce((sum, product) => sum + product.buying_price * product.stock_quantity, 0);
   const totalPurchasedCost = purchaseOrders.reduce((sum, purchase) => sum + purchase.total_cost, 0);
-  const [oct29RecoveryBusy,setOct29RecoveryBusy]=useState(false);
-  // The four original Purchase Inflow logs are authoritative evidence of
-  // today's morning-0 -> evening +5/+10 entries. Do not add a new purchase.
-  const repairOct29StockAndReleasePacking=async()=>{
-    if(oct29RecoveryBusy)return;
-    setOct29RecoveryBusy(true);
-    try {
-      if(adminUser?.role!=='admin')throw new Error('Super Admin is required.');
-      const proofs:PurchaseProof[]=OCT29_STOCK_RECEIPTS.map(({po,sku,qty})=>{
-        const purchases=purchaseOrders.filter(p=>String(p.po_number)===po &&
-          String(p.variant_sku||p.sku||'').trim().toUpperCase()===sku &&
-          Number(p.quantity_added)===qty);
-        if(purchases.length!==1)throw new Error(sku+': exactly one original '+po+' is required. Nothing was changed.');
-        const purchase=purchases[0];
-        const logs=stockHistory.filter(log=>log.change_type==='Purchase Inflow' &&
-          String(log.product_id)===String(purchase.product_id) &&
-          String(log.reason||'').includes(po) &&
-          Number(log.quantity)===qty && Number(log.previous_stock)===0 &&
-          Number(log.new_stock)===qty &&
-          Math.abs(new Date(log.created_at).getTime()-new Date(purchase.created_at).getTime())<=15000);
-        if(logs.length!==1)throw new Error(sku+': original 0 → '+qty+' Stock History receipt not found. No change was made.');
-        const log=logs[0];
-        return {po_number:po,sku,quantity:qty,unit_buying_price:Number(purchase.unit_buying_price),product_id:purchase.product_id,
-          ...(purchase.variant_id?{variant_id:purchase.variant_id}:{}),
-          created_at:purchase.created_at,log_id:String(log.id),
-          log_created_at:log.created_at,log_reason:log.reason||'',
-          log_previous_stock:Number(log.previous_stock),log_new_stock:Number(log.new_stock),
-          log_quantity:Number(log.quantity)};
-      });
-      const request=async(payload:any)=>staffJsonRequest('/api/admin/recover-oct29-stock',{
-        method:'POST',headers:{'content-type':'application/json',
-          authorization:'Bearer '+(localStorage.getItem('ora_staff_session_token')||'')},
-        body:JSON.stringify(payload),
-      });
-      const preview=await request({action:'preview',proofs});
-      if(!preview?.ok||!Array.isArray(preview.lines))throw new Error('Verified stock recovery preview is unavailable.');
-      if(preview.already_saved){
-        alert('29 October stock recovery is already saved. Refreshing server inventory and pending Packing.');
-        window.location.reload();return;
-      }
-      const explanation=preview.lines.map((line:any)=>line.sku+
-        ': purchase +'+line.purchase+'; newly allocated -'+line.already_allocated+
-        '; current '+line.current+'; verified remaining '+line.expected+
-        '; restore +'+line.credit).join('\\n');
-      if(!window.confirm('RESTORE EXISTING 29 OCT STOCK (NOT A NEW PURCHASE)\\n\\n'+explanation+
-        '\\n\\nThis operation is one-time and checks the latest server stock again before saving. After it succeeds, waiting Confirmed orders can enter FIFO Packing. Continue?'))return;
-      const saved=await request({action:'commit',proofs,lines:preview.lines,version:preview.version});
-      if(!saved?.ok||!Array.isArray(saved.lines))throw new Error('Server did not verify stock reconciliation.');
-      alert('Verified stock recovery recorded once. Reloading shared stock and orders; confirmed waiting orders will be checked for Packing, invoice and Fardar CSV eligibility.');
-      window.location.reload();
-    }catch(error:any){
-      alert(error?.message||'Stock recovery was not saved. No new Purchasing entry was added.');
-    }finally{setOct29RecoveryBusy(false);}
-  };
-
   const chartData = productPerformance.slice(0, 8);
 
   // Read-only stock view by exact Item Code.
@@ -4082,13 +4025,6 @@ Suitable For:
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h2 className="text-base font-bold text-white">Inventory, Purchases & Stock Analysis</h2>
-              {adminUser?.role==='admin' && (
-                <button type="button" disabled={oct29RecoveryBusy}
-                  onClick={()=>void repairOct29StockAndReleasePacking()}
-                  className="mt-3 rounded-xl border border-amber-500 bg-amber-500/15 px-4 py-3 text-xs font-black text-amber-200 disabled:opacity-50">
-                  {oct29RecoveryBusy?'Verifying original purchase receipts…':'Restore Oct 29 Stock (4 original receipts) → Release Waiting Packing'}
-                </button>
-              )}
               <p className="text-xs text-neutral-400">Purchase entry, sales performance, profit/loss and complete stock movement.</p>
             </div>
             <button
