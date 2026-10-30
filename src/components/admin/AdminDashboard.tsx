@@ -79,6 +79,7 @@ import { useStore } from '../../context/StoreContext';
 import PackingBatchMergePanel from './PackingBatchMergePanel';
 import { GreyPackingDiagnosis } from './GreyPackingDiagnosis';
 import { PurchaseHistoryRecoveryPanel } from './PurchaseHistoryRecoveryPanel';
+import { StockCountReconciliationPanel } from './StockCountReconciliationPanel';
 import {
   Product,
   Category,
@@ -4110,6 +4111,13 @@ Suitable For:
               <PlusCircle className="w-4 h-4" /> Add Purchase
             </button>
           </div>
+
+          <StockCountReconciliationPanel
+            products={products}
+            systemRows={stockByItemCodeRows}
+            countedBy={String(adminUser?.name||adminUser?.display_name||adminUser?.username||'')}
+            isAdmin={adminUser?.role==='admin'}
+          />
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-4">
