@@ -2029,8 +2029,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     logActivity({action:'Exchange Invoice Created',module:'Exchange Parcels',target_id:data.exchange.id,target_label:data.exchange.id,details:`Original ${data.exchange.original_order_number} / ${data.exchange.original_waybill} • New ${waybillNumber} • Pending refund Rs. ${data.exchange.refund_amount}`});
     return {exchange:data.exchange};
   };
-  const completeExchangeRefund=async(exchangeId:string)=>{
-    const data=await sharedStaffRequest(`/api/exchange-invoices/${encodeURIComponent(exchangeId)}/refund-complete`,{method:'POST',body:JSON.stringify({})});
+  const completeExchangeRefund=async(exchangeId:string,proof:{slipDataUrl:string;slipFileName:string;slipContentType:string})=>{
+    const data=await sharedStaffRequest(`/api/exchange-invoices/${encodeURIComponent(exchangeId)}/refund-complete`,{method:'POST',body:JSON.stringify(proof)});
     if(!data?.exchange)throw new Error('Refund completion was not saved.');
     setExchangeInvoices(prev=>prev.map(row=>row.id===exchangeId?data.exchange:row));
     setWaybillRecords(prev=>prev.map(row=>row.exchange_invoice?.id===exchangeId?{...row,exchange_invoice:data.exchange}:row));
