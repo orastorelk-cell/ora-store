@@ -509,7 +509,6 @@ export function aggregateProfitByItemCode(report: PaidWaybillProfitReport, order
   const ready = report.rows.filter(row => row.profit !== null && row.items.length);
   const map = new Map<string, ProfitByItemCodeRow>();
   const weightsFor = (row: ProfitRow) => row.items.map(item => Math.max(0, item.sales || 0, Number(item.unitSale || 0) * Number(item.quantity || 0)));
-  const rowWeight = (row: ProfitRow) => weightsFor(row).reduce((sum, value) => sum + value, 0) || row.items.reduce((sum, item) => sum + Math.max(1, Number(item.quantity) || 1), 0);
   const add = (sku: string, quantity: number, received: number, purchasing: number, delivery: number, returnFee: number, packing: number, advertising: number) => {
     const key = sku.trim() || 'UNCODED';
     const value = map.get(key) || { sku: key, quantity: 0, received: 0, purchasing: 0, delivery: 0, returnFee: 0, packing: 0, advertising: 0, profit: 0 };
