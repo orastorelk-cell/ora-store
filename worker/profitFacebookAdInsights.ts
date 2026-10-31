@@ -57,7 +57,7 @@ export async function profitFacebookAdInsights(request: Request, env: Record<str
 
     // New Facebook orders already save their original Ad ID with the lead.
     // Use that first: ads_read can read spend, while querying lead records also
-    // needs Page lead access and caused #100 for otherwise valid ad accounts.
+    // requires separate Page lead access and can fail even when ads_read works.
     const verifiedByOrder = new Map<string, { order: Order; adId: string; adsetId: string; campaignId: string; createdAt: string; day: string }>();
     const unresolved: Order[] = [];
     for (const order of selected as Order[]) {
