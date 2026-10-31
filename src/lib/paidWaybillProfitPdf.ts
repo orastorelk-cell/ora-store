@@ -65,16 +65,17 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     doc.text(label, left + 3, y); doc.text(money(value), left + 156, y, { align: 'right' }); y += 6.5;
   });
   const cardX = 181;
+  const facebookCostSource = currentCsv?.fileName.startsWith('Facebook API · ') ? 'Meta Ads account reporting period.' : 'Facebook cost report period.';
   doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.text('ADVERTISING DATE RANGES', cardX, summaryStart);
   doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
-  doc.text(options.facebookReportingPeriods ? 'Facebook dates: cost CSV reporting period.' : 'Order arrival dates in the system (Sri Lanka).', cardX, summaryStart + 6);
+  doc.text(options.facebookReportingPeriods ? `Facebook dates: ${facebookCostSource}` : 'Order arrival dates in the system (Sri Lanka).', cardX, summaryStart + 6);
   let rangeY = summaryStart + 16;
   for (const source of ['Facebook', 'TikTok'] as const) {
     const range = report.ranges[source];
     doc.setFont('helvetica', 'bold'); doc.text(source, cardX, rangeY);
     const csvPeriods = source === 'Facebook' ? options.facebookReportingPeriods : undefined;
     const dateText = csvPeriods ? csvPeriods.length ? csvPeriods.length <= 2 ? csvPeriods.map(period => `${period.from} to ${period.to}`).join(' / ')
-      : `${csvPeriods[0].from} to ${csvPeriods.at(-1)!.to} (${csvPeriods.length} CSV periods)` : 'No Facebook cost CSV selected'
+      : `${csvPeriods[0].from} to ${csvPeriods.at(-1)!.to} (${csvPeriods.length} cost periods)` : 'No Facebook cost source selected'
       : range ? `${range.from} to ${range.to} (${range.count} orders)` : 'No paid orders from this source';
     doc.setFont('helvetica', 'normal'); const lines = doc.splitTextToSize(dateText, 103); doc.text(lines, cardX, rangeY + 5);
     rangeY += Math.max(16, lines.length * 4 + 8);
@@ -104,12 +105,13 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
   notes.forEach(note => { const lines = doc.splitTextToSize(note, width); if (y + lines.length * 4 > bottom) { doc.addPage(); title('Report notes'); y = 35; } doc.text(lines, left, y); y += lines.length * 4 + 1; });
 
   if (currentCsv) {
-    doc.addPage(); title('CURRENT FACEBOOK CSV | Paid / returned shares; pending costs reserved'); y = 35;
+    const metaLive = currentCsv.fileName.startsWith('Facebook API · ');
+    doc.addPage(); title(metaLive ? 'LIVE META ADS COSTS | Paid / returned shares; pending costs reserved' : 'CURRENT FACEBOOK CSV | Paid / returned shares; pending costs reserved'); y = 35;
     const intro = [
-      `Current file: ${text(currentCsv.fileName)}`,
-      `Full CSV spend: ${money(currentCsv.totalSpend)} | Item ads: ${money(currentCsv.itemSpend)} | Commercial: ${money(currentCsv.commercialSpend)}`,
-      'Only this newly selected CSV is used. Previous saved Facebook reports and browser cost values are never loaded.',
-      'Only the selected paid / returned lead shares are deducted. Pending leads keep their shares until paid or returned. No previous CSV is loaded.',
+      `${metaLive ? 'Meta source' : 'Current file'}: ${text(currentCsv.fileName)}`,
+      `Full Facebook spend: ${money(currentCsv.totalSpend)} | Item ads: ${money(currentCsv.itemSpend)} | Commercial: ${money(currentCsv.commercialSpend)}`,
+      'Only the current Facebook cost source is used. Previous reports and browser cost values are never loaded.',
+      'Only selected paid / returned lead shares are deducted. Pending leads keep their shares until paid or returned.',
       `Order shares: ${money(options.currentCsvAllocation?.assignedSpend || 0)} | All other spend held separately: ${money(options.currentCsvAllocation?.unassignedSpend || 0)}`,
       `Pending: ${money(options.currentCsvAllocation?.pendingSpend || 0)} | Other orders: ${money(options.currentCsvAllocation?.otherSpend || 0)} | Unmatched: ${money(options.currentCsvAllocation?.unmatchedSpend || 0)}`,
       options.currentCsvAllocation?.missingOrderIds.length ? `${options.currentCsvAllocation.missingOrderIds.length} selected Facebook orders have unresolved cost matches. Their costs are NOT assumed to be zero; profit is provisional.` : 'All selected Facebook waybills matched. Pending cost remains separate.',
@@ -119,13 +121,13 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     intro.forEach(note => { const lines = doc.splitTextToSize(note, width); doc.text(lines, left, y); y += lines.length * 4 + 2; }); y += 4;
     const csvHeader = () => {
       doc.setFillColor(243, 244, 246); doc.rect(left, y - 4, width, 8, 'F'); doc.setFont('helvetica', 'bold');
-      doc.text('CODE / CAMPAIGN', left + 2, y); doc.text('CSV REPORTING DATES', left + 123, y); doc.text('FORM LEADS', left + 216, y, { align: 'right' }); doc.text('SPEND', left + width - 2, y, { align: 'right' }); y += 9;
+      doc.text('CODE / AD', left + 2, y); doc.text('COST PERIOD', left + 123, y); doc.text('LEADS', left + 216, y, { align: 'right' }); doc.text('SPEND', left + width - 2, y, { align: 'right' }); y += 9;
     };
     csvHeader();
     currentCsv.rows.forEach((row, index) => {
       const lines = doc.splitTextToSize(`${row.code || 'Commercial'} | ${text(row.campaign)} / ${text(row.adSet)}`, 117);
       const height = Math.max(9, lines.length * 4 + 3);
-      if (y + height > bottom) { doc.addPage(); title('Current Facebook CSV | continued'); y = 35; csvHeader(); }
+      if (y + height > bottom) { doc.addPage(); title('Current Facebook costs | continued'); y = 35; csvHeader(); }
       if (index % 2 === 0) { doc.setFillColor(249, 250, 251); doc.rect(left, y - 3, width, height, 'F'); }
       doc.setFont('helvetica', 'normal'); doc.text(lines, left + 2, y); doc.text(`${row.from} to ${row.to}`, left + 123, y); doc.text(String(row.leads), left + 216, y, { align: 'right' }); doc.text(money(row.spend), left + width - 2, y, { align: 'right' }); y += height;
     });
