@@ -215,7 +215,7 @@ interface StoreContextType {
     reason?: string;
   }) => Promise<Order>;
   createExchangeInvoice: (orderId:string,waybillNumber:string) => Promise<{exchange:ExchangeInvoiceRecord}>;
-  completeExchangeRefund: (exchangeId:string) => Promise<{exchange:ExchangeInvoiceRecord;original_order?:Order|null}>;
+  completeExchangeRefund: (exchangeId:string, proof: { slipDataUrl:string; slipFileName:string; slipContentType:string }) => Promise<{exchange:ExchangeInvoiceRecord;original_order?:Order|null}>;
   updateOrderStatus: (orderId: string, status: OrderStatus) => void;
   cancelOrderDirect: (orderId: string, reason: string, cancelledBy?: string) => Promise<{ success: boolean; message: string }>;
   updateOrderDeliveryDetails: (orderId: string, details: { address: string; city: string; district?: string }) => Promise<{ success: boolean; sheetSynced: boolean; message: string }>;
