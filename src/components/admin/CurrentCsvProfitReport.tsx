@@ -145,7 +145,8 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
         throw new Error('Meta lead verification was incomplete. No profit was calculated.');
       const matched: typeof verifiedLeads = {};
       for (const row of data.verified) {
-        if (typeof row.lead_id !== 'string' || ![row.ad_id, row.adset_id, row.campaign_id].every((id: any) => typeof id === 'string' && /^\d{1,64}$/.test(id))
+        if (typeof row.lead_id !== 'string' || typeof row.ad_id !== 'string' || !/^\d{1,64}$/.test(row.ad_id)
+          || ![row.adset_id, row.campaign_id].every((id: any) => typeof id === 'string' && (!id || /^\d{1,64}$/.test(id)))
           || typeof row.ad_day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(row.ad_day) || !Number.isFinite(Date.parse(row.created_at)))
           throw new Error('Meta returned an invalid Lead / Ad identity. No profit was calculated.');
         matched[row.order_id] = row;
