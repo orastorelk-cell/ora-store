@@ -1,6 +1,6 @@
 import type { Order } from '../types';
 import { facebookAdCode, parseFacebookAdCostCsv, type FacebookAdCost } from './facebookProfitAds';
-import { isFinalProfitOrder, isReturnedProfitOrder, profitSystemDay, savedProfitPaymentKind, type PaidWaybillProfitReport } from './paidWaybillProfit';
+import { isFinalProfitOrder, profitSystemDay, type PaidWaybillProfitReport } from './paidWaybillProfit';
 
 const cents = (amount: number) => Math.round(amount * 100);
 export interface CurrentFacebookCsv {
