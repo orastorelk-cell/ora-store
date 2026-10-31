@@ -543,18 +543,30 @@ export function buildPaidWaybillProfitReport(input: {
 
 /** Aggregate realized costs and profit by item code. Order-level receipt, courier, packing and advertising amounts are allocated to lines by their saved item sales value; returns allocate only the recorded return fee. */
 export interface ProfitByItemCodeRow {
-  sku: string; quantity: number; received: number; purchasing: number; delivery: number; returnFee: number; packing: number; advertising: number; profit: number;
+  sku: string; quantity: number; deliveredUnits: number; returnedUnits: number; deliveredOrders: number; returnOrders: number;
+  unitBuyingPrice: number; deliveryRate: number; returnRate: number;
+  received: number; purchasing: number; delivery: number; returnFee: number; packing: number; advertising: number; profit: number;
 }
 export function aggregateProfitByItemCode(report: PaidWaybillProfitReport, orderAdvertisingCosts: ReadonlyMap<string, number>, tiktokTotal: number): ProfitByItemCodeRow[] {
   const ready = report.rows.filter(row => row.profit !== null && row.items.length);
   const map = new Map<string, ProfitByItemCodeRow>();
+  const deliveredOrderCodes = new Map<string, Set<string>>();
+  const returnOrderCodes = new Map<string, Set<string>>();
   const weightsFor = (row: ProfitRow) => row.items.map(item => Math.max(0, item.sales || 0, Number(item.unitSale || 0) * Number(item.quantity || 0)));
-  const add = (sku: string, quantity: number, received: number, purchasing: number, delivery: number, returnFee: number, packing: number, advertising: number) => {
+  const add = (sku: string, quantity: number, deliveredUnits: number, returnedUnits: number, received: number, purchasing: number, delivery: number, returnFee: number, packing: number, advertising: number, row: ProfitRow) => {
     const key = sku.trim() || 'UNCODED';
-    const value = map.get(key) || { sku: key, quantity: 0, received: 0, purchasing: 0, delivery: 0, returnFee: 0, packing: 0, advertising: 0, profit: 0 };
-    value.quantity += quantity; value.received += received; value.purchasing += purchasing; value.delivery += delivery;
+    const value = map.get(key) || { sku: key, quantity: 0, deliveredUnits: 0, returnedUnits: 0, deliveredOrders: 0, returnOrders: 0,
+      unitBuyingPrice: 0, deliveryRate: 0, returnRate: 0, received: 0, purchasing: 0, delivery: 0, returnFee: 0, packing: 0, advertising: 0, profit: 0 };
+    value.quantity += quantity; value.deliveredUnits += deliveredUnits; value.returnedUnits += returnedUnits;
+    value.received += received; value.purchasing += purchasing; value.delivery += delivery;
     value.returnFee += returnFee; value.packing += packing; value.advertising += advertising;
     map.set(key, value);
+    const orderKey = row.orderId || row.waybill;
+    if (row.outcome === 'sale') {
+      const seen = deliveredOrderCodes.get(key) || new Set<string>(); seen.add(orderKey); deliveredOrderCodes.set(key, seen);
+    } else if (row.outcome === 'returned') {
+      const seen = returnOrderCodes.get(key) || new Set<string>(); seen.add(orderKey); returnOrderCodes.set(key, seen);
+    }
   };
   const tiktokOrders = ready.filter(row => row.source === 'TikTok' && row.orderId);
   const tiktokPerOrder = tiktokOrders.length ? tiktokTotal / tiktokOrders.length : 0;
@@ -565,16 +577,24 @@ export function aggregateProfitByItemCode(report: PaidWaybillProfitReport, order
     const orderAds = row.source === 'Facebook' && row.orderId ? orderAdvertisingCosts.get(row.orderId) || 0 : row.source === 'TikTok' ? tiktokPerOrder : 0;
     row.items.forEach((item, index) => {
       const share = effective[index] / basis;
-      const received = row.outcome === 'returned' ? 0 : (row.received || 0) * share;
-      const purchasing = row.outcome === 'returned' ? 0 : item.purchasing || 0;
-      const delivery = row.outcome === 'returned' ? 0 : (row.courier || 0) * share;
-      const returnFee = row.outcome === 'returned' ? (row.returnFee || 0) * share : 0;
-      const packing = row.outcome === 'returned' ? 0 : (row.packing || 0) * share;
+      const isSale = row.outcome === 'sale', isReturn = row.outcome === 'returned';
+      const deliveredUnits = isSale ? item.quantity || 0 : 0, returnedUnits = isReturn ? item.quantity || 0 : 0;
+      const received = isReturn ? 0 : (row.received || 0) * share;
+      const purchasing = isReturn ? 0 : item.purchasing || 0;
+      const delivery = isReturn ? 0 : (row.courier || 0) * share;
+      const returnFee = isReturn ? (row.returnFee || 0) * share : 0;
+      const packing = isReturn ? 0 : (row.packing || 0) * share;
       const advertising = orderAds * share;
-      add(item.sku, item.quantity || 0, received, purchasing, delivery, returnFee, packing, advertising);
+      add(item.sku, deliveredUnits + returnedUnits, deliveredUnits, returnedUnits, received, purchasing, delivery, returnFee, packing, advertising, row);
     });
   }
   return [...map.values()].map(row => {
+    row.deliveredOrders = deliveredOrderCodes.get(row.sku)?.size || 0;
+    row.returnOrders = returnOrderCodes.get(row.sku)?.size || 0;
+    const outcomeOrders = row.deliveredOrders + row.returnOrders;
+    row.unitBuyingPrice = row.deliveredUnits > 0 ? row.purchasing / row.deliveredUnits : 0;
+    row.deliveryRate = outcomeOrders > 0 ? row.deliveredOrders / outcomeOrders * 100 : 0;
+    row.returnRate = outcomeOrders > 0 ? row.returnOrders / outcomeOrders * 100 : 0;
     row.profit = Math.round((row.received - row.purchasing - row.delivery - row.returnFee - row.packing - row.advertising + Number.EPSILON) * 100) / 100;
     return Object.fromEntries(Object.entries(row).map(([key, value]) => [key, typeof value === 'number' ? Math.round((value + Number.EPSILON) * 100) / 100 : value])) as ProfitByItemCodeRow;
   }).sort((a, b) => a.sku.localeCompare(b.sku));
