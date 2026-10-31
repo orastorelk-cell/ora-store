@@ -6,30 +6,58 @@ import { autoMapHeader, downloadCsv, parseCsv, parseFlexibleDate } from '../../l
 import type { Order, PurchaseOrder, ReturnRecord } from '../../types';
 import { buildPaidWaybillProfitReport, parseProfitWaybillUpload, profitMoney, profitSystemDay, type PaymentAmountBasis, type ProfitCatalogProduct, aggregateProfitByItemCode, normalizeProfitWaybill } from '../../lib/paidWaybillProfit';
 import { allocateCurrentCsvCosts, currentFacebookCsv, currentFacebookInsights, currentCsvProfitSummary, type CurrentFacebookCsv } from '../../lib/currentCsvProfit';
+import { createPaidWaybillProfitPdf } from '../../lib/paidWaybillProfitPdf';
 
 export interface CurrentCsvProfitReportProps {
   orders: Order[]; purchases: PurchaseOrder[]; products: ProfitCatalogProduct[]; returns: ReturnRecord[];
   ready: boolean; error?: string; onRefresh: () => Promise<void>;
-  resetError?: string; onResetPrevious?: () => Promise<void>;
+  resetError?: string; onResetPrevious?: () => Promise<void>; isSuperAdmin: boolean;
 }
 
 // Complete TikTok invoice transaction export supplied for this paid-order set.
 const TIKTOK_INVOICE_COST = { from: '2026-09-07', to: '2026-09-29', amount: 3451.37, invoices: 3 };
 
-/** Every visit starts with no Facebook cost. Inputs never enter localStorage. */
-export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ orders, purchases, products, returns, ready, error, onRefresh, resetError, onResetPrevious }) => {
+/** The Super Admin owns one shared saved report set; staff can view its saved inputs. */
+export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ orders, purchases, products, returns, ready, error, onRefresh, resetError, onResetPrevious, isSuperAdmin }) => {
   const [waybills, setWaybills] = useState<string[]>([]), [waybillFile, setWaybillFile] = useState('');
   const [facebook, setFacebook] = useState<CurrentFacebookCsv | null>(null);
   const [facebookStatus, setFacebookStatus] = useState<'missing' | 'reading' | 'ready' | 'failed'>('missing');
   const [basis, setBasis] = useState<PaymentAmountBasis>('auto');
   const [fromDate, setFromDate] = useState(''), [toDate, setToDate] = useState('');
   const [busy, setBusy] = useState(''), [message, setMessage] = useState(''), [calculated, setCalculated] = useState(false);
+  const [sharedSetLoaded, setSharedSetLoaded] = useState(false), [hasSavedSet, setHasSavedSet] = useState(false);
+  const sharedLoadStarted = useRef(false);
   const [search, setSearch] = useState(''), [page, setPage] = useState(1);
   const waybillInput = useRef<HTMLInputElement>(null), facebookInput = useRef<HTMLInputElement>(null), mergeCsvInput = useRef<HTMLInputElement>(null);
   const [mergeBusy, setMergeBusy] = useState(false), [mergeMessage, setMergeMessage] = useState('');
   const fbSequence = useRef(0), waybillSequence = useRef(0), metaSequence = useRef(0);
   const [verifiedLeads, setVerifiedLeads] = useState<Record<string, { lead_id: string; created_at: string; ad_id: string; adset_id: string; campaign_id: string; ad_day?: string }>>({});
   useEffect(() => () => { metaSequence.current++; }, []);
+  useEffect(() => {
+    if (!ready || sharedLoadStarted.current) return;
+    sharedLoadStarted.current = true;
+    const token = localStorage.getItem('ora_staff_session_token') || '';
+    void staffJsonRequest('/api/admin/current-profit-set', { headers: { Authorization: `Bearer ${token}` } })
+      .then(data => {
+        const saved = data?.report;
+        if (!saved) return;
+        if (!Array.isArray(saved.waybills) || !saved.facebook || !Array.isArray(saved.facebook.rows) || !Array.isArray(saved.facebook.periods))
+          throw new Error('The shared profit set is incomplete. Ask Super Admin to save it again.');
+        setWaybills(saved.waybills.map((value: unknown) => String(value)).slice(0, 10000));
+        setWaybillFile(String(saved.waybillFileName || 'Saved waybill set').slice(0, 200));
+        setFacebook(saved.facebook as CurrentFacebookCsv);
+        setFacebookStatus('ready');
+        setBasis(['auto', 'gross', 'net'].includes(saved.paymentBasis) ? saved.paymentBasis : 'auto');
+        setFromDate(/^\\d{4}-\\d{2}-\\d{2}$/.test(saved.fromDate || '') ? saved.fromDate : '');
+        setToDate(/^\\d{4}-\\d{2}-\\d{2}$/.test(saved.toDate || '') ? saved.toDate : '');
+        setVerifiedLeads(saved.verifiedLeads && typeof saved.verifiedLeads === 'object' ? saved.verifiedLeads : {});
+        setCalculated(true);
+        setHasSavedSet(true);
+        setMessage(`Shared profit set saved by Super Admin on ${new Date(saved.savedAt || Date.now()).toLocaleString()}.`);
+      })
+      .catch((e: any) => { setMessage(e?.message || 'Shared profit report could not be loaded.'); })
+      .finally(() => setSharedSetLoaded(true));
+  }, [ready]);
   const costOrders = useMemo(() => {
     // Before verification there is no metadata to overlay. Preserve the store
     // array rather than cloning thousands of orders on every tab entry.
@@ -80,6 +108,31 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
   const freshReport = () => {
     fbSequence.current++; waybillSequence.current++; metaSequence.current++; setVerifiedLeads({});
     setWaybills([]); setWaybillFile(''); setFacebook(null); setFacebookStatus('missing'); setBasis('auto'); setFromDate(''); setToDate(''); setCalculated(false); setMessage(''); setSearch(''); setPage(1);
+  };
+  const calculateAndSave = async () => {
+    if (!canCalculate || !facebook) return;
+    setCalculated(true);
+    setMessage(`Profit calculated for final Fardar orders (${fromDate || 'all dates'} to ${toDate || 'all dates'}). Processing orders are excluded from profit and selected Facebook cost.`);
+    if (!isSuperAdmin) return;
+    setBusy('save');
+    try {
+      const payload = { waybills, waybillFileName: waybillFile, facebook, paymentBasis: basis, fromDate, toDate, verifiedLeads, savedAt: new Date().toISOString() };
+      const result = await staffJsonRequest('/api/admin/current-profit-set', { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('ora_staff_session_token') || ''}` }, body: JSON.stringify(payload) });
+      if (!result?.ok) throw new Error(result?.error || 'The shared profit set was not saved.');
+      setHasSavedSet(true);
+      setMessage('Profit set saved for authorized staff. It remains saved until Super Admin clears it.');
+    } catch (e: any) { setMessage(`Profit calculated, but the shared set was not saved: ${e?.message || 'save failed'}`); }
+    finally { setBusy(''); }
+  };
+  const clearSavedProfitSet = async () => {
+    if (!isSuperAdmin || !window.confirm('Clear the saved profit set for all staff? This cannot be undone.')) return;
+    setBusy('clear');
+    try {
+      const result = await staffJsonRequest('/api/admin/current-profit-set', { method: 'DELETE', headers: { Authorization: `Bearer ${localStorage.getItem('ora_staff_session_token') || ''}` } });
+      if (!result?.ok) throw new Error(result?.error || 'The shared profit set was not cleared.');
+      setHasSavedSet(false); freshReport(); setMessage('Saved profit set cleared for all staff.');
+    } catch (e: any) { setMessage(e?.message || 'Saved profit set could not be cleared.'); }
+    finally { setBusy(''); }
   };
   const mergeAndDownloadCsv = async (files?: FileList | null) => {
     const selected = Array.from(files || []);
@@ -227,12 +280,19 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
   };
   const download = async () => {
     if (!facebook || !calculated || !canCalculate) return;
-    setBusy('pdf');
+    setBusy('pdf'); setMessage('Creating the report PDF...');
     try {
-      const { createPaidWaybillProfitPdf } = await import('../../lib/paidWaybillProfitPdf');
+      await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()));
       const doc = createPaidWaybillProfitPdf(report, { facebook: String(facebook.totalSpend), tiktok, sourceName: `Date range: ${fromDate || 'All dates'} to ${toDate || 'All dates'} | Waybills: ${waybillFile} | Facebook source: ${facebook.fileName} | TikTok invoice dates: ${TIKTOK_INVOICE_COST.from} to ${TIKTOK_INVOICE_COST.to}`,
         paymentBasis: basis, facebookReportingPeriods: facebook.periods, currentFacebookCsv: facebook, currentCsvAllocation: allocation!, itemCodeBreakdown: itemCodeSummary, includeAccountNet: accountNetProfit !== null });
-      doc.save(`O-RA_Current_CSV_Profit_${profitSystemDay(new Date().toISOString())}.pdf`);
+      const blob = doc.output('blob');
+      if (!(blob instanceof Blob) || !blob.size) throw new Error('The PDF was empty.');
+      const filename = `O-RA_Current_CSV_Profit_${profitSystemDay(new Date().toISOString())}.pdf`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a'); link.href = url; link.download = filename; link.style.display = 'none';
+      document.body.appendChild(link); link.click(); link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      setMessage(`PDF created: ${filename}. Check your browser downloads.`);
     } catch (e: any) { setMessage(e.message || 'PDF could not be created.'); }
     finally { setBusy(''); }
   };
@@ -245,9 +305,11 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
   return <div data-ora-view-allowed="true" className="space-y-5">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div><h2 className="flex items-center gap-2 text-xl font-black"><BarChart3 className="h-6 w-6 text-orange-600" />Profit Report — Meta Cost Flow</h2><p className="mt-2 text-sm text-gray-500">Date range එකට අදාළ Fardar Delivered, Return Complete, සහ Cancelled orders විතරක් ගණනය කරනවා. Fardar Processing orders වලට profit හෝ Facebook cost ගණනය වෙන්නේ නැහැ.</p></div>
-      <div className="flex flex-wrap gap-2"><button type="button" onClick={freshReport} disabled={Boolean(busy)} className="rounded-xl border px-4 py-2.5 text-xs font-bold">Start New Report</button><button type="button" onClick={refresh} disabled={Boolean(busy)} className="inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-bold"><RefreshCw className={`h-4 w-4 ${busy === 'refresh' ? 'animate-spin' : ''}`} />Refresh System Records</button></div>
+      <div className="flex flex-wrap gap-2">{isSuperAdmin && <button type="button" onClick={() => hasSavedSet ? void clearSavedProfitSet() : freshReport()} disabled={Boolean(busy)} className="rounded-xl border px-4 py-2.5 text-xs font-bold">{hasSavedSet ? 'Clear Saved Profit Set' : 'Start New Report'}</button>}<button type="button" onClick={refresh} disabled={Boolean(busy)} className="inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-bold"><RefreshCw className={`h-4 w-4 ${busy === 'refresh' ? 'animate-spin' : ''}`} />Refresh System Records</button></div>
     </div>
     <p className="rounded-xl bg-blue-50 p-4 text-sm text-blue-900">Facebook Ads account එකෙන් වියදම auto fetch කරලා, saved Ad ID තිබේ නම් ඒ අනුවත් නැත්නම් product code සහ ad-account date අනුවත් allocate කරනවා. පරණ report cost මෙයට එකතු වෙන්නේ නැහැ.</p>
+    {!sharedSetLoaded && ready && <p role="status" className="rounded-xl bg-blue-50 p-4 text-sm text-blue-800">Loading shared profit set...</p>}
+    {sharedSetLoaded && !hasSavedSet && !isSuperAdmin && <p role="status" className="rounded-xl bg-amber-50 p-4 text-sm text-amber-800">No shared profit set has been saved by Super Admin yet.</p>}
     {(!ready || error) && <p role="alert" className="rounded-xl bg-amber-50 p-4 text-sm text-amber-800">{error || 'Loading saved payment, return and Purchasing records...'}</p>}
     {resetError && <div role="alert" className="rounded-xl bg-amber-50 p-4 text-sm text-amber-800"><p>{resetError}</p>{onResetPrevious && <button type="button" onClick={() => void onResetPrevious()} className="mt-2 underline">Retry previous-report reset</button>}</div>}
     {message && <p role="status" className="break-words rounded-xl bg-orange-50 p-4 text-sm text-orange-900">{message}</p>}
@@ -279,29 +341,29 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
         <p className="mt-1 text-xs text-orange-900">Select the four Fardar delivery/return CSV files together. Duplicate waybills are kept once, using the row with the latest Last Scan Date.</p>
         <input ref={mergeCsvInput} aria-label="Select Fardar CSV files to merge" type="file" accept=".csv,.tsv,.txt,text/csv,text/plain" multiple className="hidden"
           onChange={event => { void mergeAndDownloadCsv(event.target.files); event.target.value = ''; }} />
-        <button type="button" onClick={() => mergeCsvInput.current?.click()} disabled={mergeBusy || Boolean(busy)}
+        <button type="button" onClick={() => mergeCsvInput.current?.click()} disabled={isSuperAdmin === false || mergeBusy || Boolean(busy)}
           className="mt-3 inline-flex items-center gap-2 rounded-lg bg-orange-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-40">
           <Download className="h-4 w-4" />{mergeBusy ? 'Merging CSV files…' : 'Select CSVs and Download Merged CSV'}
         </button>
         {mergeMessage && <p role="status" className="mt-2 text-xs font-semibold text-orange-950">{mergeMessage}</p>}
       </div>
-      <button type="button" onClick={() => waybillInput.current?.click()} disabled={Boolean(busy)} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-40"><Upload className="h-4 w-4" />Upload Waybill CSV</button>
+      <button type="button" onClick={() => waybillInput.current?.click()} disabled={!isSuperAdmin || Boolean(busy)} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-40"><Upload className="h-4 w-4" />Upload Waybill CSV</button>
       <input ref={waybillInput} aria-label="Current report waybill CSV" type="file" accept=".csv,.tsv,.txt,text/csv,text/plain" className="hidden" onChange={event => { void uploadWaybills(event.target.files?.[0]); event.target.value = ''; }} />
       {waybillFile && <div className="mt-4 rounded-xl bg-gray-50 p-4 text-sm"><p className="break-all font-bold">{waybillFile}</p><p className="mt-2">{waybills.length} uploaded waybills · {report.rows.filter(row => row.outcome === 'sale').length} delivered · {report.rows.filter(row => row.outcome === 'returned').length} returned · {report.rows.filter(row => row.outcome === 'cancelled').length} cancelled · {report.excludedNonFinal} Fardar processing skipped · {report.totals.review} need review</p></div>}
     </section>
     <section className="rounded-2xl border bg-white p-5 shadow-sm">
       <h3 className="font-black">2. Facebook Ad Cost — automatic</h3><p className="mt-2 text-sm text-gray-500">Meta Ads account එකෙන් ad spend ගෙන, saved Ad ID තිබේ නම් ඒ අනුවත් නැත්නම් product code සහ ad-account date අනුවත් බෙදනවා. Delivered / Return Complete / Cancelled orders වල cost විතරක් අඩු කරනවා; Fardar Processing orders වල cost වෙනම තබනවා.</p>
       {requiredDates.range && <p className="mt-3 rounded-lg bg-blue-50 p-3 text-sm text-blue-900">Selected Facebook lead dates: <strong>{requiredDates.range.from} to {requiredDates.range.to}</strong>. Meta spend එක ad ID සහ ad-account date අනුව ගන්නවා; lead එකට අදාළ පෙර දින 7ක ad spend pool එකත් සලකනවා.</p>}
-      <button type="button" onClick={() => void fetchFacebookFromMeta()} disabled={!waybills.length || Boolean(busy)} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-40"><RefreshCw className={`h-4 w-4 ${busy === 'facebook-api' ? 'animate-spin' : ''}`} />{busy === 'facebook-api' ? 'Fetching from Facebook…' : 'Fetch Facebook Costs Automatically'}</button>
-      <div className="mt-3"><button type="button" onClick={() => facebookInput.current?.click()} disabled={!waybills.length || Boolean(busy)} className="inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-xs font-bold disabled:opacity-40"><Upload className="h-4 w-4" />CSV fallback</button><span className="ml-2 text-xs text-gray-500">Meta Ads API access නැත්නම් පමණක් CSV භාවිතා කරන්න.</span></div>
+      <button type="button" onClick={() => void fetchFacebookFromMeta()} disabled={!isSuperAdmin || !waybills.length || Boolean(busy)} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-40"><RefreshCw className={`h-4 w-4 ${busy === 'facebook-api' ? 'animate-spin' : ''}`} />{busy === 'facebook-api' ? 'Fetching from Facebook…' : 'Fetch Facebook Costs Automatically'}</button>
+      <div className="mt-3"><button type="button" onClick={() => facebookInput.current?.click()} disabled={!isSuperAdmin || !waybills.length || Boolean(busy)} className="inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-xs font-bold disabled:opacity-40"><Upload className="h-4 w-4" />CSV fallback</button><span className="ml-2 text-xs text-gray-500">Meta Ads API access නැත්නම් පමණක් CSV භාවිතා කරන්න.</span></div>
       <input ref={facebookInput} aria-label="Current report Facebook CSV" type="file" accept=".csv,text/csv" className="hidden" onChange={event => { void uploadFacebook(event.target.files?.[0]); event.target.value = ''; }} />
       {facebookStatus === 'reading' && <p role="status" className="mt-4 text-sm text-orange-800">Reading Facebook cost data. Previous report cost is cleared.</p>}
-      {facebook && <div aria-label="Current report Facebook cost details" className="mt-4 rounded-xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-900"><p className="break-all font-bold">Source: {facebook.fileName}</p><p className="mt-2">{facebook.periods.map(period => `${period.from} to ${period.to}`).join(' / ')}</p><p className="mt-2 text-lg font-black">Facebook account spend: {profitMoney(facebook.totalSpend)}</p><p className="mt-2">Item ads: {profitMoney(facebook.itemSpend)} · Commercial: {profitMoney(facebook.commercialSpend)} · {facebook.rows.length} ad rows</p><button type="button" aria-label="Clear current Facebook costs" className="mt-3 inline-flex items-center gap-1 text-xs font-bold underline" disabled={Boolean(busy)} onClick={() => { fbSequence.current++; metaSequence.current++; setVerifiedLeads({}); setFacebook(null); setFacebookStatus('missing'); setCalculated(false); }}><X className="h-3 w-3" />Clear current Facebook costs</button></div>}
+      {facebook && <div aria-label="Current report Facebook cost details" className="mt-4 rounded-xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-900"><p className="break-all font-bold">Source: {facebook.fileName}</p><p className="mt-2">{facebook.periods.map(period => `${period.from} to ${period.to}`).join(' / ')}</p><p className="mt-2 text-lg font-black">Facebook account spend: {profitMoney(facebook.totalSpend)}</p><p className="mt-2">Item ads: {profitMoney(facebook.itemSpend)} · Commercial: {profitMoney(facebook.commercialSpend)} · {facebook.rows.length} ad rows</p>{isSuperAdmin && <button type="button" aria-label="Clear current Facebook costs" className="mt-3 inline-flex items-center gap-1 text-xs font-bold underline" disabled={Boolean(busy)} onClick={() => { fbSequence.current++; metaSequence.current++; setVerifiedLeads({}); setFacebook(null); setFacebookStatus('missing'); setCalculated(false); }}><X className="h-3 w-3" />Clear current Facebook costs</button>}</div>}
       {facebook && !facebook.fileName.startsWith('Facebook API · ') && <div className="mt-4 rounded-xl border bg-blue-50 p-4 text-sm"><button type="button" disabled={Boolean(busy) || !ready} onClick={() => void verifyFacebook()} className="rounded-lg bg-blue-700 px-4 py-2.5 font-bold text-white disabled:opacity-40">{busy === 'facebook' ? 'Checking Facebook IDs...' : 'Verify Facebook Lead / Ad IDs'}</button><p className="mt-2 text-xs text-blue-900">CSV path එකේදී existing Facebook Page connection එකෙන් Lead ID → Ad ID verify කරනවා. Meta permissions නැත්නම් message එක පෙන්වනවා.</p></div>}
       {report.ranges.TikTok && <p className="mt-4 rounded-lg bg-gray-50 p-3 text-sm text-gray-700">TikTok ad cost from the provided invoice transactions: {TIKTOK_INVOICE_COST.invoices} invoices, {TIKTOK_INVOICE_COST.from} to {TIKTOK_INVOICE_COST.to}, total Rs. {TIKTOK_INVOICE_COST.amount.toFixed(2)}. This total is deducted once for the selected TikTok orders.</p>}
       <details className="mt-4 text-xs text-gray-500"><summary className="cursor-pointer font-bold">Payment amount settings</summary><label className="mt-3 block">Saved Fardar amount <select aria-label="Current report Fardar amount basis" value={basis} onChange={event => { setBasis(event.target.value as PaymentAmountBasis); setCalculated(false); }} className="rounded-lg border px-3 py-2"><option value="auto">Auto — reconcile saved amounts</option><option value="gross">Gross — before courier deduction</option><option value="net">Net — after courier deduction</option></select></label></details>
     </section>
-    <section className="rounded-2xl border bg-white p-5 shadow-sm"><h3 className="font-black">3. Calculate Profit by Date Range</h3><div className="mt-4 flex flex-wrap items-end gap-3"><label className="text-xs font-bold text-gray-700">From date<input aria-label="Profit report start date" type="date" value={fromDate} onChange={event => { setFromDate(event.target.value); setCalculated(false); setPage(1); }} className="mt-1 block rounded-lg border px-3 py-2 text-sm font-normal" /></label><label className="text-xs font-bold text-gray-700">To date<input aria-label="Profit report end date" type="date" value={toDate} onChange={event => { setToDate(event.target.value); setCalculated(false); setPage(1); }} className="mt-1 block rounded-lg border px-3 py-2 text-sm font-normal" /></label><button type="button" onClick={() => { setFromDate(''); setToDate(''); setCalculated(false); setPage(1); }} disabled={!fromDate && !toDate} className="rounded-lg border px-4 py-2.5 text-xs font-bold disabled:opacity-40">All dates</button><button type="button" disabled={!canCalculate} onClick={() => { setCalculated(true); setMessage(`Profit calculated for final Fardar orders (${fromDate || 'all dates'} to ${toDate || 'all dates'}). Processing orders are excluded from profit and selected Facebook cost.`); }} className="rounded-xl bg-gray-900 px-5 py-3 text-sm font-bold text-white disabled:opacity-40">Calculate Profit</button></div>{invalidDateRange && <p role="alert" className="mt-3 text-sm font-semibold text-red-700">Start date must be on or before the end date.</p>}{partialTikTokInvoiceRange && <p role="alert" className="mt-3 text-sm font-semibold text-amber-800">This range includes only part of the TikTok invoice period ({TIKTOK_INVOICE_COST.from}–{TIKTOK_INVOICE_COST.to}). Select the full invoice period to include its total cost accurately.</p>}{waybills.length > 0 && !invalidDateRange && <p className="mt-3 text-sm text-gray-500">{report.rows.length} final order(s) in this date range. {report.excludedNonFinal} Fardar processing / non-final order(s) excluded from profit and Facebook cost. The date uses the order’s system created date.</p>}{!facebook && <p className="mt-3 text-sm text-gray-500">Fetch current Facebook Ads costs automatically or choose the CSV fallback to calculate.</p>}</section>
+    <section className="rounded-2xl border bg-white p-5 shadow-sm"><h3 className="font-black">3. Calculate Profit by Date Range</h3><div className="mt-4 flex flex-wrap items-end gap-3"><label className="text-xs font-bold text-gray-700">From date<input aria-label="Profit report start date" type="date" disabled={!isSuperAdmin} value={fromDate} onChange={event => { setFromDate(event.target.value); setCalculated(false); setPage(1); }} className="mt-1 block rounded-lg border px-3 py-2 text-sm font-normal" /></label><label className="text-xs font-bold text-gray-700">To date<input aria-label="Profit report end date" type="date" disabled={!isSuperAdmin} value={toDate} onChange={event => { setToDate(event.target.value); setCalculated(false); setPage(1); }} className="mt-1 block rounded-lg border px-3 py-2 text-sm font-normal" /></label><button type="button" onClick={() => { setFromDate(''); setToDate(''); setCalculated(false); setPage(1); }} disabled={!isSuperAdmin || (!fromDate && !toDate)} className="rounded-lg border px-4 py-2.5 text-xs font-bold disabled:opacity-40">All dates</button><button type="button" disabled={!isSuperAdmin || !canCalculate} onClick={() => void calculateAndSave()} className="rounded-xl bg-gray-900 px-5 py-3 text-sm font-bold text-white disabled:opacity-40">{busy==='save'?'Saving shared set...':'Calculate Profit'}</button></div>{invalidDateRange && <p role="alert" className="mt-3 text-sm font-semibold text-red-700">Start date must be on or before the end date.</p>}{partialTikTokInvoiceRange && <p role="alert" className="mt-3 text-sm font-semibold text-amber-800">This range includes only part of the TikTok invoice period ({TIKTOK_INVOICE_COST.from}–{TIKTOK_INVOICE_COST.to}). Select the full invoice period to include its total cost accurately.</p>}{waybills.length > 0 && !invalidDateRange && <p className="mt-3 text-sm text-gray-500">{report.rows.length} final order(s) in this date range. {report.excludedNonFinal} Fardar processing / non-final order(s) excluded from profit and Facebook cost. The date uses the order’s system created date.</p>}{!facebook && <p className="mt-3 text-sm text-gray-500">Fetch current Facebook Ads costs automatically or choose the CSV fallback to calculate.</p>}</section>
     {facebook && allocation && summary.facebookMissing && <p role="alert" className="rounded-xl border border-amber-400 bg-amber-50 p-4 text-sm font-semibold text-amber-950">
       {allocation.missingOrderIds.length > 0 && <span>{allocation.missingOrderIds.length} Facebook ඇණවුම්වල වියදම තවම තහවුරු වී නැහැ. </span>}
       {allocation.issues.length > 0 && <span>{allocation.issues[0]} </span>}
