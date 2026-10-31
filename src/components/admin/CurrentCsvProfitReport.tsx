@@ -197,6 +197,18 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
     {report.totals.review>0 && waybills.length>0 && <p role="alert" className="rounded-xl border border-amber-400 bg-amber-50 p-4 text-sm font-semibold text-amber-950">
       {report.totals.review} invoice(s) still need Purchasing, Fardar delivery/return fee or payment evidence that is unavailable. Latest saved item/variant prices are applied only to uncovered Purchasing quantities; unresolved payment and courier evidence still needs correction.
     </p>}
+    {report.totals.review>0 && waybills.length>0 && <section aria-label="Waybills needing financial review" className="rounded-2xl border border-amber-300 bg-white p-5 shadow-sm">
+      <h3 className="font-black">Waybills needing review ({report.totals.review})</h3>
+      <p className="mt-1 text-sm text-gray-600">Each row shows the missing payment, Fardar or Purchasing detail. Update that record, then use Refresh System Records.</p>
+      <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[760px] text-sm">
+        <thead className="bg-amber-50 text-left"><tr><th className="px-3 py-2">Waybill / Order</th><th className="px-3 py-2">Item / Variant</th><th className="px-3 py-2">Missing detail</th></tr></thead>
+        <tbody className="divide-y">{report.rows.filter(row => row.profit === null).map(row => <tr key={row.waybill || row.orderId} className="align-top">
+          <td className="px-3 py-3 font-mono">{row.waybill || 'No waybill'}<br /><span className="font-sans text-gray-500">{row.orderNumber || 'Order not found'}</span></td>
+          <td className="px-3 py-3">{row.items.map(item => <p key={item.sku + item.name}>{item.name} · {item.sku} · Qty {item.quantity}</p>)}</td>
+          <td className="px-3 py-3 text-amber-900">{row.issues.length ? row.issues.join(' ') : 'Recorded payment or delivery evidence is incomplete.'}</td>
+        </tr>)}</tbody>
+      </table></div>
+    </section>}
     <section className="rounded-2xl border bg-white p-5 shadow-sm">
       <h3 className="font-black">1. All Payment / Return Waybills</h3><p className="mt-2 text-sm text-gray-500">Payment sets සියල්ල සහ Return Complete waybills ඇතුළත් CSV එක තෝරන්න. එකම waybill එක දෙපාරක් ගණනය වෙන්නේ නැහැ.</p>
       <button type="button" onClick={() => waybillInput.current?.click()} disabled={Boolean(busy)} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-40"><Upload className="h-4 w-4" />Upload Waybill CSV</button>
