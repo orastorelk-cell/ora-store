@@ -145,7 +145,7 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
         throw new Error('Meta lead verification was incomplete. No profit was calculated.');
       const matched: typeof verifiedLeads = {};
       for (const row of data.verified) {
-        if (typeof row.lead_id !== 'string' || typeof row.ad_id !== 'string' || !/^\d{1,64}$/.test(row.ad_id)
+        if (typeof row.lead_id !== 'string' || typeof row.ad_id !== 'string' || (row.ad_id && !/^\d{1,64}$/.test(row.ad_id))
           || ![row.adset_id, row.campaign_id].every((id: any) => typeof id === 'string' && (!id || /^\d{1,64}$/.test(id)))
           || typeof row.ad_day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(row.ad_day) || !Number.isFinite(Date.parse(row.created_at)))
           throw new Error('Meta returned an invalid Lead / Ad identity. No profit was calculated.');
@@ -156,7 +156,7 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
       const missingText = missingLeadOrders.length
         ? ` ${missingLeadOrders.length} Facebook ඇණවුම්වල මුල් සංඛ්‍යාත්මක Lead ID නැහැ${missingLeadOrders.slice(0, 5).map(order => order.order_number || order.id).join(', ') ? ` (${missingLeadOrders.slice(0, 5).map(order => order.order_number || order.id).join(', ')})` : ''}; ඒවායේ වියදම තහවුරු කළ නොහැකි නිසා අවසන් ලාභය අවහිර කර ඇත.`
         : '';
-      setMessage(`Facebook API එකෙන් ${data.verified_leads} Lead ID → Ad ID verify කරලා ${profitMoney(selectedFacebook.totalSpend)} ad spend ගත්තා. Ad ID සහ ad-account date අනුව order cost allocate කරලා.${missingText}`);
+      setMessage(`Meta Ads API එකෙන් ${profitMoney(selectedFacebook.totalSpend)} account spend ගත්තා. Saved Ad ID තිබෙන ඒවා Ad ID අනුවත්, නැති ඒවා product code සහ ad-account date අනුවත් බෙදුවා.${missingText}`);
     } catch (e: any) {
       if (sequence === metaSequence.current) { setFacebookStatus('failed'); setMessage(e.message || 'Meta Ads cost fetch අසාර්ථකයි. Meta ads_read permission සහ Ad Account ID පරීක්ෂා කරන්න.'); }
     } finally { if (sequence === metaSequence.current) setBusy(''); }
@@ -189,7 +189,7 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
       <div><h2 className="flex items-center gap-2 text-xl font-black"><BarChart3 className="h-6 w-6 text-orange-600" />Profit Report — Meta Cost Flow</h2><p className="mt-2 text-sm text-gray-500">Payment sets සියල්ලේ waybills සහ Facebook Ads account එකෙන් ගත් current cost එක භාවිතා කර ලාභය ගණනය කරන්න.</p></div>
       <div className="flex flex-wrap gap-2"><button type="button" onClick={freshReport} disabled={Boolean(busy)} className="rounded-xl border px-4 py-2.5 text-xs font-bold">Start New Report</button><button type="button" onClick={refresh} disabled={Boolean(busy)} className="inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-bold"><RefreshCw className={`h-4 w-4 ${busy === 'refresh' ? 'animate-spin' : ''}`} />Refresh System Records</button></div>
     </div>
-    <p className="rounded-xl bg-blue-50 p-4 text-sm text-blue-900">Facebook Ads account එකෙන් වියදම auto fetch කරලා Lead ID → Ad ID → order එකට allocate කරනවා. පරණ report cost මෙයට එකතු වෙන්නේ නැහැ.</p>
+    <p className="rounded-xl bg-blue-50 p-4 text-sm text-blue-900">Facebook Ads account එකෙන් වියදම auto fetch කරලා, saved Ad ID තිබේ නම් ඒ අනුවත් නැත්නම් product code සහ ad-account date අනුවත් allocate කරනවා. පරණ report cost මෙයට එකතු වෙන්නේ නැහැ.</p>
     {(!ready || error) && <p role="alert" className="rounded-xl bg-amber-50 p-4 text-sm text-amber-800">{error || 'Loading saved payment, return and Purchasing records...'}</p>}
     {resetError && <div role="alert" className="rounded-xl bg-amber-50 p-4 text-sm text-amber-800"><p>{resetError}</p>{onResetPrevious && <button type="button" onClick={() => void onResetPrevious()} className="mt-2 underline">Retry previous-report reset</button>}</div>}
     {message && <p role="status" className="break-words rounded-xl bg-orange-50 p-4 text-sm text-orange-900">{message}</p>}
