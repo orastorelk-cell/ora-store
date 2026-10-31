@@ -342,5 +342,5 @@ export const ProfitReportPanel: React.FC = () => {
   const refresh = async () => { await Promise.all([refreshOrdersFromServer(), loadInputs()]); };
   return <CurrentCsvProfitReport key={adminUser?.id} orders={orders} purchases={reportPurchases} products={products} returns={returnRecords}
     ready={sharedStoreReady && sharedOrdersReady && inputsReady} error={orderLoadError || inputsError} onRefresh={refresh}
-    resetError={resetError} onResetPrevious={canReset ? resetPrevious : undefined} />;
+    resetError={resetError} onResetPrevious={canReset ? resetPrevious : undefined} isSuperAdmin={adminUser?.role === 'admin'} />;
 };
