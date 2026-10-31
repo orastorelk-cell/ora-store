@@ -146,6 +146,15 @@ const sourceFor = (order: Order): ProfitSource => order.order_source === 'Facebo
 export const isReturnedProfitOrder = (order: Order & { return_tracking_waybill?: string }) => isReturnedCourierInvoice(order)
   || Boolean(order.return_sheet_id || order.return_tracking_waybill) || /return/i.test(order.delivery_status || '');
 
+/** Charge per-order packing only once delivery is recorded. A saved COD receipt
+ * also proves the parcel was handed to the customer. */
+export function isDeliveredProfitOrder(order: Order): boolean {
+  return order.order_status === 'Delivered'
+    || order.fardar_invoice_status === 'Delivered'
+    || String(order.delivery_status || '').trim().toLowerCase() === 'delivered'
+    || order.cod_payment_received === true;
+}
+
 /** Use the same saved payment records as COD Received and paid online orders.
  * A receipt awaiting approval or an advance alone is not a completed sale.
  */
@@ -427,7 +436,7 @@ export function buildPaidWaybillProfitReport(input: {
     const payment = receivedPayment(order, row.courier, input.paymentBasis || 'auto');
     row.received = payment.received; row.paymentNote = payment.note;
     if (payment.issue) row.issues.push(payment.issue);
-    row.packing = PROFIT_PACKING_COST;
+    row.packing = isDeliveredProfitOrder(order) ? PROFIT_PACKING_COST : 0;
     row.items = (order.items || []).map((item, index) => {
       const qty = Number(item.quantity), unit = amount(item.unit_price);
       const valid = validQuantity(qty);
@@ -472,7 +481,7 @@ export function buildPaidWaybillProfitReport(input: {
     row.sales = row.items.length && row.items.every(item => item.sales !== null) ? round(row.items.reduce((sum, item) => sum + item.sales!, 0)) : null;
     row.purchasing = row.items.length && row.items.every(item => item.purchasing !== null) ? round(row.items.reduce((sum, item) => sum + item.purchasing!, 0)) : null;
     if (!row.issues.length && row.received !== null && row.purchasing !== null && row.courier !== null)
-      row.profit = round(row.received - row.purchasing - row.courier - PROFIT_PACKING_COST);
+      row.profit = round(row.received - row.purchasing - row.courier - row.packing);
     return row;
   });
   const ranges = { Facebook: null, TikTok: null } as PaidWaybillProfitReport['ranges'];
