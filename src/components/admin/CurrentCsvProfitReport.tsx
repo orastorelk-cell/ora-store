@@ -244,7 +244,7 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
   ];
   return <div data-ora-view-allowed="true" className="space-y-5">
     <div className="flex flex-wrap items-start justify-between gap-3">
-      <div><h2 className="flex items-center gap-2 text-xl font-black"><BarChart3 className="h-6 w-6 text-orange-600" />Profit Report — Meta Cost Flow</h2><p className="mt-2 text-sm text-gray-500">Payment sets සියල්ලේ waybills සහ Facebook Ads account එකෙන් ගත් current cost එක භාවිතා කර ලාභය ගණනය කරන්න.</p></div>
+      <div><h2 className="flex items-center gap-2 text-xl font-black"><BarChart3 className="h-6 w-6 text-orange-600" />Profit Report — Meta Cost Flow</h2><p className="mt-2 text-sm text-gray-500">Date range එකට අදාළ Fardar Delivered, Return Complete, සහ Cancelled orders විතරක් ගණනය කරනවා. Fardar Processing orders වලට profit හෝ Facebook cost ගණනය වෙන්නේ නැහැ.</p></div>
       <div className="flex flex-wrap gap-2"><button type="button" onClick={freshReport} disabled={Boolean(busy)} className="rounded-xl border px-4 py-2.5 text-xs font-bold">Start New Report</button><button type="button" onClick={refresh} disabled={Boolean(busy)} className="inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-bold"><RefreshCw className={`h-4 w-4 ${busy === 'refresh' ? 'animate-spin' : ''}`} />Refresh System Records</button></div>
     </div>
     <p className="rounded-xl bg-blue-50 p-4 text-sm text-blue-900">Facebook Ads account එකෙන් වියදම auto fetch කරලා, saved Ad ID තිබේ නම් ඒ අනුවත් නැත්නම් product code සහ ad-account date අනුවත් allocate කරනවා. පරණ report cost මෙයට එකතු වෙන්නේ නැහැ.</p>
