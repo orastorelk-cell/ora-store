@@ -3,7 +3,7 @@ import { BarChart3, Download, RefreshCw, Upload, X } from 'lucide-react';
 import { facebookRequiredCostDates } from '../../lib/facebookProfitAds';
 import { staffJsonRequest } from '../../lib/staffRequest';
 import type { Order, PurchaseOrder, ReturnRecord } from '../../types';
-import { buildPaidWaybillProfitReport, parseProfitWaybillUpload, profitMoney, profitSystemDay, type PaymentAmountBasis, type ProfitCatalogProduct, aggregateProfitByItemCode } from '../../lib/paidWaybillProfit';
+import { buildPaidWaybillProfitReport, parseProfitWaybillUpload, profitMoney, profitSystemDay, type PaymentAmountBasis, type ProfitCatalogProduct, aggregateProfitByItemCode, normalizeProfitWaybill } from '../../lib/paidWaybillProfit';
 import { allocateCurrentCsvCosts, currentFacebookCsv, currentFacebookInsights, currentCsvProfitSummary, type CurrentFacebookCsv } from '../../lib/currentCsvProfit';
 
 export interface CurrentCsvProfitReportProps {
@@ -21,6 +21,7 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
   const [facebook, setFacebook] = useState<CurrentFacebookCsv | null>(null);
   const [facebookStatus, setFacebookStatus] = useState<'missing' | 'reading' | 'ready' | 'failed'>('missing');
   const [basis, setBasis] = useState<PaymentAmountBasis>('auto');
+  const [fromDate, setFromDate] = useState(''), [toDate, setToDate] = useState('');
   const [busy, setBusy] = useState(''), [message, setMessage] = useState(''), [calculated, setCalculated] = useState(false);
   const [search, setSearch] = useState(''), [page, setPage] = useState(1);
   const waybillInput = useRef<HTMLInputElement>(null), facebookInput = useRef<HTMLInputElement>(null);
@@ -39,7 +40,20 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
     });
   }, [orders, verifiedLeads]);
   const knownCodes = useMemo(() => products.flatMap(product => [product.sku, ...(product.variants || []).map(variant => variant.sku)]), [products]);
-  const report = useMemo(() => buildPaidWaybillProfitReport({ orders, purchases, products, returns, waybills, paymentBasis: basis }), [orders, purchases, products, returns, waybills, basis]);
+  const scopedWaybills = useMemo(() => {
+    if (!fromDate && !toDate) return waybills;
+    const daysByWaybill = new Map<string, string[]>();
+    orders.forEach(order => {
+      const key = normalizeProfitWaybill(order.waybill_number);
+      const day = profitSystemDay(order.created_at);
+      if (key && day) daysByWaybill.set(key, [...(daysByWaybill.get(key) || []), day]);
+    });
+    return waybills.filter(waybill => (daysByWaybill.get(normalizeProfitWaybill(waybill)) || [])
+      .some(day => (!fromDate || day >= fromDate) && (!toDate || day <= toDate)));
+  }, [waybills, orders, fromDate, toDate]);
+  const invalidDateRange = Boolean(fromDate && toDate && fromDate > toDate);
+  const report = useMemo(() => buildPaidWaybillProfitReport({ orders, purchases, products, returns, waybills: invalidDateRange ? [] : scopedWaybills, paymentBasis: basis }),
+    [orders, purchases, products, returns, scopedWaybills, basis, invalidDateRange]);
   const tiktokInvoiceApplies = Boolean(report.ranges.TikTok && report.ranges.TikTok.from <= TIKTOK_INVOICE_COST.to && report.ranges.TikTok.to >= TIKTOK_INVOICE_COST.from);
   const tiktok = tiktokInvoiceApplies ? TIKTOK_INVOICE_COST.amount.toFixed(2) : '0';
   const requiredDates = useMemo(() => facebookRequiredCostDates(costOrders, report), [costOrders, report]);
@@ -54,17 +68,17 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
   const money = (value: number | null | undefined) => value === null || value === undefined ? 'Pending' : profitMoney(value);
   // Do not publish an exact net-profit number or PDF while historic
   // purchasing cost/Fardar rows still require review.
-  const canCalculate = ready && !error && waybills.length > 0 && facebookStatus === 'ready'
+  const canCalculate = ready && !error && report.rows.length > 0 && facebookStatus === 'ready'
     && Boolean(facebook) && !summary.invalid && !summary.facebookMissing
     && !summary.tiktokMissing && !busy && report.totals.review===0;
   const freshReport = () => {
     fbSequence.current++; waybillSequence.current++; metaSequence.current++; setVerifiedLeads({});
-    setWaybills([]); setWaybillFile(''); setFacebook(null); setFacebookStatus('missing'); setBasis('auto'); setCalculated(false); setMessage(''); setSearch(''); setPage(1);
+    setWaybills([]); setWaybillFile(''); setFacebook(null); setFacebookStatus('missing'); setBasis('auto'); setFromDate(''); setToDate(''); setCalculated(false); setMessage(''); setSearch(''); setPage(1);
   };
   const uploadWaybills = async (file?: File) => {
     if (!file) return;
     const sequence = ++waybillSequence.current;
-    fbSequence.current++; metaSequence.current++; setVerifiedLeads({}); setFacebook(null); setFacebookStatus('missing'); setCalculated(false); setWaybills([]); setWaybillFile(''); setBasis('auto'); setBusy('waybills'); setMessage('');
+    fbSequence.current++; metaSequence.current++; setVerifiedLeads({}); setFacebook(null); setFacebookStatus('missing'); setCalculated(false); setWaybills([]); setWaybillFile(''); setBasis('auto'); setFromDate(''); setToDate(''); setBusy('waybills'); setMessage('');
     try {
       if (file.size > 2_000_000) throw new Error('Choose a waybill CSV smaller than 2 MB.');
       const selected = parseProfitWaybillUpload(await file.text(), orders.map(order => order.waybill_number || ''));
@@ -226,7 +240,7 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
       {report.ranges.TikTok && <p className="mt-4 rounded-lg bg-gray-50 p-3 text-sm text-gray-700">TikTok ad cost from the provided invoice transactions: {TIKTOK_INVOICE_COST.invoices} invoices, {TIKTOK_INVOICE_COST.from} to {TIKTOK_INVOICE_COST.to}, total Rs. {TIKTOK_INVOICE_COST.amount.toFixed(2)}. This total is deducted once for the selected TikTok orders.</p>}
       <details className="mt-4 text-xs text-gray-500"><summary className="cursor-pointer font-bold">Payment amount settings</summary><label className="mt-3 block">Saved Fardar amount <select aria-label="Current report Fardar amount basis" value={basis} onChange={event => { setBasis(event.target.value as PaymentAmountBasis); setCalculated(false); }} className="rounded-lg border px-3 py-2"><option value="auto">Auto — reconcile saved amounts</option><option value="gross">Gross — before courier deduction</option><option value="net">Net — after courier deduction</option></select></label></details>
     </section>
-    <section className="rounded-2xl border bg-white p-5 shadow-sm"><h3 className="font-black">3. Calculate All Selected Waybills</h3><button type="button" disabled={!canCalculate} onClick={() => { setCalculated(true); setMessage('Profit calculated from Facebook costs and the provided TikTok invoice payments. Pending Facebook lead cost is held separately.'); }} className="mt-4 rounded-xl bg-gray-900 px-5 py-3 text-sm font-bold text-white disabled:opacity-40">Calculate Profit</button>{!facebook && <p className="mt-3 text-sm text-gray-500">Fetch current Facebook Ads costs automatically or choose the CSV fallback to calculate.</p>}</section>
+    <section className="rounded-2xl border bg-white p-5 shadow-sm"><h3 className="font-black">3. Calculate Profit by Date Range</h3><div className="mt-4 flex flex-wrap items-end gap-3"><label className="text-xs font-bold text-gray-700">From date<input aria-label="Profit report start date" type="date" value={fromDate} onChange={event => { setFromDate(event.target.value); setCalculated(false); setPage(1); }} className="mt-1 block rounded-lg border px-3 py-2 text-sm font-normal" /></label><label className="text-xs font-bold text-gray-700">To date<input aria-label="Profit report end date" type="date" value={toDate} onChange={event => { setToDate(event.target.value); setCalculated(false); setPage(1); }} className="mt-1 block rounded-lg border px-3 py-2 text-sm font-normal" /></label><button type="button" onClick={() => { setFromDate(''); setToDate(''); setCalculated(false); setPage(1); }} disabled={!fromDate && !toDate} className="rounded-lg border px-4 py-2.5 text-xs font-bold disabled:opacity-40">All dates</button><button type="button" disabled={!canCalculate} onClick={() => { setCalculated(true); setMessage(`Profit calculated for ${fromDate || 'all dates'} to ${toDate || 'all dates'} from Facebook costs and TikTok invoice payments.`); }} className="rounded-xl bg-gray-900 px-5 py-3 text-sm font-bold text-white disabled:opacity-40">Calculate Profit</button></div>{invalidDateRange && <p role="alert" className="mt-3 text-sm font-semibold text-red-700">Start date must be on or before the end date.</p>}{waybills.length > 0 && !invalidDateRange && <p className="mt-3 text-sm text-gray-500">{report.rows.length} waybill(s) match this date range. The date uses the order’s system created date.</p>}{!facebook && <p className="mt-3 text-sm text-gray-500">Fetch current Facebook Ads costs automatically or choose the CSV fallback to calculate.</p>}</section>
     {facebook && allocation && summary.facebookMissing && <p role="alert" className="rounded-xl border border-amber-400 bg-amber-50 p-4 text-sm font-semibold text-amber-950">
       {allocation.missingOrderIds.length > 0 && <span>{allocation.missingOrderIds.length} Facebook ඇණවුම්වල වියදම තවම තහවුරු වී නැහැ. </span>}
       {allocation.issues.length > 0 && <span>{allocation.issues[0]} </span>}
