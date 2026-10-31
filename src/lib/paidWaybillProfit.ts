@@ -18,6 +18,7 @@ export interface PurchaseAllocation {
   quantity: number;
   unitCost: number | null;
   costBasis?: 'latest-purchase' | 'reference-shop-seen-price';
+  returnedStock?: boolean;
 }
 export interface ProfitItem {
   name: string;
@@ -47,6 +48,7 @@ export interface ProfitRow {
   /** True when uncovered quantity uses the latest saved item/variant price. */
   estimatedPurchasing?: boolean;
   referenceShopSeenPrice?: boolean;
+  reusedReturnPackaging?: boolean;
   paymentNote?: string;
   issues: string[];
   eligible: boolean;
@@ -259,7 +261,7 @@ function purchaseCosts(orders: Order[], purchases: PurchaseOrder[], returns: Ret
             let quantity = restored * Math.max(1, Number(selection.quantity_per_bundle || 1));
             for (const allocation of original.filter(allocation => allocation.sku === key)) {
               const taken = Math.min(quantity, allocation.quantity);
-              if (taken > 0) addLot(key, { ...allocation, quantity: taken });
+              if (taken > 0) addLot(key, { ...allocation, quantity: taken, returnedStock: true });
               quantity -= taken;
             }
           }
@@ -462,7 +464,7 @@ export function buildPaidWaybillProfitReport(input: {
       const allocations = historyAllocations.map(allocation => {
         const selection = required.find(selection => selection.sku === allocation.sku);
         const latest = allocation.unitCost === null && selection ? latestPrices(selection) : undefined;
-        return latest ? { ...latest, quantity: allocation.quantity } : allocation;
+        return latest ? { ...latest, quantity: allocation.quantity, ...(allocation.returnedStock ? { returnedStock: true } : {}) } : allocation;
       });
       const purchasing = valid && allocations.length && allocations.every(allocation => allocation.unitCost !== null && validQuantity(allocation.quantity))
         ? amount(round(allocations.reduce((sum, allocation) => sum + allocation.quantity * allocation.unitCost!, 0))) : null;
@@ -478,6 +480,8 @@ export function buildPaidWaybillProfitReport(input: {
       return { name: `${item.product_name}${item.variant_name ? ` - ${item.variant_name}` : ''}`, sku: item.sku, quantity: qty, unitSale: unit, sales, purchasing, allocations };
     });
     if (!row.items.length) row.issues.push('This order has no items.');
+    row.reusedReturnPackaging = isDeliveredProfitOrder(order) && row.items.some(item => item.allocations.some(allocation => allocation.returnedStock));
+    row.packing = isDeliveredProfitOrder(order) && !row.reusedReturnPackaging ? PROFIT_PACKING_COST : 0;
     row.sales = row.items.length && row.items.every(item => item.sales !== null) ? round(row.items.reduce((sum, item) => sum + item.sales!, 0)) : null;
     row.purchasing = row.items.length && row.items.every(item => item.purchasing !== null) ? round(row.items.reduce((sum, item) => sum + item.purchasing!, 0)) : null;
     if (!row.issues.length && row.received !== null && row.purchasing !== null && row.courier !== null)
