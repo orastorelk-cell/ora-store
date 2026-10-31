@@ -56,7 +56,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
       ['Facebook cost for selected returned waybills', -allocation.returnedCost],
       ['FB loss deducted (cancelled / returned / zero leads)', -allocation.lostCost],
       ['Commercial / promotion share deducted', -allocation.commercialCost],
-    ] as Array<[string, number]> : [[currentCsv ? 'Facebook paid / returned lead shares only' : 'Facebook advertising cost', advertising.facebook === null && report.ranges.Facebook ? null : -(advertising.facebook ?? 0)]] as Array<[string, number | null]>),
+    ] as Array<[string, number]> : [[currentCsv ? 'Facebook final delivered / returned / cancelled lead shares only' : 'Facebook advertising cost', advertising.facebook === null && report.ranges.Facebook ? null : -(advertising.facebook ?? 0)]] as Array<[string, number | null]>),
     ['TikTok advertising cost', advertising.tiktok === null && report.ranges.TikTok ? null : -(advertising.tiktok ?? 0)],
     ...((options.includeAccountNet && currentCsv ? [['NET AFTER FULL META ACCOUNT SPEND', currentCsvProfitSummary(report, currentCsv, options.tiktok, options.currentCsvAllocation).accountNetProfit]] : []) as Array<[string, number | null]>),
   ];
@@ -102,7 +102,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     'Available FIFO Purchasing costs are kept. Only uncovered quantities use the latest saved item/variant unit price; those portions are estimates and are marked Latest price in the order details.',
     'Sale lines show the saved selling prices. Profit uses recorded gross receipts, so order discounts, customer delivery and bank advances are accounted for.',
     'An identified net Fardar remittance is reconciled to gross receipts before subtracting the courier charge once.',
-    currentCsv ? 'Returned waybills deduct their actual Return Fee and their own FB share once. Purchasing and packing are zero. Pending lead costs are not deducted.' : 'Returned waybills deduct the actual Return Fee and their Facebook cost once. Purchasing and packing are zero. Their own FB cost is removed from the shared loss pool.',
+    currentCsv ? 'Only final Delivered, Return Complete and Cancelled orders enter this report. Processing orders and their Facebook shares are excluded. Returned waybills deduct one Return Fee.' : 'Returned waybills deduct the actual Return Fee and their Facebook cost once. Purchasing and packing are zero. Their own FB cost is removed from the shared loss pool.',
   ];
   doc.setFontSize(8);
   notes.forEach(note => { const lines = doc.splitTextToSize(note, width); if (y + lines.length * 4 > bottom) { doc.addPage(); title('Report notes'); y = 35; } doc.text(lines, left, y); y += lines.length * 4 + 1; });
@@ -116,7 +116,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
       'Only the current Facebook cost source is used. Previous reports and browser cost values are never loaded.',
       'Facebook cost is deducted only for final delivered / returned / cancelled orders. Fardar processing orders are excluded and their cost share remains reserved.',
       `Order shares: ${money(options.currentCsvAllocation?.assignedSpend || 0)} | All other spend held separately: ${money(options.currentCsvAllocation?.unassignedSpend || 0)}`,
-      `Pending: ${money(options.currentCsvAllocation?.pendingSpend || 0)} | Other orders: ${money(options.currentCsvAllocation?.otherSpend || 0)} | Unmatched: ${money(options.currentCsvAllocation?.unmatchedSpend || 0)}`,
+      `Fardar processing / non-final: ${money(options.currentCsvAllocation?.pendingSpend || 0)} | Other orders: ${money(options.currentCsvAllocation?.otherSpend || 0)} | Unmatched: ${money(options.currentCsvAllocation?.unmatchedSpend || 0)}`,
       options.currentCsvAllocation?.missingOrderIds.length ? `${options.currentCsvAllocation.missingOrderIds.length} selected Facebook orders have unresolved cost matches. Their costs are NOT assumed to be zero; profit is provisional.` : 'All selected Facebook waybills matched. Pending cost remains separate.',
       'Acquisition cost is an average across ALL unique leads in each original lead-date / ad-ID or form-code cohort. Commercial uses the same lead pool.',
     ];
