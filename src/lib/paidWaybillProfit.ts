@@ -403,8 +403,8 @@ export function buildPaidWaybillProfitReport(input: {
     if (key) byWaybill.set(key, [...(byWaybill.get(key) || []), order]);
   });
   const entries: Array<{ waybill: string; savedOrder?: Order }> = input.waybills !== undefined
-    ? waybills.map(waybill => ({ waybill }))
-    : selectSavedPaidProfitOrders(input.orders, input.selection).map(savedOrder => ({ waybill: normalizeProfitWaybill(savedOrder.waybill_number), savedOrder }));
+    ? waybills.filter(waybill => !(byWaybill.get(waybill) || []).some(order => order.order_number === 'MAN-000001')).map(waybill => ({ waybill }))
+    : selectSavedPaidProfitOrders(input.orders, input.selection).filter(order => order.order_number !== 'MAN-000001').map(savedOrder => ({ waybill: normalizeProfitWaybill(savedOrder.waybill_number), savedOrder }));
   const rows: ProfitRow[] = entries.map(({ waybill, savedOrder }) => {
     const matches = savedOrder ? [savedOrder] : byWaybill.get(waybill) || [];
     const row: ProfitRow = { waybill, outcome: 'sale', items: [], sales: null, received: null, purchasing: null, courier: null, returnFee: 0, packing: null, profit: null, issues: [], eligible: false };
@@ -499,6 +499,46 @@ export function buildPaidWaybillProfitReport(input: {
     returnFees: round(ready.reduce((sum, row) => sum + (row.returnFee || 0), 0)),
     packing: round(ready.reduce((sum, row) => sum + row.packing!, 0)), beforeAds: round(ready.reduce((sum, row) => sum + row.profit!, 0)) };
   return { rows, duplicates: normalized.length - waybills.length, ranges, totals };
+}
+
+/** Aggregate realized costs and profit by item code. Order-level receipt, courier, packing and advertising amounts are allocated to lines by their saved item sales value; returns allocate only the recorded return fee. */
+export interface ProfitByItemCodeRow {
+  sku: string; quantity: number; received: number; purchasing: number; delivery: number; returnFee: number; packing: number; advertising: number; profit: number;
+}
+export function aggregateProfitByItemCode(report: PaidWaybillProfitReport, orderAdvertisingCosts: ReadonlyMap<string, number>, tiktokTotal: number): ProfitByItemCodeRow[] {
+  const ready = report.rows.filter(row => row.profit !== null && row.items.length);
+  const map = new Map<string, ProfitByItemCodeRow>();
+  const weightsFor = (row: ProfitRow) => row.items.map(item => Math.max(0, item.sales || 0, Number(item.unitSale || 0) * Number(item.quantity || 0)));
+  const rowWeight = (row: ProfitRow) => weightsFor(row).reduce((sum, value) => sum + value, 0) || row.items.reduce((sum, item) => sum + Math.max(1, Number(item.quantity) || 1), 0);
+  const add = (sku: string, quantity: number, received: number, purchasing: number, delivery: number, returnFee: number, packing: number, advertising: number) => {
+    const key = sku.trim() || 'UNCODED';
+    const value = map.get(key) || { sku: key, quantity: 0, received: 0, purchasing: 0, delivery: 0, returnFee: 0, packing: 0, advertising: 0, profit: 0 };
+    value.quantity += quantity; value.received += received; value.purchasing += purchasing; value.delivery += delivery;
+    value.returnFee += returnFee; value.packing += packing; value.advertising += advertising;
+    map.set(key, value);
+  };
+  const tiktokOrders = ready.filter(row => row.source === 'TikTok' && row.orderId);
+  const tiktokPerOrder = tiktokOrders.length ? tiktokTotal / tiktokOrders.length : 0;
+  for (const row of ready) {
+    const weights = weightsFor(row); const total = weights.reduce((sum, value) => sum + value, 0);
+    const effective = total > 0 ? weights : row.items.map(item => Math.max(1, Number(item.quantity) || 1));
+    const basis = effective.reduce((sum, value) => sum + value, 0) || 1;
+    const orderAds = row.source === 'Facebook' && row.orderId ? orderAdvertisingCosts.get(row.orderId) || 0 : row.source === 'TikTok' ? tiktokPerOrder : 0;
+    row.items.forEach((item, index) => {
+      const share = effective[index] / basis;
+      const received = row.outcome === 'returned' ? 0 : (row.received || 0) * share;
+      const purchasing = row.outcome === 'returned' ? 0 : item.purchasing || 0;
+      const delivery = row.outcome === 'returned' ? 0 : (row.courier || 0) * share;
+      const returnFee = row.outcome === 'returned' ? (row.returnFee || 0) * share : 0;
+      const packing = row.outcome === 'returned' ? 0 : (row.packing || 0) * share;
+      const advertising = orderAds * share;
+      add(item.sku, item.quantity || 0, received, purchasing, delivery, returnFee, packing, advertising);
+    });
+  }
+  return [...map.values()].map(row => {
+    row.profit = Math.round((row.received - row.purchasing - row.delivery - row.returnFee - row.packing - row.advertising + Number.EPSILON) * 100) / 100;
+    return Object.fromEntries(Object.entries(row).map(([key, value]) => [key, typeof value === 'number' ? Math.round((value + Number.EPSILON) * 100) / 100 : value])) as ProfitByItemCodeRow;
+  }).sort((a, b) => a.sku.localeCompare(b.sku));
 }
 
 /** A fixed order-date period keeps the same advertising budget when late payments arrive.
