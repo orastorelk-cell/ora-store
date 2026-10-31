@@ -14,7 +14,7 @@ export interface ProfitPdfOptions {
   facebookReportingPeriods?: Array<{ from: string; to: string }>;
   currentFacebookCsv?: CurrentFacebookCsv;
   currentCsvAllocation?: CurrentCsvAllocation;
-  itemCodeBreakdown?: Array<{ sku: string; quantity: number; deliveredUnits: number; returnedUnits: number; deliveredOrders: number; returnOrders: number; unitBuyingPrice: number; deliveryRate: number; returnRate: number; received: number; purchasing: number; delivery: number; returnFee: number; packing: number; advertising: number; profit: number }>;
+  itemCodeBreakdown?: Array<{ sku: string; name: string; quantity: number; deliveredUnits: number; returnedUnits: number; deliveredOrders: number; returnOrders: number; unitBuyingPrice: number; deliveryRate: number; returnRate: number; received: number; purchasing: number; delivery: number; returnFee: number; packing: number; advertising: number; profit: number }>;
   includeAccountNet?: boolean;
 }
 
@@ -208,15 +208,15 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
 
   if (options.itemCodeBreakdown?.length) {
     doc.addPage();
-    title('Profit by item code | order-level costs allocated by item sales value');
+    title('Profit by item code and name | order-level costs allocated by item sales value');
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
     doc.text('Received, delivery, packing and advertising are allocated across item codes by saved item sales value. TikTok invoice cost is divided evenly by included TikTok order, then by item sales value.', left, 35);
     const itemColumns = [
-      { label: 'ITEM CODE', width: 26 }, { label: 'QTY', width: 10 }, { label: 'BUY / UNIT', width: 20 },
-      { label: 'DELIVERED', width: 15 }, { label: 'RETURNS', width: 15 }, { label: 'DELIVERY %', width: 17 },
-      { label: 'RETURN %', width: 15 }, { label: 'RECEIVED', width: 25 }, { label: 'PURCHASING', width: 25 },
-      { label: 'DELIVERY', width: 20 }, { label: 'RETURN FEE', width: 19 }, { label: 'PACKING', width: 17 },
-      { label: 'ADS', width: 18 }, { label: 'NET PROFIT', width: 25 },
+      { label: 'CODE / ITEM NAME', width: 53 }, { label: 'QTY', width: 8 }, { label: 'BUY / UNIT', width: 18 },
+      { label: 'DELIVERED', width: 13 }, { label: 'RETURNS', width: 13 }, { label: 'DELIVERY %', width: 15 },
+      { label: 'RETURN %', width: 13 }, { label: 'RECEIVED', width: 22 }, { label: 'PURCHASING', width: 23 },
+      { label: 'DELIVERY', width: 18 }, { label: 'RETURN FEE', width: 17 }, { label: 'PACKING', width: 14 },
+      { label: 'ADS', width: 15 }, { label: 'NET PROFIT', width: 21 },
     ];
     const itemHeader = () => {
       doc.setFont('helvetica', 'bold'); doc.setFontSize(6.5); doc.setFillColor(243, 244, 246); doc.rect(left, 43, width, 9, 'F');
@@ -225,16 +225,16 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     itemHeader(); let itemY = 57;
     options.itemCodeBreakdown.forEach((item, index) => {
       if (itemY > bottom - 5) { doc.addPage(); title('Profit by item code | continued'); itemHeader(); itemY = 57; }
-      const vals = [item.sku, String(item.quantity), item.deliveredUnits ? money(item.unitBuyingPrice) : '—', String(item.deliveredOrders), String(item.returnOrders),
+      const vals = [`${item.sku} — ${item.name}`, String(item.quantity), item.deliveredUnits ? money(item.unitBuyingPrice) : '—', String(item.deliveredOrders), String(item.returnOrders),
         `${item.deliveryRate.toFixed(1)}%`, `${item.returnRate.toFixed(1)}%`, money(item.received), money(item.purchasing), money(item.delivery),
         money(item.returnFee), money(item.packing), money(item.advertising), money(item.profit)];
-      let x = left; const rowHeight = 7;
+      let x = left; const rowHeight = 9;
       if (index % 2 === 0) { doc.setFillColor(249, 250, 251); doc.rect(left, itemY - 4, width, rowHeight, 'F'); }
       vals.forEach((value, columnIndex) => {
         const column = itemColumns[columnIndex]; const profitColumn = columnIndex === vals.length - 1;
         doc.setFont('helvetica', columnIndex === 0 || profitColumn ? 'bold' : 'normal');
         doc.setFontSize(6.5); const textColor: [number, number, number] = profitColumn ? (item.profit >= 0 ? [6, 95, 70] : [185, 28, 28]) : [31, 41, 55]; doc.setTextColor(...textColor);
-        doc.text(doc.splitTextToSize(text(value), column.width - 2).slice(0, 1), columnIndex < 2 ? x + 1 : x + column.width - 1, itemY, { align: columnIndex < 2 ? 'left' : 'right' }); x += column.width;
+        doc.text(doc.splitTextToSize(text(value), column.width - 2).slice(0, columnIndex === 0 ? 2 : 1), columnIndex === 0 ? x + 1 : x + column.width - 1, itemY, { align: columnIndex === 0 ? 'left' : 'right' }); x += column.width;
       });
       itemY += rowHeight;
     });
