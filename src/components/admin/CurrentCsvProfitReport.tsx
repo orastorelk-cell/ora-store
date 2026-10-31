@@ -48,8 +48,8 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
         setFacebook(saved.facebook as CurrentFacebookCsv);
         setFacebookStatus('ready');
         setBasis(['auto', 'gross', 'net'].includes(saved.paymentBasis) ? saved.paymentBasis : 'auto');
-        setFromDate(/^\\d{4}-\\d{2}-\\d{2}$/.test(saved.fromDate || '') ? saved.fromDate : '');
-        setToDate(/^\\d{4}-\\d{2}-\\d{2}$/.test(saved.toDate || '') ? saved.toDate : '');
+        setFromDate(/^\d{4}-\d{2}-\d{2}$/.test(saved.fromDate || '') ? saved.fromDate : '');
+        setToDate(/^\d{4}-\d{2}-\d{2}$/.test(saved.toDate || '') ? saved.toDate : '');
         setVerifiedLeads(saved.verifiedLeads && typeof saved.verifiedLeads === 'object' ? saved.verifiedLeads : {});
         setCalculated(true);
         setHasSavedSet(true);
