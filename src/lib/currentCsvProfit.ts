@@ -102,7 +102,7 @@ export function allocateCurrentCsvCosts(input: CurrentFacebookCsv, orders: Order
       const original = note(order, 'Form');
       if (original) code = facebookAdCode(original, known);
       else {
-        const codes = new Set((order.items || []).map(item => facebookAdCode(item.main_sku || item.sku || '', known)).filter(Boolean));
+        const codes = new Set((order.items || []).map(item => facebookAdCode(item.sku || item.main_sku || '', known)).filter(Boolean));
         if (codes.size === 1) code = [...codes][0]!;
       }
     } catch { /* Ambiguous identity remains unresolved; it is never charged at zero. */ }
