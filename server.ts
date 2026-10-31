@@ -1781,7 +1781,7 @@ app.get('/api/exchange-invoices/:id/refund-slip',requireStaffPermission('exchang
     const slipPath=String(exchange?.refund_slip_path||'');
     if(!exchange||!slipPath)return res.status(404).json({error:'Refund slip was not found.'});
     const safeId=exchangeId.replace(/[^a-z0-9._-]/gi,'_');
-    if(!slipPath.startsWith(`exchange-refund/${safeId}/'))return res.status(404).json({error:'Refund slip was not found.'});
+    if(!slipPath.startsWith(`exchange-refund/${safeId}/`))return res.status(404).json({error:'Refund slip was not found.'});
     const sb=getSupabaseAdmin();
     if(!sb)return res.status(503).json({error:'Refund slip storage is unavailable.'});
     const {data,error}=await sb.storage.from('ora-refund-proofs').download(slipPath);
