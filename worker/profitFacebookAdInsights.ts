@@ -35,8 +35,8 @@ export async function profitFacebookAdInsights(request: Request, env: Record<str
 
   const orders = await readOrders();
   const selected = body.order_ids.map((id: string) => orders.find(order => order.id === id));
-  if (selected.some((order: Order | undefined) => !order || order.order_source !== 'Facebook Ads' || !metaId(String(order.platform_lead_id || ''))))
-    return json({ error: 'Each selected order must be a saved Facebook order with its original numeric Lead ID.' }, 400);
+  if (selected.some((order: Order | undefined) => !order || !(order.order_source === 'Facebook Ads' || /^FB-/i.test(order.order_number || ''))))
+    return json({ error: 'Each selected order must be a saved Facebook order.' }, 400);
 
   const graph = async (path: string, params: Record<string, string>, accessToken = adsToken) => {
     const url = new URL(`https://graph.facebook.com/${version}${path ? `/${path}` : ''}`);
@@ -132,7 +132,7 @@ export async function profitFacebookAdInsights(request: Request, env: Record<str
     const itemSpend = Math.round(rows.filter(row => row.code).reduce((sum, row) => sum + Math.round(row.spend * 100), 0)) / 100;
     const commercialSpend = Math.round((totalSpend - itemSpend) * 100) / 100;
     return json({ ok: true, account_id: rawAccountId, currency: account.currency, timezone: account.timezone_name, since, until,
-      verified: verified.map(row => ({ order_id: row.order.id, lead_id: row.order.platform_lead_id,
+      verified: verified.map(row => ({ order_id: row.order.id, lead_id: String(row.order.platform_lead_id || ''),
         created_at: row.createdAt, ad_id: row.adId, adset_id: row.adsetId, campaign_id: row.campaignId, ad_day: row.day })),
       fileName: `Facebook API · ${rawAccountId} · ${since} to ${until}`,
       rows, periods: [...new Map(rows.map(row => [`${row.from}|${row.to}`, { from: row.from, to: row.to }])).values()],
