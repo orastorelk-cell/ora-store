@@ -12,12 +12,15 @@ export interface CurrentCsvProfitReportProps {
   resetError?: string; onResetPrevious?: () => Promise<void>;
 }
 
+// Complete TikTok invoice transaction export supplied for this paid-order set.
+const TIKTOK_INVOICE_COST = { from: '2026-09-07', to: '2026-09-29', amount: 3451.37, invoices: 3 };
+
 /** Every visit starts with no Facebook cost. Inputs never enter localStorage. */
 export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ orders, purchases, products, returns, ready, error, onRefresh, resetError, onResetPrevious }) => {
   const [waybills, setWaybills] = useState<string[]>([]), [waybillFile, setWaybillFile] = useState('');
   const [facebook, setFacebook] = useState<CurrentFacebookCsv | null>(null);
   const [facebookStatus, setFacebookStatus] = useState<'missing' | 'reading' | 'ready' | 'failed'>('missing');
-  const [tiktok, setTiktok] = useState(''), [basis, setBasis] = useState<PaymentAmountBasis>('auto');
+  const [basis, setBasis] = useState<PaymentAmountBasis>('auto');
   const [busy, setBusy] = useState(''), [message, setMessage] = useState(''), [calculated, setCalculated] = useState(false);
   const [search, setSearch] = useState(''), [page, setPage] = useState(1);
   const waybillInput = useRef<HTMLInputElement>(null), facebookInput = useRef<HTMLInputElement>(null);
@@ -37,6 +40,8 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
   }, [orders, verifiedLeads]);
   const knownCodes = useMemo(() => products.flatMap(product => [product.sku, ...(product.variants || []).map(variant => variant.sku)]), [products]);
   const report = useMemo(() => buildPaidWaybillProfitReport({ orders, purchases, products, returns, waybills, paymentBasis: basis }), [orders, purchases, products, returns, waybills, basis]);
+  const tiktokInvoiceApplies = Boolean(report.ranges.TikTok && report.ranges.TikTok.from <= TIKTOK_INVOICE_COST.to && report.ranges.TikTok.to >= TIKTOK_INVOICE_COST.from);
+  const tiktok = tiktokInvoiceApplies ? TIKTOK_INVOICE_COST.amount.toFixed(2) : '0';
   const requiredDates = useMemo(() => facebookRequiredCostDates(costOrders, report), [costOrders, report]);
   const allocation = useMemo(() => facebook ? allocateCurrentCsvCosts(facebook, costOrders, report) : null, [facebook, costOrders, report]);
   const summary = useMemo(() => currentCsvProfitSummary(report, facebook, tiktok, allocation), [report, facebook, tiktok, allocation]);
@@ -55,7 +60,7 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
     && !summary.tiktokMissing && !busy && report.totals.review===0;
   const freshReport = () => {
     fbSequence.current++; waybillSequence.current++; metaSequence.current++; setVerifiedLeads({});
-    setWaybills([]); setWaybillFile(''); setFacebook(null); setFacebookStatus('missing'); setTiktok(''); setBasis('auto'); setCalculated(false); setMessage(''); setSearch(''); setPage(1);
+    setWaybills([]); setWaybillFile(''); setFacebook(null); setFacebookStatus('missing'); setBasis('auto'); setCalculated(false); setMessage(''); setSearch(''); setPage(1);
   };
   const uploadWaybills = async (file?: File) => {
     if (!file) return;
@@ -164,7 +169,7 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
     setBusy('pdf');
     try {
       const { createPaidWaybillProfitPdf } = await import('../../lib/paidWaybillProfitPdf');
-      const doc = createPaidWaybillProfitPdf(report, { facebook: String(facebook.totalSpend), tiktok, sourceName: `All payment batches | Waybills: ${waybillFile} | Facebook source: ${facebook.fileName}`,
+      const doc = createPaidWaybillProfitPdf(report, { facebook: String(facebook.totalSpend), tiktok, sourceName: `All payment batches | Waybills: ${waybillFile} | Facebook source: ${facebook.fileName} | TikTok invoice dates: ${TIKTOK_INVOICE_COST.from} to ${TIKTOK_INVOICE_COST.to}`,
         paymentBasis: basis, facebookReportingPeriods: facebook.periods, currentFacebookCsv: facebook, currentCsvAllocation: allocation! });
       doc.save(`O-RA_Current_CSV_Profit_${profitSystemDay(new Date().toISOString())}.pdf`);
     } catch (e: any) { setMessage(e.message || 'PDF could not be created.'); }
@@ -203,13 +208,10 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
       {facebookStatus === 'reading' && <p role="status" className="mt-4 text-sm text-orange-800">Reading Facebook cost data. Previous report cost is cleared.</p>}
       {facebook && <div aria-label="Current report Facebook cost details" className="mt-4 rounded-xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-900"><p className="break-all font-bold">Source: {facebook.fileName}</p><p className="mt-2">{facebook.periods.map(period => `${period.from} to ${period.to}`).join(' / ')}</p><p className="mt-2 text-lg font-black">Facebook account spend: {profitMoney(facebook.totalSpend)}</p><p className="mt-2">Item ads: {profitMoney(facebook.itemSpend)} · Commercial: {profitMoney(facebook.commercialSpend)} · {facebook.rows.length} ad rows</p><button type="button" aria-label="Clear current Facebook costs" className="mt-3 inline-flex items-center gap-1 text-xs font-bold underline" disabled={Boolean(busy)} onClick={() => { fbSequence.current++; metaSequence.current++; setVerifiedLeads({}); setFacebook(null); setFacebookStatus('missing'); setCalculated(false); }}><X className="h-3 w-3" />Clear current Facebook costs</button></div>}
       {facebook && !facebook.fileName.startsWith('Facebook API · ') && <div className="mt-4 rounded-xl border bg-blue-50 p-4 text-sm"><button type="button" disabled={Boolean(busy) || !ready} onClick={() => void verifyFacebook()} className="rounded-lg bg-blue-700 px-4 py-2.5 font-bold text-white disabled:opacity-40">{busy === 'facebook' ? 'Checking Facebook IDs...' : 'Verify Facebook Lead / Ad IDs'}</button><p className="mt-2 text-xs text-blue-900">CSV path එකේදී existing Facebook Page connection එකෙන් Lead ID → Ad ID verify කරනවා. Meta permissions නැත්නම් message එක පෙන්වනවා.</p></div>}
-      <label className="mt-4 block text-sm font-bold">TikTok Cost for this report (Rs.)<input aria-label="Current report TikTok cost" type="number" min="0" step="0.01" value={tiktok} onChange={event => { setTiktok(event.target.value); setCalculated(false); }} placeholder="Enter cost, or 0 if none" className="mt-2 block w-full max-w-sm rounded-lg border px-3 py-2.5 font-normal" /></label>
+      {report.ranges.TikTok && <p className="mt-4 rounded-lg bg-gray-50 p-3 text-sm text-gray-700">TikTok ad cost from the provided invoice transactions: {TIKTOK_INVOICE_COST.invoices} invoices, {TIKTOK_INVOICE_COST.from} to {TIKTOK_INVOICE_COST.to}, total Rs. {TIKTOK_INVOICE_COST.amount.toFixed(2)}. This total is deducted once for the selected TikTok orders.</p>}
       <details className="mt-4 text-xs text-gray-500"><summary className="cursor-pointer font-bold">Payment amount settings</summary><label className="mt-3 block">Saved Fardar amount <select aria-label="Current report Fardar amount basis" value={basis} onChange={event => { setBasis(event.target.value as PaymentAmountBasis); setCalculated(false); }} className="rounded-lg border px-3 py-2"><option value="auto">Auto — reconcile saved amounts</option><option value="gross">Gross — before courier deduction</option><option value="net">Net — after courier deduction</option></select></label></details>
     </section>
-    <section className="rounded-2xl border bg-white p-5 shadow-sm"><h3 className="font-black">3. Calculate All Selected Waybills</h3><button type="button" disabled={!canCalculate} onClick={() => { setCalculated(true); setMessage('Profit calculated from current Facebook data and the TikTok cost entered for this report. Pending Facebook lead cost is held separately.'); }} className="mt-4 rounded-xl bg-gray-900 px-5 py-3 text-sm font-bold text-white disabled:opacity-40">Calculate Profit</button>{!facebook && <p className="mt-3 text-sm text-gray-500">Fetch current Facebook Ads costs automatically or choose the CSV fallback to calculate.</p>}</section>
-    {summary.tiktokMissing && <p role="alert" className="rounded-xl border border-amber-400 bg-amber-50 p-4 text-sm font-semibold text-amber-950">
-      තෝරාගත් waybill අතර ගෙවීම් ලැබුණු TikTok ඇණවුම් {report.ranges.TikTok?.count || 0}ක් තියෙනවා. TikTok දැන්වීම් වියදම ඇතුළත් කරන්න; වියදමක් නොතිබුණා නම් 0 දාන්න. ඒ තුරු අවසන් ලාභය සහ PDF සකස් කරන්න බැහැ.
-    </p>}
+    <section className="rounded-2xl border bg-white p-5 shadow-sm"><h3 className="font-black">3. Calculate All Selected Waybills</h3><button type="button" disabled={!canCalculate} onClick={() => { setCalculated(true); setMessage('Profit calculated from Facebook costs and the provided TikTok invoice payments. Pending Facebook lead cost is held separately.'); }} className="mt-4 rounded-xl bg-gray-900 px-5 py-3 text-sm font-bold text-white disabled:opacity-40">Calculate Profit</button>{!facebook && <p className="mt-3 text-sm text-gray-500">Fetch current Facebook Ads costs automatically or choose the CSV fallback to calculate.</p>}</section>
     {facebook && allocation && (summary.facebookMissing || missingFacebookLeads.length > 0) && <p role="alert" className="rounded-xl border border-amber-400 bg-amber-50 p-4 text-sm font-semibold text-amber-950">
       {missingFacebookLeads.length > 0 && <span>{missingFacebookLeads.length} Facebook ඇණවුම්වල මුල් සංඛ්‍යාත්මක Lead ID නැහැ. </span>}
       {allocation.missingOrderIds.length > 0 && <span>{allocation.missingOrderIds.length} Facebook ඇණවුම්වල වියදම තවම තහවුරු වී නැහැ. </span>}
