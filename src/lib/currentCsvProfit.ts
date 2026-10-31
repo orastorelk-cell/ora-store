@@ -189,5 +189,6 @@ export function currentCsvProfitSummary(report: PaidWaybillProfitReport, input: 
   const facebookMissing = Boolean(allocation && (allocation.missingOrderIds.length || allocation.issues.length));
   return { facebook, tiktok: invalid ? null : parsed, total: (cents(facebook ?? 0) + cents(invalid ? 0 : parsed ?? 0)) / 100,
     afterFacebook, recordedCostProfit: knownProfit, netProfit: tiktokMissing || facebookMissing ? null : knownProfit, invalid, tiktokMissing, facebookMissing,
+    accountNetProfit: ready && input && !tiktokMissing ? (cents(report.totals.beforeAds) - cents(input.totalSpend) - cents(parsed ?? 0)) / 100 : null,
     missing: [...(tiktokMissing ? ['TikTok'] : []), ...(facebookMissing ? ['Facebook cost matches'] : [])] };
 }
