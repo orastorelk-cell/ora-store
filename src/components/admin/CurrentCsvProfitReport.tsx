@@ -33,7 +33,7 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
     if (!Object.keys(verifiedLeads).length) return orders;
     return orders.map(order => {
     const verified = verifiedLeads[order.id];
-    return verified?.lead_id === order.platform_lead_id ? { ...order, platform_lead_created_at: verified.created_at,
+    return verified && verified.lead_id && verified.lead_id === order.platform_lead_id ? { ...order, platform_lead_created_at: verified.created_at,
       platform_ad_id: verified.ad_id, platform_adset_id: verified.adset_id, platform_campaign_id: verified.campaign_id,
       platform_ad_account_day: verified.ad_day } : order;
     });
