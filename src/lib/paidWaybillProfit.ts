@@ -136,8 +136,7 @@ export function parseProfitWaybillUpload(text: string, knownWaybills: string[] =
 }
 
 const inventoryKey = (selection: { sku?: string; product_id: string; variant_id?: string }) =>
-  selection.variant_id ? `${selection.product_id}::${selection.variant_id}`
-    : skuKey(selection.sku) || `${selection.product_id}::base`;
+  skuKey(selection.sku) || `${selection.product_id}::${selection.variant_id || 'base'}`;
 const validQuantity = (value: unknown) => Number.isInteger(Number(value)) && Number(value) > 0;
 const excluded = (order: Order) => Boolean(order.is_test_order || order.is_duplicate_order);
 const sourceFor = (order: Order): ProfitSource => order.order_source === 'Facebook Ads' ? 'Facebook'
