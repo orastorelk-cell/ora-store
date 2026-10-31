@@ -45,7 +45,7 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
   const requiredDates = useMemo(() => facebookRequiredCostDates(costOrders, report), [costOrders, report]);
   const allocation = useMemo(() => facebook ? allocateCurrentCsvCosts(facebook, costOrders, report) : null, [facebook, costOrders, report]);
   const summary = useMemo(() => currentCsvProfitSummary(report, facebook, tiktok, allocation), [report, facebook, tiktok, allocation]);
-  const itemCodeSummary = useMemo(() => aggregateProfitByItemCode(report, allocation?.orderCosts ? new Map([...allocation.orderCosts].map(([id, cost]) => [id, cost.total])) : new Map(), Number(summary.tiktok || 0)), [report, allocation, summary.tiktok]);
+  const itemCodeSummary = useMemo(() => aggregateProfitByItemCode(report, allocation?.orderCosts ? new Map<string, number>(Array.from(allocation.orderCosts, ([id, cost]) => [id, cost.total] as [string, number])) : new Map<string, number>(), Number(summary.tiktok || 0)), [report, allocation, summary.tiktok]);
   const estimatedPurchasingRows = report.rows.filter(row => row.estimatedPurchasing).length;
   const referenceSeenPriceRows = report.rows.filter(row => row.referenceShopSeenPrice).length;
   const filtered = report.rows.filter(row => !search.trim() || [row.waybill, row.orderNumber, ...row.items.map(item => item.sku + ' ' + item.name)].join(' ').toLowerCase().includes(search.trim().toLowerCase()));
