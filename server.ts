@@ -1808,7 +1808,7 @@ app.post('/api/exchange-invoices/:id/refund-complete',requireStaffPermission('ex
     if(exchange.status!=='Pending Refund')return res.status(409).json({error:'This refund is already complete.'});
 
     const dataUrl=String(req.body?.slipDataUrl||'');
-    const match=dataUrl.match(/^data:(image\\/(?:jpeg|png|webp)|application\\/pdf);base64,([A-Za-z0-9+/=]+)$/i);
+    const match=dataUrl.match(/^data:(image\/(?:jpeg|png|webp)|application\/pdf);base64,([A-Za-z0-9+/=]+)$/i);
     if(!match)return res.status(400).json({error:'Upload a JPG, PNG, WEBP image or PDF payment slip before completing this refund.'});
     const contentType=String(match[1]).toLowerCase();
     const buffer=Buffer.from(match[2],'base64');
