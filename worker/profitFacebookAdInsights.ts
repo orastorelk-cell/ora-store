@@ -27,12 +27,11 @@ export async function profitFacebookAdInsights(request: Request, env: Record<str
     || !Array.isArray(body?.known_codes) || body.known_codes.length > 2000
     || !body.known_codes.every((code: unknown) => typeof code === 'string' && code.length <= 120))
     return json({ error: 'Choose 1 to 500 unique Facebook order IDs and a valid catalog-code list.' }, 400);
-  const pageToken = String(env.META_PAGE_ACCESS_TOKEN || '');
   const adsToken = String(env.META_ADS_ACCESS_TOKEN || env.META_PAGE_ACCESS_TOKEN || '');
   const version = String(env.META_GRAPH_API_VERSION || '');
   const rawAccountId = String(env.META_AD_ACCOUNT_ID || '').replace(/^act_/i, '');
-  if (!pageToken || !adsToken || !/^v\d+\.\d+$/.test(version) || !metaId(rawAccountId))
-    return json({ error: 'Facebook Ads auto-fetch needs META_AD_ACCOUNT_ID, the existing Page token, and a Meta Ads token with ads_read permission.' }, 503);
+  if (!adsToken || !/^v\d+\.\d+$/.test(version) || !metaId(rawAccountId))
+    return json({ error: 'Facebook Ads auto-fetch needs META_AD_ACCOUNT_ID and a Meta Ads token with ads_read permission.' }, 503);
 
   const orders = await readOrders();
   const selected = body.order_ids.map((id: string) => orders.find(order => order.id === id));
@@ -56,10 +55,28 @@ export async function profitFacebookAdInsights(request: Request, env: Record<str
     if (String(account.account_id || '') !== rawAccountId || !account.timezone_name || account.currency !== 'LKR')
       return json({ error: `Connected Meta ad account must be the intended LKR account. Meta returned currency ${String(account.currency || 'unknown')}.` }, 409);
 
-    // Resolve each exact Lead ID to its original Ad ID and lead time.
-    const verified: Array<{ order: Order; adId: string; adsetId: string; campaignId: string; createdAt: string; day: string }> = [];
-    for (let start = 0; start < selected.length; start += 20) {
-      const batch = selected.slice(start, start + 20) as Order[];
+    // New Facebook orders already save their original Ad ID with the lead.
+    // Use that first: ads_read can read spend, while querying lead records also
+    // needs Page lead access and caused #100 for otherwise valid ad accounts.
+    const verifiedByOrder = new Map<string, { order: Order; adId: string; adsetId: string; campaignId: string; createdAt: string; day: string }>();
+    const unresolved: Order[] = [];
+    for (const order of selected as Order[]) {
+      const savedAdId = String(order.platform_ad_id || '').trim();
+      const createdAt = String(order.platform_lead_created_at || order.created_at || '');
+      if (metaId(savedAdId) && Number.isFinite(Date.parse(createdAt))) {
+        verifiedByOrder.set(order.id, {
+          order, adId: savedAdId,
+          adsetId: metaId(String(order.platform_adset_id || '')) ? String(order.platform_adset_id) : '',
+          campaignId: metaId(String(order.platform_campaign_id || '')) ? String(order.platform_campaign_id) : '',
+          createdAt, day: accountDay(createdAt, account.timezone_name),
+        });
+      } else unresolved.push(order);
+    }
+    if (unresolved.length && !String(env.META_PAGE_ACCESS_TOKEN || ''))
+      return json({ error: `${unresolved.length} selected Facebook order(s) have no saved Ad ID. Connect a Page token with lead access, or restore those orders' original Ad IDs.` }, 503);
+    const pageToken = String(env.META_PAGE_ACCESS_TOKEN || '');
+    for (let start = 0; start < unresolved.length; start += 20) {
+      const batch = unresolved.slice(start, start + 20);
       const data = await graph('', { ids: batch.map(order => order.platform_lead_id!).join(','), fields: 'id,created_time,ad_id,adset_id,campaign_id,is_organic' }, pageToken);
       const results = batch.map(order => {
         const lead = data?.[String(order.platform_lead_id)];
@@ -69,8 +86,9 @@ export async function profitFacebookAdInsights(request: Request, env: Record<str
         return { order, adId: lead.ad_id, adsetId: lead.adset_id, campaignId: lead.campaign_id, createdAt: lead.created_time,
           day: accountDay(lead.created_time, account.timezone_name) };
       });
-      verified.push(...results);
+      for (const result of results) verifiedByOrder.set(result.order.id, result);
     }
+    const verified = (selected as Order[]).map(order => verifiedByOrder.get(order.id)!);
     const days = verified.map(row => row.day).sort();
     const leadSince = days[0], until = days[days.length - 1];
     // Include the previous seven delivery days so an ad impression/click that
