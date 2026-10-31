@@ -31,7 +31,7 @@ export interface ProfitItem {
 }
 export interface ProfitRow {
   waybill: string;
-  outcome?: 'sale' | 'returned';
+  outcome?: 'sale' | 'returned' | 'cancelled';
   orderId?: string;
   paymentKind?: 'cod' | 'online';
   orderNumber?: string;
@@ -57,6 +57,8 @@ export interface ProfitDateRange { from: string; to: string; count: number; }
 export interface PaidWaybillProfitReport {
   rows: ProfitRow[];
   duplicates: number;
+  /** Uploaded waybills skipped because Fardar has not completed delivery, return, or cancellation. */
+  excludedNonFinal: number;
   ranges: Record<'Facebook' | 'TikTok', ProfitDateRange | null>;
   totals: { ready: number; review: number; sales: number; received: number; purchasing: number; courier: number; returnFees: number; packing: number; beforeAds: number };
 }
@@ -155,6 +157,22 @@ export function isDeliveredProfitOrder(order: Order): boolean {
     || order.fardar_invoice_status === 'Delivered'
     || String(order.delivery_status || '').trim().toLowerCase() === 'delivered'
     || order.cod_payment_received === true;
+}
+
+const finalFardarStatuses = new Set(['delivered', 'return complete', 'return completed', 'returned', 'cancelled', 'canceled']);
+
+/** Only finalized courier outcomes enter profit or selected ad-cost totals. */
+export function isFinalProfitOrder(order: Order): boolean {
+  const status = String(order.fardar_invoice_status || order.delivery_status || '').trim().toLowerCase();
+  if (status) return finalFardarStatuses.has(status);
+  return isReturnedCourierInvoice(order) || order.order_status === 'Delivered'
+    || order.order_status === 'Cancelled' || order.call_center_status === 'Cancelled';
+}
+
+export function isCancelledProfitOrder(order: Order): boolean {
+  const status = String(order.fardar_invoice_status || order.delivery_status || '').trim().toLowerCase();
+  if (status) return status === 'cancelled' || status === 'canceled';
+  return order.order_status === 'Cancelled' || order.call_center_status === 'Cancelled';
 }
 
 /** Use the same saved payment records as COD Received and paid online orders.
@@ -390,7 +408,7 @@ export function buildPaidWaybillProfitReport(input: {
   // still replayed for accurate historical purchasing costs.
   if (input.waybills !== undefined && waybills.length === 0) {
     return {
-      rows: [], duplicates: normalized.length,
+      rows: [], duplicates: normalized.length, excludedNonFinal: 0,
       ranges: { Facebook: null, TikTok: null },
       totals: { ready: 0, review: 0, sales: 0, received: 0,
         purchasing: 0, courier: 0, returnFees: 0, packing: 0, beforeAds: 0 },
@@ -404,9 +422,18 @@ export function buildPaidWaybillProfitReport(input: {
     const key = normalizeProfitWaybill(order.waybill_number);
     if (key) byWaybill.set(key, [...(byWaybill.get(key) || []), order]);
   });
+  const finalWaybills = input.waybills !== undefined ? waybills.filter(waybill => {
+    const matches = byWaybill.get(waybill) || [];
+    return !matches.some(order => order.order_number === 'MAN-000001')
+      && (matches.length !== 1 || isFinalProfitOrder(matches[0]));
+  }) : undefined;
+  const excludedNonFinal = input.waybills === undefined ? 0 : waybills.filter(waybill => {
+    const matches = byWaybill.get(waybill) || [];
+    return matches.length === 1 && matches[0].order_number !== 'MAN-000001' && !isFinalProfitOrder(matches[0]);
+  }).length;
   const entries: Array<{ waybill: string; savedOrder?: Order }> = input.waybills !== undefined
-    ? waybills.filter(waybill => !(byWaybill.get(waybill) || []).some(order => order.order_number === 'MAN-000001')).map(waybill => ({ waybill }))
-    : selectSavedPaidProfitOrders(input.orders, input.selection).filter(order => order.order_number !== 'MAN-000001').map(savedOrder => ({ waybill: normalizeProfitWaybill(savedOrder.waybill_number), savedOrder }));
+    ? finalWaybills!.map(waybill => ({ waybill }))
+    : selectSavedPaidProfitOrders(input.orders, input.selection).filter(order => order.order_number !== 'MAN-000001' && isFinalProfitOrder(order)).map(savedOrder => ({ waybill: normalizeProfitWaybill(savedOrder.waybill_number), savedOrder }));
   const rows: ProfitRow[] = entries.map(({ waybill, savedOrder }) => {
     const matches = savedOrder ? [savedOrder] : byWaybill.get(waybill) || [];
     const row: ProfitRow = { waybill, outcome: 'sale', items: [], sales: null, received: null, purchasing: null, courier: null, returnFee: 0, packing: null, profit: null, issues: [], eligible: false };
@@ -426,6 +453,15 @@ export function buildPaidWaybillProfitReport(input: {
       row.items = (order.items || []).map(item => ({ name: `${item.product_name}${item.variant_name ? ` - ${item.variant_name}` : ''}`,
         sku: item.sku, quantity: Number(item.quantity), unitSale: amount(item.unit_price), sales: 0, purchasing: 0, allocations: [] }));
       if (!row.issues.length && row.returnFee !== null) row.profit = round(-row.returnFee);
+      return row;
+    }
+    if (isCancelledProfitOrder(order) && !excluded(order)) {
+      row.outcome = 'cancelled'; row.eligible = true;
+      row.received = 0; row.sales = 0; row.purchasing = 0; row.courier = 0; row.returnFee = 0; row.packing = 0;
+      row.paymentNote = 'Cancelled order: no revenue, Purchasing, delivery or packing cost. Its matched Facebook cost is included.';
+      row.items = (order.items || []).map(item => ({ name: `${item.product_name}${item.variant_name ? ` - ${item.variant_name}` : ''}`,
+        sku: item.sku, quantity: Number(item.quantity), unitSale: amount(item.unit_price), sales: 0, purchasing: 0, allocations: [] }));
+      if (!row.issues.length) row.profit = 0;
       return row;
     }
     if (order.order_status === 'Cancelled' || order.payment_status === 'Refunded' || excluded(order)) row.issues.push('Cancelled, refunded, duplicate or test order: excluded.');
@@ -502,7 +538,7 @@ export function buildPaidWaybillProfitReport(input: {
     purchasing: round(ready.reduce((sum, row) => sum + row.purchasing!, 0)), courier: round(ready.reduce((sum, row) => sum + row.courier!, 0)),
     returnFees: round(ready.reduce((sum, row) => sum + (row.returnFee || 0), 0)),
     packing: round(ready.reduce((sum, row) => sum + row.packing!, 0)), beforeAds: round(ready.reduce((sum, row) => sum + row.profit!, 0)) };
-  return { rows, duplicates: normalized.length - waybills.length, ranges, totals };
+  return { rows, duplicates: normalized.length - waybills.length, excludedNonFinal, ranges, totals };
 }
 
 /** Aggregate realized costs and profit by item code. Order-level receipt, courier, packing and advertising amounts are allocated to lines by their saved item sales value; returns allocate only the recorded return fee. */
