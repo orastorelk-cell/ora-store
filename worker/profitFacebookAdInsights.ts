@@ -45,7 +45,9 @@ export async function profitFacebookAdInsights(request: Request, env: Record<str
     const data: any = await response.json().catch(() => ({}));
     if (!response.ok || data?.error) {
       const code = Number.isInteger(data?.error?.code) ? ` (#${data.error.code})` : '';
-      throw new Error(`Meta Ads API could not read this account${code}. Check ad account access and ads_read permission.`);
+      const detail = String(data?.error?.message || 'Meta returned no error details.').slice(0, 300);
+      const step = path.startsWith('act_') ? 'ad account access' : 'Meta request';
+      throw new Error(`Meta ${step} failed${code}: ${detail}`);
     }
     return data;
   };
@@ -55,40 +57,22 @@ export async function profitFacebookAdInsights(request: Request, env: Record<str
     if (String(account.account_id || '') !== rawAccountId || !account.timezone_name || account.currency !== 'LKR')
       return json({ error: `Connected Meta ad account must be the intended LKR account. Meta returned currency ${String(account.currency || 'unknown')}.` }, 409);
 
-    // New Facebook orders already save their original Ad ID with the lead.
-    // Use that first: ads_read can read spend, while querying lead records also
-    // requires separate Page lead access and can fail even when ads_read works.
-    const verifiedByOrder = new Map<string, { order: Order; adId: string; adsetId: string; campaignId: string; createdAt: string; day: string }>();
-    const unresolved: Order[] = [];
+    // Spend reporting only needs ads_read. Do not call the separate Leads API:
+    // that requires leads_retrieval and can fail with #100 despite ads_read.
+    const verified: Array<{ order: Order; adId: string; adsetId: string; campaignId: string; createdAt: string; day: string }> = [];
     for (const order of selected as Order[]) {
       const savedAdId = String(order.platform_ad_id || '').trim();
       const createdAt = String(order.platform_lead_created_at || order.created_at || '');
-      if (metaId(savedAdId) && Number.isFinite(Date.parse(createdAt))) {
-        verifiedByOrder.set(order.id, {
-          order, adId: savedAdId,
-          adsetId: metaId(String(order.platform_adset_id || '')) ? String(order.platform_adset_id) : '',
-          campaignId: metaId(String(order.platform_campaign_id || '')) ? String(order.platform_campaign_id) : '',
-          createdAt, day: accountDay(createdAt, account.timezone_name),
-        });
-      } else unresolved.push(order);
-    }
-    if (unresolved.length && !String(env.META_PAGE_ACCESS_TOKEN || ''))
-      return json({ error: `${unresolved.length} selected Facebook order(s) have no saved Ad ID. Connect a Page token with lead access, or restore those orders' original Ad IDs.` }, 503);
-    const pageToken = String(env.META_PAGE_ACCESS_TOKEN || '');
-    for (let start = 0; start < unresolved.length; start += 20) {
-      const batch = unresolved.slice(start, start + 20);
-      const data = await graph('', { ids: batch.map(order => order.platform_lead_id!).join(','), fields: 'id,created_time,ad_id,adset_id,campaign_id,is_organic' }, pageToken);
-      const results = batch.map(order => {
-        const lead = data?.[String(order.platform_lead_id)];
-        if (lead?.error || lead?.id !== order.platform_lead_id || !Number.isFinite(Date.parse(lead?.created_time)) || !metaId(lead?.ad_id)
-          || !metaId(lead?.adset_id) || !metaId(lead?.campaign_id))
-          throw new Error(lead?.is_organic ? `${order.order_number}: lead is organic and has no paid Ad ID.` : `${order.order_number}: Meta did not return a complete Lead ID → Ad ID match.`);
-        return { order, adId: lead.ad_id, adsetId: lead.adset_id, campaignId: lead.campaign_id, createdAt: lead.created_time,
-          day: accountDay(lead.created_time, account.timezone_name) };
+      if (!Number.isFinite(Date.parse(createdAt)))
+        return json({ error: `${order.order_number}: Facebook lead date is missing; its ad-account spend cannot be matched safely.` }, 409);
+      verified.push({
+        order, adId: metaId(savedAdId) ? savedAdId : '',
+        adsetId: metaId(String(order.platform_adset_id || '')) ? String(order.platform_adset_id) : '',
+        campaignId: metaId(String(order.platform_campaign_id || '')) ? String(order.platform_campaign_id) : '',
+        createdAt, day: /^\d{4}-\d{2}-\d{2}$/.test(String(order.platform_ad_account_day || ''))
+          ? String(order.platform_ad_account_day) : accountDay(createdAt, account.timezone_name),
       });
-      for (const result of results) verifiedByOrder.set(result.order.id, result);
     }
-    const verified = (selected as Order[]).map(order => verifiedByOrder.get(order.id)!);
     const days = verified.map(row => row.day).sort();
     const leadSince = days[0], until = days[days.length - 1];
     // Include the previous seven delivery days so an ad impression/click that
@@ -113,7 +97,8 @@ export async function profitFacebookAdInsights(request: Request, env: Record<str
       const data: any = await response.json().catch(() => ({}));
       if (!response.ok || data?.error) {
         const code = Number.isInteger(data?.error?.code) ? ` (#${data.error.code})` : '';
-        throw new Error(`Meta could not return ad spend${code}. Check ads_read permission and Ad Account ID.`);
+        const detail = String(data?.error?.message || 'Meta returned no error details.').slice(0, 300);
+        throw new Error(`Meta ad spend request failed${code}: ${detail}`);
       }
       if (!Array.isArray(data.data)) throw new Error('Meta returned an incomplete Ads Insights report.');
       for (const row of data.data) {
@@ -141,13 +126,13 @@ export async function profitFacebookAdInsights(request: Request, env: Record<str
     const rows: FacebookAdCost[] = [...totalsByAd.values()].map(row => ({ campaign: row.name || row.campaign, adSet: row.adSet,
       entityId: row.adId, level: 'ad', code: row.code, from: since, to: until, spend: row.spendCents / 100, leads: row.leads }));
     const matchedRows = new Set(rows.map(row => row.entityId));
-    const missing = verified.filter(row => !matchedRows.has(row.adId));
+    const missing = verified.filter(row => row.adId && !matchedRows.has(row.adId));
     if (missing.length) return json({ error: `Meta spend report did not include ${missing.length} selected Lead ID → Ad ID/date match(es). No report was calculated; refresh Insights and retry.` }, 409);
     const totalSpend = Math.round(rows.reduce((sum, row) => sum + Math.round(row.spend * 100), 0)) / 100;
     const itemSpend = Math.round(rows.filter(row => row.code).reduce((sum, row) => sum + Math.round(row.spend * 100), 0)) / 100;
     const commercialSpend = Math.round((totalSpend - itemSpend) * 100) / 100;
     return json({ ok: true, account_id: rawAccountId, currency: account.currency, timezone: account.timezone_name, since, until,
-      verified_leads: verified.length, verified: verified.map(row => ({ order_id: row.order.id, lead_id: row.order.platform_lead_id,
+      verified: verified.map(row => ({ order_id: row.order.id, lead_id: row.order.platform_lead_id,
         created_at: row.createdAt, ad_id: row.adId, adset_id: row.adsetId, campaign_id: row.campaignId, ad_day: row.day })),
       fileName: `Facebook API · ${rawAccountId} · ${since} to ${until}`,
       rows, periods: [...new Map(rows.map(row => [`${row.from}|${row.to}`, { from: row.from, to: row.to }])).values()],
