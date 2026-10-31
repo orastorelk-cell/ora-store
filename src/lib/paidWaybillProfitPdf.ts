@@ -58,7 +58,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
       ['Commercial / promotion share deducted', -allocation.commercialCost],
     ] as Array<[string, number]> : [[currentCsv ? 'Facebook paid / returned lead shares only' : 'Facebook advertising cost', advertising.facebook === null && report.ranges.Facebook ? null : -(advertising.facebook ?? 0)]] as Array<[string, number | null]>),
     ['TikTok advertising cost', advertising.tiktok === null && report.ranges.TikTok ? null : -(advertising.tiktok ?? 0)],
-    ...(options.includeAccountNet && currentCsv ? [['NET AFTER FULL META ACCOUNT SPEND', currentCsvProfitSummary(report, currentCsv, options.tiktok, options.currentCsvAllocation).accountNetProfit] as Array<[string, number | null]> : []),
+    ...((options.includeAccountNet && currentCsv ? [['NET AFTER FULL META ACCOUNT SPEND', currentCsvProfitSummary(report, currentCsv, options.tiktok, options.currentCsvAllocation).accountNetProfit]] : []) as Array<[string, number | null]>),
   ];
   rows.forEach(([label, value], index) => {
     const total = label === 'PROFIT BEFORE ADVERTISING';
