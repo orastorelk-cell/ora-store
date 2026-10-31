@@ -543,7 +543,7 @@ export function buildPaidWaybillProfitReport(input: {
 
 /** Aggregate realized costs and profit by item code. Order-level receipt, courier, packing and advertising amounts are allocated to lines by their saved item sales value; returns allocate only the recorded return fee. */
 export interface ProfitByItemCodeRow {
-  sku: string; quantity: number; deliveredUnits: number; returnedUnits: number; deliveredOrders: number; returnOrders: number;
+  sku: string; name: string; quantity: number; deliveredUnits: number; returnedUnits: number; deliveredOrders: number; returnOrders: number;
   unitBuyingPrice: number; deliveryRate: number; returnRate: number;
   received: number; purchasing: number; delivery: number; returnFee: number; packing: number; advertising: number; profit: number;
 }
@@ -553,9 +553,9 @@ export function aggregateProfitByItemCode(report: PaidWaybillProfitReport, order
   const deliveredOrderCodes = new Map<string, Set<string>>();
   const returnOrderCodes = new Map<string, Set<string>>();
   const weightsFor = (row: ProfitRow) => row.items.map(item => Math.max(0, item.sales || 0, Number(item.unitSale || 0) * Number(item.quantity || 0)));
-  const add = (sku: string, quantity: number, deliveredUnits: number, returnedUnits: number, received: number, purchasing: number, delivery: number, returnFee: number, packing: number, advertising: number, row: ProfitRow) => {
+  const add = (sku: string, name: string, quantity: number, deliveredUnits: number, returnedUnits: number, received: number, purchasing: number, delivery: number, returnFee: number, packing: number, advertising: number, row: ProfitRow) => {
     const key = sku.trim() || 'UNCODED';
-    const value = map.get(key) || { sku: key, quantity: 0, deliveredUnits: 0, returnedUnits: 0, deliveredOrders: 0, returnOrders: 0,
+    const value = map.get(key) || { sku: key, name, quantity: 0, deliveredUnits: 0, returnedUnits: 0, deliveredOrders: 0, returnOrders: 0,
       unitBuyingPrice: 0, deliveryRate: 0, returnRate: 0, received: 0, purchasing: 0, delivery: 0, returnFee: 0, packing: 0, advertising: 0, profit: 0 };
     value.quantity += quantity; value.deliveredUnits += deliveredUnits; value.returnedUnits += returnedUnits;
     value.received += received; value.purchasing += purchasing; value.delivery += delivery;
@@ -585,7 +585,7 @@ export function aggregateProfitByItemCode(report: PaidWaybillProfitReport, order
       const returnFee = isReturn ? (row.returnFee || 0) * share : 0;
       const packing = isReturn ? 0 : (row.packing || 0) * share;
       const advertising = orderAds * share;
-      add(item.sku, deliveredUnits + returnedUnits, deliveredUnits, returnedUnits, received, purchasing, delivery, returnFee, packing, advertising, row);
+      add(item.sku, item.name, deliveredUnits + returnedUnits, deliveredUnits, returnedUnits, received, purchasing, delivery, returnFee, packing, advertising, row);
     });
   }
   return [...map.values()].map(row => {
