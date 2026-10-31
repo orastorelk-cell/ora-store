@@ -368,6 +368,8 @@ export interface Order {
   platform_ad_id?: string;
   platform_adset_id?: string;
   platform_campaign_id?: string;
+  /** Lead creation day in the connected Meta ad account's reporting timezone. */
+  platform_ad_account_day?: string;
   lead_import_key?: string;
   lead_imported_at?: string;
 }

@@ -16,6 +16,28 @@ export function currentFacebookCsv(csv: string, fileName: string, knownCodes: st
   const commercial = rows.filter(row => !row.code).reduce((sum, row) => sum + cents(row.spend), 0);
   return { fileName: fileName.slice(0, 200), rows, periods, itemSpend: item / 100, commercialSpend: commercial / 100, totalSpend: (item + commercial) / 100 };
 }
+/** Validate the normalized ad/day rows returned by the server-only Meta Insights connection. */
+export function currentFacebookInsights(value: any): CurrentFacebookCsv {
+  if (!value || value.currency !== 'LKR' || !Array.isArray(value.rows) || !value.rows.length || value.rows.length > 20000
+    || typeof value.fileName !== 'string' || !value.fileName.startsWith('Facebook API · ')) throw new Error('Meta returned an incomplete ad-cost report. No profit was calculated.');
+  const rows: FacebookAdCost[] = value.rows.map((row: any, index: number) => {
+    if (!row || row.level !== 'ad' || !/^\d{1,64}$/.test(String(row.entityId || ''))
+      || typeof row.campaign !== 'string' || typeof row.adSet !== 'string'
+      || row.code !== null && (typeof row.code !== 'string' || !/^[A-Z0-9][A-Z0-9._-]{0,119}$/.test(row.code))
+      || typeof row.from !== 'string' || typeof row.to !== 'string' || profitSystemDay(row.from) !== row.from
+      || profitSystemDay(row.to) !== row.to || row.from > row.to
+      || !Number.isFinite(row.spend) || row.spend < 0 || !Number.isSafeInteger(row.leads) || row.leads < 0)
+      throw new Error(`Meta ad/day row ${index + 1} is invalid. No profit was calculated.`);
+    return { campaign: row.campaign, adSet: row.adSet, entityId: row.entityId, level: 'ad', code: row.code,
+      from: row.from, to: row.to, spend: Math.round(row.spend * 100) / 100, leads: row.leads };
+  });
+  const periods = [...new Map(rows.map(row => [`${row.from}|${row.to}`, { from: row.from, to: row.to }])).values()]
+    .sort((a, b) => a.from.localeCompare(b.from));
+  const cents = (items: FacebookAdCost[]) => items.reduce((sum, row) => sum + Math.round(row.spend * 100), 0);
+  const itemSpend = cents(rows.filter(row => row.code)), totalSpend = cents(rows);
+  return { fileName: value.fileName.slice(0, 200), rows, periods, itemSpend: itemSpend / 100,
+    commercialSpend: (totalSpend - itemSpend) / 100, totalSpend: totalSpend / 100 };
+}
 export interface CurrentCsvOrderCost { item: number; commercial: number; total: number; match: string; leadId: string; }
 export interface CurrentCsvAllocation {
   orderCosts: Map<string, CurrentCsvOrderCost>; assignedSpend: number; unassignedSpend: number; totalSpend: number;
@@ -38,13 +60,15 @@ export function allocateCurrentCsvCosts(input: CurrentFacebookCsv, orders: Order
   const selected = new Set(report.rows.filter(row => row.source === 'Facebook' && row.eligible && row.profit !== null && row.orderId).map(row => row.orderId!));
   const issues: string[] = [], warnings: string[] = [], orderCosts: CurrentCsvAllocation['orderCosts'] = new Map();
   const groups = new Map<string, { row: FacebookAdCost; spend: number; leads: number; orders: Order[]; denominator: number }>();
-  for (const row of input.rows.filter(row => row.code)) {
+  // Ad-level rows can be matched directly by Ad ID even when the ad name has no
+  // catalog code. Broader campaign/ad-set rows still need a product code.
+  for (const row of input.rows.filter(row => row.code || row.level === 'ad' && row.entityId)) {
     const key = `${row.level}|${row.entityId || row.code}|${row.from}|${row.to}`;
     const group = groups.get(key);
     if (group) { group.spend += cents(row.spend); group.leads += row.leads; }
     else groups.set(key, { row, spend: cents(row.spend), leads: row.leads, orders: [], denominator: 0 });
   }
-  const cohorts = [...groups.values()], known = [...new Set(cohorts.map(group => group.row.code!))];
+  const cohorts = [...groups.values()], known = [...new Set(cohorts.map(group => group.row.code).filter((code): code is string => Boolean(code)))];
   const unique = new Map<string, Order[]>();
   for (const order of orders) {
     if (!isFacebook(order) || order.is_test_order || order.is_replacement_order) continue;
@@ -59,7 +83,7 @@ export function allocateCurrentCsvCosts(input: CurrentFacebookCsv, orders: Order
       if (records.some(order => selected.has(order.id))) issues.push(`${records.map(order => order.order_number).join(' / ')}: the same Facebook Lead ID belongs to multiple orders.`);
       continue;
     }
-    const order = records[0], day = profitSystemDay(order.platform_lead_created_at || order.created_at);
+    const order = records[0], day = order.platform_ad_account_day || profitSystemDay(order.platform_lead_created_at || order.created_at);
     let code: string | null = null;
     try {
       const original = note(order, 'Form');
@@ -71,7 +95,7 @@ export function allocateCurrentCsvCosts(input: CurrentFacebookCsv, orders: Order
     } catch { /* Ambiguous identity remains unresolved; it is never charged at zero. */ }
     const inPeriod = cohorts.filter(group => day && day >= group.row.from && day <= group.row.to);
     const exact = inPeriod.filter(group => group.row.entityId && entity(order, group.row.level) === group.row.entityId);
-    const matches = exact.length ? exact : inPeriod.filter(group => group.row.code === code
+    const matches = exact.length ? exact : inPeriod.filter(group => group.row.code && group.row.code === code
       && !(group.row.entityId && entity(order, group.row.level) && entity(order, group.row.level) !== group.row.entityId));
     if (matches.length !== 1) continue;
     const group = matches[0]; group.orders.push(order);
@@ -87,11 +111,11 @@ export function allocateCurrentCsvCosts(input: CurrentFacebookCsv, orders: Order
   };
   for (const group of cohorts) {
     group.denominator = Math.max(group.leads, group.orders.length);
-    if (group.orders.length > group.leads) warnings.push(`${group.row.code} (${group.row.from} to ${group.row.to}): ${group.leads} Meta results, ${group.orders.length} unique system leads; spend is shared across ${group.denominator} leads.`);
-    split(group.spend, group.denominator, group.orders, 'item');
+    if (group.orders.length > group.leads) warnings.push(`${group.row.code || `Ad ${group.row.entityId}`} (${group.row.from} to ${group.row.to}): ${group.leads} Meta results, ${group.orders.length} unique system leads; spend is shared across ${group.denominator} leads.`);
+    split(group.spend, group.denominator, group.orders, group.row.code ? 'item' : 'commercial');
   }
   const promotions = new Map<string, { spend: number; from: string; to: string }>();
-  for (const row of input.rows.filter(row => !row.code)) {
+  for (const row of input.rows.filter(row => !row.code && !(row.level === 'ad' && row.entityId))) {
     const key = `${row.from}|${row.to}`, period = promotions.get(key) || { spend: 0, from: row.from, to: row.to };
     period.spend += cents(row.spend); promotions.set(key, period);
   }
@@ -118,7 +142,7 @@ export function allocateCurrentCsvCosts(input: CurrentFacebookCsv, orders: Order
   return { orderCosts, assignedSpend: assigned / 100, unassignedSpend: (total - assigned) / 100, totalSpend: input.totalSpend,
     pendingSpend: pendingCents / 100, otherSpend: otherCents / 100, unmatchedSpend: (total - assigned - pendingCents - otherCents) / 100,
     missingOrderIds, issues: [...new Set(issues)], warnings: [...new Set(warnings)],
-    cohorts: cohorts.map(group => ({ code: group.row.code!, from: group.row.from, to: group.row.to, spend: group.spend / 100, csvLeads: group.leads,
+    cohorts: cohorts.map(group => ({ code: group.row.code || `Ad ${group.row.entityId}`, from: group.row.from, to: group.row.to, spend: group.spend / 100, csvLeads: group.leads,
       leadsUsed: group.denominator, matched: group.orders.length, selected: group.orders.filter(order => selected.has(order.id)).length, pending: group.orders.filter(order => !selected.has(order.id) && pending(order)).length })) };
 }
 

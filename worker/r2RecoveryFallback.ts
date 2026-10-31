@@ -24,6 +24,7 @@ import { r2SheetConfirmHandler } from './r2SheetConfirm';
 import { SHEET_CONFIRM_API } from '../src/lib/sheetConfirmState';
 import { r2CourierPaymentsHandler } from './r2CourierPayments';
 import { profitFacebookLeadMatch } from './profitFacebookLeadMatch';
+import { profitFacebookAdInsights } from './profitFacebookAdInsights';
 import { staffPurchasesHandler } from './staffPurchases';
 import { inventoryHistoryHandler,readDurablePurchasingHistory } from './inventoryHistory';
 import { purchaseBackupRecoveryHandler } from './purchaseBackupRecovery';
@@ -261,6 +262,11 @@ export const withR2DataFallback=async(request:Request,env:unknown,_ctx:any,next:
       const user=await verifyActiveStaff(request,env);
       if(!user)return json({error:'Login session required.'},401);
       return profitFacebookLeadMatch(request,env as Env,user,async()=> (await readDataTable(env,'order_snapshots')).map(row=>row.payload).filter(Boolean));
+    }
+    if(new URL(request.url).pathname==='/api/admin/profit-facebook-ad-insights'){
+      const user=await verifyActiveStaff(request,env);
+      if(!user)return json({error:'Login session required.'},401);
+      return profitFacebookAdInsights(request,env as Env,user,async()=> (await readDataTable(env,'order_snapshots')).map(row=>row.payload).filter(Boolean));
     }
     if(new URL(request.url).pathname==='/api/admin/profit-ad-costs'){
       const user=await verifyActiveStaff(request,env);
