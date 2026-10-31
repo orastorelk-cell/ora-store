@@ -332,10 +332,11 @@ function latestPurchasePrices(purchases: PurchaseOrder[], productFor: ReturnType
       : undefined;
     if (selection.variant_id) {
       const variantSku = productFor(selection)?.variants?.find(variant => String(variant.id) === String(selection.variant_id))?.sku;
-      return exactVariant || (variantSku ? latest.get(skuKey(variantSku)) : undefined) || referenceSeenPrice(selection);
+      return referenceSeenPrice(selection)
+        || exactVariant || (variantSku ? latest.get(skuKey(variantSku)) : undefined);
     }
-    return latest.get(inventoryKey(selection))
-      || referenceSeenPrice(selection)
+    return referenceSeenPrice(selection)
+      || latest.get(inventoryKey(selection))
       || products.get(String(productId)) || products.get(String(selection.product_id))
       || (selection.main_sku ? latest.get(skuKey(selection.main_sku)) : undefined);
   };
