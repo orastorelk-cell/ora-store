@@ -8,7 +8,7 @@ export type ProfitSource = 'Facebook' | 'TikTok' | 'Other';
 export type ProfitPaymentFilter = 'all' | 'cod' | 'online';
 export interface PaidProfitSelection { paymentFilter?: ProfitPaymentFilter; fromDate?: string; toDate?: string; }
 /** Catalog metadata identifies items and saved combo components; prices come only from Purchasing. */
-export type ProfitCatalogProduct = Pick<Product, 'id' | 'sku' | 'name_en' | 'product_type' | 'bundle_components'> & {
+export type ProfitCatalogProduct = Pick<Product, 'id' | 'sku' | 'name_en' | 'product_type' | 'bundle_components' | 'source_shop_name' | 'source_shop_price'> & {
   variants?: Array<Pick<ProductVariant, 'id' | 'sku'>>;
 };
 export interface PurchaseAllocation {
@@ -17,7 +17,7 @@ export interface PurchaseAllocation {
   sku: string;
   quantity: number;
   unitCost: number | null;
-  costBasis?: 'latest-purchase';
+  costBasis?: 'latest-purchase' | 'reference-shop-seen-price';
 }
 export interface ProfitItem {
   name: string;
@@ -46,6 +46,7 @@ export interface ProfitRow {
   profit: number | null;
   /** True when uncovered quantity uses the latest saved item/variant price. */
   estimatedPurchasing?: boolean;
+  referenceShopSeenPrice?: boolean;
   paymentNote?: string;
   issues: string[];
   eligible: boolean;
@@ -311,6 +312,16 @@ function latestPurchasePrices(purchases: PurchaseOrder[], productFor: ReturnType
     // This is a report price, independent of available stock and order dates.
     if (productId && !products.has(String(productId))) products.set(String(productId), price);
   }
+  const referenceSeenPrice = (selection: PurchaseSelection): PurchaseAllocation | undefined => {
+    const product = productFor(selection);
+    const unitCost = amount(product?.source_shop_price);
+    if (!product || unitCost === null || unitCost <= 0) return undefined;
+    return {
+      purchaseId: '',
+      reference: `Reference Shop / Seen Price${product.source_shop_name ? ` — ${product.source_shop_name}` : ''}`,
+      sku: inventoryKey(selection), quantity: 0, unitCost, costBasis: 'reference-shop-seen-price',
+    };
+  };
   return (selection: PurchaseSelection) => {
     const productId = productFor(selection)?.id || selection.product_id;
     // If the order snapshot carries a base SKU with a variant ID, use only
@@ -321,9 +332,10 @@ function latestPurchasePrices(purchases: PurchaseOrder[], productFor: ReturnType
       : undefined;
     if (selection.variant_id) {
       const variantSku = productFor(selection)?.variants?.find(variant => String(variant.id) === String(selection.variant_id))?.sku;
-      return exactVariant || (variantSku ? latest.get(skuKey(variantSku)) : undefined);
+      return exactVariant || (variantSku ? latest.get(skuKey(variantSku)) : undefined) || referenceSeenPrice(selection);
     }
     return latest.get(inventoryKey(selection))
+      || referenceSeenPrice(selection)
       || products.get(String(productId)) || products.get(String(selection.product_id))
       || (selection.main_sku ? latest.get(skuKey(selection.main_sku)) : undefined);
   };
@@ -451,6 +463,8 @@ export function buildPaidWaybillProfitReport(input: {
       // but remains visibly identified as an estimate in the report and PDF.
       if (allocations.some(allocation => allocation.costBasis === 'latest-purchase'))
         row.estimatedPurchasing = true;
+      if (allocations.some(allocation => allocation.costBasis === 'reference-shop-seen-price'))
+        row.referenceShopSeenPrice = true;
       return { name: `${item.product_name}${item.variant_name ? ` - ${item.variant_name}` : ''}`, sku: item.sku, quantity: qty, unitSale: unit, sales, purchasing, allocations };
     });
     if (!row.items.length) row.issues.push('This order has no items.');
