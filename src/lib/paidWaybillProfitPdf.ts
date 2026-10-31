@@ -212,11 +212,11 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
     doc.text('Received, delivery, packing and advertising are allocated across item codes by saved item sales value. TikTok invoice cost is divided evenly by included TikTok order, then by item sales value.', left, 35);
     const itemColumns = [
-      { label: 'ITEM CODE', width: 30 }, { label: 'QTY', width: 13 }, { label: 'BUY / UNIT', width: 24 },
-      { label: 'DELIVERED', width: 19 }, { label: 'RETURNS', width: 17 }, { label: 'DELIVERY %', width: 20 },
-      { label: 'RETURN %', width: 18 }, { label: 'RECEIVED', width: 28 }, { label: 'PURCHASING', width: 28 },
-      { label: 'DELIVERY', width: 24 }, { label: 'RETURN FEE', width: 22 }, { label: 'PACKING', width: 20 },
-      { label: 'ADS', width: 20 }, { label: 'NET PROFIT', width: 26 },
+      { label: 'ITEM CODE', width: 26 }, { label: 'QTY', width: 10 }, { label: 'BUY / UNIT', width: 20 },
+      { label: 'DELIVERED', width: 15 }, { label: 'RETURNS', width: 15 }, { label: 'DELIVERY %', width: 17 },
+      { label: 'RETURN %', width: 15 }, { label: 'RECEIVED', width: 25 }, { label: 'PURCHASING', width: 25 },
+      { label: 'DELIVERY', width: 20 }, { label: 'RETURN FEE', width: 19 }, { label: 'PACKING', width: 17 },
+      { label: 'ADS', width: 18 }, { label: 'NET PROFIT', width: 25 },
     ];
     const itemHeader = () => {
       doc.setFont('helvetica', 'bold'); doc.setFontSize(6.5); doc.setFillColor(243, 244, 246); doc.rect(left, 43, width, 9, 'F');
