@@ -48,7 +48,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     ['Purchasing cost from Purchase History', -report.totals.purchasing],
     ['Actual Fardar delivery cost', -report.totals.courier],
     ['Actual Fardar Return Fees (deducted once)', -report.totals.returnFees],
-    [`Packing (${report.totals.packing / PROFIT_PACKING_COST} delivered orders x Rs. ${PROFIT_PACKING_COST})`, -report.totals.packing],
+    ['Packing cost (Rs.100 per delivered order; waived when returned stock is reused)', -report.totals.packing],
     ['PROFIT BEFORE ADVERTISING', report.totals.beforeAds],
     ...(allocation ? [
       ['Facebook item-ad cost', -allocation.paidCost],
@@ -82,7 +82,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     rangeY += Math.max(16, lines.length * 4 + 8);
   }
   doc.text(`COD amount basis: ${options.paymentBasis}`, cardX, rangeY);
-  doc.text(`Packing: Rs. ${PROFIT_PACKING_COST} per delivered order; Rs.0 per return / undelivered order`, cardX, rangeY + 6);
+  doc.text(`Packing: Rs. ${PROFIT_PACKING_COST} per delivered order; waived if a good returned-stock lot is reused; Rs.0 per return / undelivered order`, cardX, rangeY + 6);
   y += 5;
   const complete = advertising.netProfit !== null;
   const shownProfit = advertising.netProfit ?? advertising.recordedCostProfit;
@@ -251,10 +251,10 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     const currentCost = row.orderId ? options.currentCsvAllocation?.orderCosts.get(row.orderId) : undefined;
     const fullFacebookCost = currentCsv ? row.source === 'Facebook' ? currentCost?.total ?? null : 0 : allocation ? facebookOrderAdvertisingCost(allocation, row.orderId) : null;
     const afterFacebook = fullFacebookCost !== null && row.profit !== null ? Math.round((row.profit - fullFacebookCost) * 100) / 100 : null;
-    const purchaseLines = row.outcome === 'returned' ? ['Rs.0 - returned items'] : row.items.flatMap(item => [money(item.purchasing), ...item.allocations.map(allocation => `${allocation.costBasis === 'latest-purchase' ? 'Latest price / ' : ''}${text(allocation.reference)}: ${allocation.quantity} x ${money(allocation.unitCost)}`)]);
+    const purchaseLines = row.outcome === 'returned' ? ['Rs.0 - returned items'] : row.items.flatMap(item => [money(item.purchasing), ...item.allocations.map(allocation => `${allocation.returnedStock ? 'Returned stock / ' : ''}${allocation.costBasis === 'latest-purchase' ? 'Latest price / ' : ''}${text(allocation.reference)}: ${allocation.quantity} x ${money(allocation.unitCost)}`)]);
     const saleLines = row.outcome === 'returned' ? ['Returned parcel - no sale'] : row.items.map(item => `${item.quantity} x ${money(item.unitSale)} = ${money(item.sales)}`);
     const cellValues = [
-      [text(row.waybill || 'Not assigned'), text(row.orderNumber || 'Not found'), text(row.source || ''), ...(row.outcome === 'returned' ? ['RETURN COMPLETE'] : []), row.issues.length ? 'NEEDS REVIEW' : row.estimatedPurchasing ? 'PURCHASING ESTIMATE' : 'COMPLETE'],
+      [text(row.waybill || 'Not assigned'), text(row.orderNumber || 'Not found'), text(row.source || ''), ...(row.outcome === 'returned' ? ['RETURN COMPLETE'] : row.reusedReturnPackaging ? ['RETURN PACKAGING REUSED - NO RS.100 CHARGE'] : []), row.issues.length ? 'NEEDS REVIEW' : row.estimatedPurchasing ? 'PURCHASING ESTIMATE' : 'COMPLETE'],
       [row.systemDate || '-'],
       row.items.length ? row.items.flatMap(item => [text(item.name), `${text(item.sku)} | Qty ${item.quantity}`]) : ['No matched order'],
       [...saleLines, `Received: ${money(row.received)}`],
