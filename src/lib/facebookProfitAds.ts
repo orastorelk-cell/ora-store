@@ -261,10 +261,18 @@ export function allocateFacebookAdCosts(ledger: FacebookAdLedger, orders: Order[
     const form = order.notes?.match(/(?:^|\n)Form:\s*([^\n]+)/i)?.[1];
     let originalCode: string | null = null;
     try { if (form) originalCode = facebookAdCode(form, knownCodes); } catch { /* Ambiguous form remains unmatched. */ }
-    const itemCodes = new Set((order.items || []).flatMap(item => [key(item.main_sku || ''), key(item.sku || ''),
-      key(item.main_sku || item.sku || '').startsWith('CB-') ? key(item.main_sku || item.sku || '') : (key(item.main_sku || item.sku || '').match(/^R\d{4}\b/)?.[0] || '')]));
-    const candidates = form ? cohortsByCode.get(originalCode || '') || [] : [...itemCodes].flatMap(code => cohortsByCode.get(code) || []);
-    const matches = candidates.filter(row => day >= row.from && day <= row.to);
+    const exactItemCodes = new Set((order.items || []).map(item => key(item.sku || item.main_sku || '')).filter(Boolean));
+    const mainItemCodes = new Set((order.items || []).flatMap(item => {
+      const main = key(item.main_sku || item.sku || '');
+      return [main, main.startsWith('CB-') ? main : (main.match(/^R\d{4}\b/)?.[0] || '')].filter(Boolean);
+    }));
+    const candidates = form ? cohortsByCode.get(originalCode || '') || [] : [...exactItemCodes].flatMap(code => cohortsByCode.get(code) || []);
+    const exactMatches = candidates.filter(row => day >= row.from && day <= row.to);
+    // Prefer the exact saved variant code when both it and its parent product
+    // have ads in the same period. Fall back to the parent only when no exact
+    // variant campaign covers the lead date.
+    const fallbackCandidates = form ? [] : [...mainItemCodes].flatMap(code => cohortsByCode.get(code) || []);
+    const matches = form || exactMatches.length ? exactMatches : fallbackCandidates.filter(row => day >= row.from && day <= row.to);
     if (matches.length !== 1 || lead.length !== 1) {
       if (matches.length) for (const row of matches) row.issues.push(lead.length > 1
         ? `${order.order_number}: multiple orders share this Lead ID.` : `${order.order_number}: its original advertising code is ambiguous.`);
