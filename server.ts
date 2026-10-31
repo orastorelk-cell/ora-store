@@ -1680,6 +1680,57 @@ const exchangeWaybillRows = async () => {
   if(error) throw error;
   return data||[];
 };
+const CURRENT_PROFIT_SET_KEY='current-profit-set-v1';
+app.get('/api/admin/current-profit-set',requireStaffPermission('profit_report'),async(_req,res)=>{
+  try{
+    const rows=await readDataTable(undefined,'admin_data_store');
+    const record=rows.find((row:any)=>row.key===CURRENT_PROFIT_SET_KEY);
+    return res.json({ok:true,report:record?.payload||null});
+  }catch(error:any){return res.status(error?.status||503).json({error:error?.message||'Saved profit set could not be loaded.'});}
+});
+app.put('/api/admin/current-profit-set',requireAdmin,async(req,res)=>{
+  try{
+    const body=req.body||{};
+    const waybills=Array.isArray(body.waybills)?Array.from(new Set(body.waybills.map((value:any)=>String(value||'').trim()).filter(Boolean))).slice(0,10000):[];
+    const facebook=body.facebook;
+    if(!waybills.length||!facebook||!Array.isArray(facebook.rows)||!facebook.rows.length||facebook.rows.length>20000||!Array.isArray(facebook.periods))
+      return res.status(400).json({error:'A complete waybill set and Facebook cost source are required before saving.'});
+    if(!['auto','gross','net'].includes(String(body.paymentBasis||'')))return res.status(400).json({error:'Payment amount basis is invalid.'});
+    const inputBytes=Buffer.byteLength(JSON.stringify({waybills,facebook,verifiedLeads:body.verifiedLeads||{}}),'utf8');
+    if(inputBytes>2_000_000)return res.status(413).json({error:'Saved profit set is too large.'});
+    const actor=(req as any).staffSessionUser as ServerStaffAccount|undefined;
+    const saved={
+      version:1,
+      waybills,
+      waybillFileName:String(body.waybillFileName||'').slice(0,200),
+      facebook,
+      paymentBasis:String(body.paymentBasis),
+      fromDate:/^\\d{4}-\\d{2}-\\d{2}$/.test(String(body.fromDate||''))?String(body.fromDate):'',
+      toDate:/^\\d{4}-\\d{2}-\\d{2}$/.test(String(body.toDate||''))?String(body.toDate):'',
+      verifiedLeads:body.verifiedLeads&&typeof body.verifiedLeads==='object'&&!Array.isArray(body.verifiedLeads)?body.verifiedLeads:{},
+      savedAt:new Date().toISOString(),
+      savedBy:String(actor?.display_name||actor?.username||'Super Admin').slice(0,100),
+    };
+    const outcome=await replaceDataTable<any>(undefined,'admin_data_store',current=>{
+      const record={key:CURRENT_PROFIT_SET_KEY,payload:saved,updated_at:saved.savedAt,updated_by:saved.savedBy};
+      const exists=current.some((row:any)=>row.key===CURRENT_PROFIT_SET_KEY);
+      return {rows:exists?current.map((row:any)=>row.key===CURRENT_PROFIT_SET_KEY?record:row):[...current,record],result:record};
+    });
+    if(outcome?.error)return res.status(503).json({error:outcome.error});
+    return res.json({ok:true,report:saved});
+  }catch(error:any){return res.status(error?.status||503).json({error:error?.message||'Saved profit set could not be stored.'});}
+});
+app.delete('/api/admin/current-profit-set',requireAdmin,async(_req,res)=>{
+  try{
+    const outcome=await replaceDataTable<any>(undefined,'admin_data_store',current=>{
+      const exists=current.some((row:any)=>row.key===CURRENT_PROFIT_SET_KEY);
+      return {rows:current.filter((row:any)=>row.key!==CURRENT_PROFIT_SET_KEY),result:{cleared:exists}};
+    });
+    if(outcome?.error)return res.status(503).json({error:outcome.error});
+    return res.json({ok:true,cleared:Boolean(outcome?.result?.cleared)});
+  }catch(error:any){return res.status(error?.status||503).json({error:error?.message||'Saved profit set could not be cleared.'});}
+});
+
 app.get('/api/exchange-invoices',requireStaffPermission('exchange_parcels'),async(_req,res)=>{
   try{
     const records=(await exchangeWaybillRows()).filter((row:any)=>row.exchange_invoice).map((row:any)=>({...row.exchange_invoice,waybill_status:row.status}));
