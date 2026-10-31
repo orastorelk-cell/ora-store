@@ -231,7 +231,7 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
     try {
       const { createPaidWaybillProfitPdf } = await import('../../lib/paidWaybillProfitPdf');
       const doc = createPaidWaybillProfitPdf(report, { facebook: String(facebook.totalSpend), tiktok, sourceName: `Date range: ${fromDate || 'All dates'} to ${toDate || 'All dates'} | Waybills: ${waybillFile} | Facebook source: ${facebook.fileName} | TikTok invoice dates: ${TIKTOK_INVOICE_COST.from} to ${TIKTOK_INVOICE_COST.to}`,
-        paymentBasis: basis, facebookReportingPeriods: facebook.periods, currentFacebookCsv: facebook, currentCsvAllocation: allocation!, itemCodeBreakdown: itemCodeSummary });
+        paymentBasis: basis, facebookReportingPeriods: facebook.periods, currentFacebookCsv: facebook, currentCsvAllocation: allocation!, itemCodeBreakdown: itemCodeSummary, includeAccountNet: accountNetProfit !== null });
       doc.save(`O-RA_Current_CSV_Profit_${profitSystemDay(new Date().toISOString())}.pdf`);
     } catch (e: any) { setMessage(e.message || 'PDF could not be created.'); }
     finally { setBusy(''); }
