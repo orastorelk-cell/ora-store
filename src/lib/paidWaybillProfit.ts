@@ -44,6 +44,8 @@ export interface ProfitRow {
   returnFee?: number | null;
   packing: number | null;
   profit: number | null;
+  /** True when uncovered quantity uses the latest saved item/variant price. */
+  estimatedPurchasing?: boolean;
   paymentNote?: string;
   issues: string[];
   eligible: boolean;
@@ -311,9 +313,17 @@ function latestPurchasePrices(purchases: PurchaseOrder[], productFor: ReturnType
   }
   return (selection: PurchaseSelection) => {
     const productId = productFor(selection)?.id || selection.product_id;
+    // If the order snapshot carries a base SKU with a variant ID, use only
+    // that variant's separately saved history/price; never borrow another variant.
+    const exactVariant = selection.variant_id
+      ? identities.get(JSON.stringify([String(productId), String(selection.variant_id)]))
+        || (selection.product_id ? identities.get(JSON.stringify([String(selection.product_id), String(selection.variant_id)])) : undefined)
+      : undefined;
+    if (selection.variant_id) {
+      const variantSku = productFor(selection)?.variants?.find(variant => String(variant.id) === String(selection.variant_id))?.sku;
+      return exactVariant || (variantSku ? latest.get(skuKey(variantSku)) : undefined);
+    }
     return latest.get(inventoryKey(selection))
-      || (selection.variant_id ? identities.get(JSON.stringify([String(productId), String(selection.variant_id)])) : undefined)
-      || (selection.product_id && selection.variant_id ? identities.get(JSON.stringify([String(selection.product_id), String(selection.variant_id)])) : undefined)
       || products.get(String(productId)) || products.get(String(selection.product_id))
       || (selection.main_sku ? latest.get(skuKey(selection.main_sku)) : undefined);
   };
@@ -424,8 +434,10 @@ export function buildPaidWaybillProfitReport(input: {
       const original = costs.get(order.id)?.[index];
       const uncovered: PurchaseAllocation[] = valid ? required.map(selection => ({ purchaseId: '', reference: 'Missing purchase history',
         sku: selection.sku, quantity: selection.quantity, unitCost: null })) : [];
-      const completeHistory = original?.length && original.every(allocation => allocation.unitCost !== null);
-      const allocations = (completeHistory ? original : uncovered).map(allocation => {
+      // Keep every recorded FIFO allocation. Only quantity that has no saved
+      // receipt uses a latest exact item/variant unit price.
+      const historyAllocations = original?.length ? original : uncovered;
+      const allocations = historyAllocations.map(allocation => {
         const selection = required.find(selection => selection.sku === allocation.sku);
         const latest = allocation.unitCost === null && selection ? latestPrices(selection) : undefined;
         return latest ? { ...latest, quantity: allocation.quantity } : allocation;
@@ -435,11 +447,10 @@ export function buildPaidWaybillProfitReport(input: {
       const sales = valid ? amount(item.subtotal) ?? (unit === null ? null : round(unit * qty)) : null;
       if (!valid || sales === null || unit === null) row.issues.push(`${item.sku || item.product_name}: sale price / quantity needs review.`);
       if (purchasing === null) row.issues.push(`${item.sku || item.product_name}: no usable Purchasing price was found for this item type.`);
-      // A latest-price fallback is an ESTIMATE, not the FIFO cost of an old
-      // delivered order. Incomplete historical receipts must not produce
-      // a deceptively exact net profit or downloadable "verified" totals.
+      // The user-selected latest-price fallback is usable for provisional profit,
+      // but remains visibly identified as an estimate in the report and PDF.
       if (allocations.some(allocation => allocation.costBasis === 'latest-purchase'))
-        row.issues.push(`${item.sku || item.product_name}: historical Purchasing cost is missing; latest buying price is only an estimate. Recover receipts before reporting final profit.`);
+        row.estimatedPurchasing = true;
       return { name: `${item.product_name}${item.variant_name ? ` - ${item.variant_name}` : ''}`, sku: item.sku, quantity: qty, unitSale: unit, sales, purchasing, allocations };
     });
     if (!row.items.length) row.issues.push('This order has no items.');

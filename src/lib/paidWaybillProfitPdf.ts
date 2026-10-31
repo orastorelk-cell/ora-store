@@ -95,8 +95,8 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
   doc.text(currentCsv && shownProfit !== null ? complete ? 'Paid / returned lead shares deducted; pending and other lead shares held separately.' : 'Provisional: unresolved FB matches or TikTok cost must be reviewed before final profit.' : complete ? 'Sales: receipts - Purchasing - delivery - packing - FB. Returns: - Return Fee - FB only.' : options.advertisingError ? text(options.advertisingError).slice(0, 140) : shownProfit !== null ? `Not final: ${allocation?.missingOrderIds.length || 0} FB cost matches need review. Their unresolved costs are not yet deducted.` : allocation ? 'Review missing costs, lead matching or delivery confirmation. Pending / unmatched ad spend is shown separately.' : `${report.totals.review} order(s) need review. ${advertising.missing.length ? `Enter ${advertising.missing.join(' / ')} cost (0 if none).` : 'Review missing amounts before treating this as a final profit.'}`, left + 4, y + 14);
   doc.setTextColor(55, 65, 81); y += 31;
   const notes = [
-    'Summary totals include complete orders only. Every selected sale or returned waybill is listed in the detail pages.',
-    'Purchasing uses FIFO history. Missing history uses the latest exact item price, or the latest Purchasing price for the same item type, multiplied by the full quantity.',
+    'Summary totals include report-ready orders. Latest-price estimates are identified in the order details.',
+    'Available FIFO Purchasing costs are kept. Only uncovered quantities use the latest saved item/variant unit price; those portions are estimates and are marked Latest price in the order details.',
     'Sale lines show the saved selling prices. Profit uses recorded gross receipts, so order discounts, customer delivery and bank advances are accounted for.',
     'An identified net Fardar remittance is reconciled to gross receipts before subtracting the courier charge once.',
     currentCsv ? 'Returned waybills deduct their actual Return Fee and their own FB share once. Purchasing and packing are zero. Pending lead costs are not deducted.' : 'Returned waybills deduct the actual Return Fee and their Facebook cost once. Purchasing and packing are zero. Their own FB cost is removed from the shared loss pool.',
@@ -223,7 +223,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     const purchaseLines = row.outcome === 'returned' ? ['Rs.0 - returned items'] : row.items.flatMap(item => [money(item.purchasing), ...item.allocations.map(allocation => `${allocation.costBasis === 'latest-purchase' ? 'Latest price / ' : ''}${text(allocation.reference)}: ${allocation.quantity} x ${money(allocation.unitCost)}`)]);
     const saleLines = row.outcome === 'returned' ? ['Returned parcel - no sale'] : row.items.map(item => `${item.quantity} x ${money(item.unitSale)} = ${money(item.sales)}`);
     const cellValues = [
-      [text(row.waybill || 'Not assigned'), text(row.orderNumber || 'Not found'), text(row.source || ''), ...(row.outcome === 'returned' ? ['RETURN COMPLETE'] : []), row.issues.length ? 'NEEDS REVIEW' : 'COMPLETE'],
+      [text(row.waybill || 'Not assigned'), text(row.orderNumber || 'Not found'), text(row.source || ''), ...(row.outcome === 'returned' ? ['RETURN COMPLETE'] : []), row.issues.length ? 'NEEDS REVIEW' : row.estimatedPurchasing ? 'PURCHASING ESTIMATE' : 'COMPLETE'],
       [row.systemDate || '-'],
       row.items.length ? row.items.flatMap(item => [text(item.name), `${text(item.sku)} | Qty ${item.quantity}`]) : ['No matched order'],
       [...saleLines, `Received: ${money(row.received)}`],
