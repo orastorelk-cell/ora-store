@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BarChart3, Download, RefreshCw, Upload, X } from 'lucide-react';
 import { facebookRequiredCostDates } from '../../lib/facebookProfitAds';
 import { staffJsonRequest } from '../../lib/staffRequest';
+import { autoMapHeader, downloadCsv, parseCsv, parseFlexibleDate } from '../../lib/csv';
 import type { Order, PurchaseOrder, ReturnRecord } from '../../types';
 import { buildPaidWaybillProfitReport, parseProfitWaybillUpload, profitMoney, profitSystemDay, type PaymentAmountBasis, type ProfitCatalogProduct, aggregateProfitByItemCode, normalizeProfitWaybill } from '../../lib/paidWaybillProfit';
 import { allocateCurrentCsvCosts, currentFacebookCsv, currentFacebookInsights, currentCsvProfitSummary, type CurrentFacebookCsv } from '../../lib/currentCsvProfit';
@@ -24,7 +25,8 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
   const [fromDate, setFromDate] = useState(''), [toDate, setToDate] = useState('');
   const [busy, setBusy] = useState(''), [message, setMessage] = useState(''), [calculated, setCalculated] = useState(false);
   const [search, setSearch] = useState(''), [page, setPage] = useState(1);
-  const waybillInput = useRef<HTMLInputElement>(null), facebookInput = useRef<HTMLInputElement>(null);
+  const waybillInput = useRef<HTMLInputElement>(null), facebookInput = useRef<HTMLInputElement>(null), mergeCsvInput = useRef<HTMLInputElement>(null);
+  const [mergeBusy, setMergeBusy] = useState(false), [mergeMessage, setMergeMessage] = useState('');
   const fbSequence = useRef(0), waybillSequence = useRef(0), metaSequence = useRef(0);
   const [verifiedLeads, setVerifiedLeads] = useState<Record<string, { lead_id: string; created_at: string; ad_id: string; adset_id: string; campaign_id: string; ad_day?: string }>>({});
   useEffect(() => () => { metaSequence.current++; }, []);
@@ -77,6 +79,50 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
   const freshReport = () => {
     fbSequence.current++; waybillSequence.current++; metaSequence.current++; setVerifiedLeads({});
     setWaybills([]); setWaybillFile(''); setFacebook(null); setFacebookStatus('missing'); setBasis('auto'); setFromDate(''); setToDate(''); setCalculated(false); setMessage(''); setSearch(''); setPage(1);
+  };
+  const mergeAndDownloadCsv = async (files?: FileList | null) => {
+    const selected = Array.from(files || []);
+    if (!selected.length) return;
+    setMergeBusy(true); setMergeMessage('');
+    try {
+      if (selected.length < 2) throw new Error('Select all four CSV files together to merge them.');
+      const parsedFiles = await Promise.all(selected.map(async file => ({ name: file.name, ...parseCsv(await file.text()) })));
+      if (parsedFiles.some(file => !file.headers.length)) throw new Error('One of the selected files has no CSV header or rows.');
+      const allHeaders = [...new Set(parsedFiles.flatMap(file => file.headers))];
+      const waybillColumns = parsedFiles.map(file => autoMapHeader(file.headers, ['Waybill ID', 'Waybill Number', 'Waybill', 'Tracking Number']));
+      const missingHeader = parsedFiles.findIndex((file, index) => !waybillColumns[index]);
+      if (missingHeader >= 0) throw new Error(`${parsedFiles[missingHeader].name} has no Waybill ID column.`);
+      const dateColumns = parsedFiles.map(file => autoMapHeader(file.headers, ['Last Scan Date', 'Last Scan', 'Date Last Scanned', 'Scan Date']));
+      const latestByWaybill = new Map<string, { row: Record<string, string>; scannedAt: number; sequence: number }>();
+      let missingWaybillRows = 0, duplicateRows = 0, sequence = 0;
+      parsedFiles.forEach((file, fileIndex) => file.rows.forEach(row => {
+        sequence++;
+        const waybill = normalizeProfitWaybill(row[waybillColumns[fileIndex]]);
+        if (!waybill) { missingWaybillRows++; return; }
+        const dateText = dateColumns[fileIndex] ? parseFlexibleDate(row[dateColumns[fileIndex]]) : '';
+        const scannedAt = dateText ? Date.parse(dateText) : Number.NEGATIVE_INFINITY;
+        const previous = latestByWaybill.get(waybill);
+        if (previous) {
+          duplicateRows++;
+          const isNewer = scannedAt > previous.scannedAt || (scannedAt === previous.scannedAt && sequence > previous.sequence);
+          const combinedRow = { ...previous.row };
+          allHeaders.forEach(header => {
+            const value = row[header] || '';
+            if (value && (isNewer || !combinedRow[header])) combinedRow[header] = value;
+          });
+          latestByWaybill.set(waybill, { row: combinedRow, scannedAt: isNewer ? scannedAt : previous.scannedAt, sequence: isNewer ? sequence : previous.sequence });
+          return;
+        }
+        latestByWaybill.set(waybill, { row, scannedAt, sequence });
+      }));
+      if (!latestByWaybill.size) throw new Error('No rows with a Waybill ID were found in the selected files.');
+      const outputRows: (string | number)[][] = [allHeaders, ...[...latestByWaybill.values()].map(value => allHeaders.map(header => value.row[header] || ''))];
+      const fileDate = new Date().toISOString().slice(0, 10);
+      downloadCsv(`ORA_Merged_Waybills_${fileDate}.csv`, outputRows);
+      setMergeMessage(`${selected.length} CSV files merged: ${latestByWaybill.size} unique waybills downloaded; ${duplicateRows} duplicate row(s) consolidated${missingWaybillRows ? `; ${missingWaybillRows} row(s) without a Waybill ID skipped` : ''}. The latest Last Scan Date was kept for duplicates.`);
+    } catch (error: any) {
+      setMergeMessage(error?.message || 'CSV merge failed. Select the source files again and retry.');
+    } finally { setMergeBusy(false); }
   };
   const uploadWaybills = async (file?: File) => {
     if (!file) return;
@@ -227,6 +273,17 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
     </section>}
     <section className="rounded-2xl border bg-white p-5 shadow-sm">
       <h3 className="font-black">1. All Payment / Return Waybills</h3><p className="mt-2 text-sm text-gray-500">Payment sets සියල්ල සහ Return Complete waybills ඇතුළත් CSV එක තෝරන්න. එකම waybill එක දෙපාරක් ගණනය වෙන්නේ නැහැ.</p>
+      <div className="mt-4 rounded-xl border border-orange-200 bg-orange-50 p-4">
+        <p className="text-sm font-bold text-orange-950">Merge CSV files and download one file</p>
+        <p className="mt-1 text-xs text-orange-900">Select the four Fardar delivery/return CSV files together. Duplicate waybills are kept once, using the row with the latest Last Scan Date.</p>
+        <input ref={mergeCsvInput} aria-label="Select Fardar CSV files to merge" type="file" accept=".csv,.tsv,.txt,text/csv,text/plain" multiple className="hidden"
+          onChange={event => { void mergeAndDownloadCsv(event.target.files); event.target.value = ''; }} />
+        <button type="button" onClick={() => mergeCsvInput.current?.click()} disabled={mergeBusy || Boolean(busy)}
+          className="mt-3 inline-flex items-center gap-2 rounded-lg bg-orange-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-40">
+          <Download className="h-4 w-4" />{mergeBusy ? 'Merging CSV files…' : 'Select CSVs and Download Merged CSV'}
+        </button>
+        {mergeMessage && <p role="status" className="mt-2 text-xs font-semibold text-orange-950">{mergeMessage}</p>}
+      </div>
       <button type="button" onClick={() => waybillInput.current?.click()} disabled={Boolean(busy)} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-40"><Upload className="h-4 w-4" />Upload Waybill CSV</button>
       <input ref={waybillInput} aria-label="Current report waybill CSV" type="file" accept=".csv,.tsv,.txt,text/csv,text/plain" className="hidden" onChange={event => { void uploadWaybills(event.target.files?.[0]); event.target.value = ''; }} />
       {waybillFile && <div className="mt-4 rounded-xl bg-gray-50 p-4 text-sm"><p className="break-all font-bold">{waybillFile}</p><p className="mt-2">{waybills.length} unique waybills · {report.rows.filter(row => row.outcome !== 'returned').length} sales · {report.rows.filter(row => row.outcome === 'returned').length} returns · {report.totals.review} need review</p></div>}
