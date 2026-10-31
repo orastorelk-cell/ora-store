@@ -1,6 +1,6 @@
 import type { Order } from '../types';
 import { facebookAdCode, parseFacebookAdCostCsv, type FacebookAdCost } from './facebookProfitAds';
-import { isReturnedProfitOrder, profitSystemDay, savedProfitPaymentKind, type PaidWaybillProfitReport } from './paidWaybillProfit';
+import { isFinalProfitOrder, profitSystemDay, type PaidWaybillProfitReport } from './paidWaybillProfit';
 
 const cents = (amount: number) => Math.round(amount * 100);
 export interface CurrentFacebookCsv {
@@ -49,9 +49,7 @@ const note = (order: Order, label: string) => order.notes?.match(new RegExp('(?:
 const entity = (order: Order, level: string) => level === 'ad' ? order.platform_ad_id || note(order, 'Ad ID')
   : level === 'adset' ? order.platform_adset_id || note(order, 'Ad Set ID') : order.platform_campaign_id || note(order, 'Campaign ID');
 const isFacebook = (order: Order) => order.order_source === 'Facebook Ads' || /^FB-/i.test(order.order_number);
-const pending = (order: Order) => !(order.order_status === 'Cancelled' || order.call_center_status === 'Cancelled'
-  || order.payment_status === 'Refunded' || isReturnedProfitOrder(order)
-  || savedProfitPaymentKind(order) && (order.cod_payment_received || order.order_status === 'Delivered' || order.fardar_invoice_status === 'Delivered'));
+const pending = (order: Order) => !isFinalProfitOrder(order);
 
 /** Allocate an average acquisition cost to unique leads, including pending ones.
  * Only selected paid/returned waybills are deducted. Every other cent stays in

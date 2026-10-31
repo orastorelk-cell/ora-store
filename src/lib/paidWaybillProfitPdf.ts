@@ -56,7 +56,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
       ['Facebook cost for selected returned waybills', -allocation.returnedCost],
       ['FB loss deducted (cancelled / returned / zero leads)', -allocation.lostCost],
       ['Commercial / promotion share deducted', -allocation.commercialCost],
-    ] as Array<[string, number]> : [[currentCsv ? 'Facebook paid / returned lead shares only' : 'Facebook advertising cost', advertising.facebook === null && report.ranges.Facebook ? null : -(advertising.facebook ?? 0)]] as Array<[string, number | null]>),
+    ] as Array<[string, number]> : [[currentCsv ? 'Facebook final delivered / returned / cancelled lead shares only' : 'Facebook advertising cost', advertising.facebook === null && report.ranges.Facebook ? null : -(advertising.facebook ?? 0)]] as Array<[string, number | null]>),
     ['TikTok advertising cost', advertising.tiktok === null && report.ranges.TikTok ? null : -(advertising.tiktok ?? 0)],
     ...((options.includeAccountNet && currentCsv ? [['NET AFTER FULL META ACCOUNT SPEND', currentCsvProfitSummary(report, currentCsv, options.tiktok, options.currentCsvAllocation).accountNetProfit]] : []) as Array<[string, number | null]>),
   ];
@@ -95,28 +95,28 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
   doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.text(!complete && shownProfit !== null ? 'PROVISIONAL PROFIT - RECORDED COSTS' : allocation ? complete ? allocation.waybillScoped ? 'UPLOADED-WAYBILL PROFIT AFTER ADVERTISING' : 'PAID-ORDER PROFIT AFTER ADVERTISING' : 'PROFIT - PENDING REVIEW' : complete ? currentCsv ? 'ALLOCATED NET PROFIT - SELECTED WAYBILLS' : 'FINAL NET PROFIT' : 'FINAL NET PROFIT - PENDING REVIEW', left + 4, y + 4);
   doc.setFontSize(19); doc.text(money(shownProfit), left + width - 4, y + 6, { align: 'right' });
   doc.setFontSize(8); doc.setFont('helvetica', 'normal');
-  doc.text(currentCsv && shownProfit !== null ? complete ? 'Paid / returned lead shares deducted; pending and other lead shares held separately.' : 'Provisional: unresolved FB matches or TikTok cost must be reviewed before final profit.' : complete ? 'Sales: receipts - Purchasing - actual delivery fee - packing for delivered orders - FB. Returns: - Return Fee - FB only.' : options.advertisingError ? text(options.advertisingError).slice(0, 140) : shownProfit !== null ? `Not final: ${allocation?.missingOrderIds.length || 0} FB cost matches need review. Their unresolved costs are not yet deducted.` : allocation ? 'Review missing costs, lead matching or delivery confirmation. Pending / unmatched ad spend is shown separately.' : `${report.totals.review} order(s) need review. ${advertising.missing.length ? `Enter ${advertising.missing.join(' / ')} cost (0 if none).` : 'Review missing amounts before treating this as a final profit.'}`, left + 4, y + 14);
+  doc.text(currentCsv && shownProfit !== null ? complete ? 'Final delivered / returned / cancelled lead shares deducted; Fardar processing shares are excluded.' : 'Provisional: unresolved FB matches or TikTok cost must be reviewed before final profit.' : complete ? 'Sales: receipts - Purchasing - actual delivery fee - packing - FB. Returns: - Return Fee - FB only. Cancelled orders: no sale/courier/packing; matched FB cost applies.' : options.advertisingError ? text(options.advertisingError).slice(0, 140) : shownProfit !== null ? `Not final: ${allocation?.missingOrderIds.length || 0} FB cost matches need review. Their unresolved costs are not yet deducted.` : allocation ? 'Review missing costs, lead matching or delivery confirmation. Pending / unmatched ad spend is shown separately.' : `${report.totals.review} order(s) need review. ${advertising.missing.length ? `Enter ${advertising.missing.join(' / ')} cost (0 if none).` : 'Review missing amounts before treating this as a final profit.'}`, left + 4, y + 14);
   doc.setTextColor(55, 65, 81); y += 31;
   const notes = [
     'Summary totals include report-ready orders. Latest-price estimates are identified in the order details.',
     'Available FIFO Purchasing costs are kept. Only uncovered quantities use the latest saved item/variant unit price; those portions are estimates and are marked Latest price in the order details.',
     'Sale lines show the saved selling prices. Profit uses recorded gross receipts, so order discounts, customer delivery and bank advances are accounted for.',
     'An identified net Fardar remittance is reconciled to gross receipts before subtracting the courier charge once.',
-    currentCsv ? 'Returned waybills deduct their actual Return Fee and their own FB share once. Purchasing and packing are zero. Pending lead costs are not deducted.' : 'Returned waybills deduct the actual Return Fee and their Facebook cost once. Purchasing and packing are zero. Their own FB cost is removed from the shared loss pool.',
+    currentCsv ? 'Only final Delivered, Return Complete and Cancelled orders enter this report. Processing orders and their Facebook shares are excluded. Returned waybills deduct one Return Fee.' : 'Returned waybills deduct the actual Return Fee and their Facebook cost once. Purchasing and packing are zero. Their own FB cost is removed from the shared loss pool.',
   ];
   doc.setFontSize(8);
   notes.forEach(note => { const lines = doc.splitTextToSize(note, width); if (y + lines.length * 4 > bottom) { doc.addPage(); title('Report notes'); y = 35; } doc.text(lines, left, y); y += lines.length * 4 + 1; });
 
   if (currentCsv) {
     const metaLive = currentCsv.fileName.startsWith('Facebook API · ');
-    doc.addPage(); title(metaLive ? 'LIVE META ADS COSTS | Paid / returned shares; pending costs reserved' : 'CURRENT FACEBOOK CSV | Paid / returned shares; pending costs reserved'); y = 35;
+    doc.addPage(); title(metaLive ? 'LIVE META ADS COSTS | Final Fardar order shares; processing costs reserved' : 'CURRENT FACEBOOK CSV | Final Fardar order shares; processing costs reserved'); y = 35;
     const intro = [
       `${metaLive ? 'Meta source' : 'Current file'}: ${text(currentCsv.fileName)}`,
       `Full Facebook spend: ${money(currentCsv.totalSpend)} | Item ads: ${money(currentCsv.itemSpend)} | Commercial: ${money(currentCsv.commercialSpend)}`,
       'Only the current Facebook cost source is used. Previous reports and browser cost values are never loaded.',
-      'Only selected paid / returned lead shares are deducted. Pending leads keep their shares until paid or returned.',
+      'Facebook cost is deducted only for final delivered / returned / cancelled orders. Fardar processing orders are excluded and their cost share remains reserved.',
       `Order shares: ${money(options.currentCsvAllocation?.assignedSpend || 0)} | All other spend held separately: ${money(options.currentCsvAllocation?.unassignedSpend || 0)}`,
-      `Pending: ${money(options.currentCsvAllocation?.pendingSpend || 0)} | Other orders: ${money(options.currentCsvAllocation?.otherSpend || 0)} | Unmatched: ${money(options.currentCsvAllocation?.unmatchedSpend || 0)}`,
+      `Fardar processing / non-final: ${money(options.currentCsvAllocation?.pendingSpend || 0)} | Other orders: ${money(options.currentCsvAllocation?.otherSpend || 0)} | Unmatched: ${money(options.currentCsvAllocation?.unmatchedSpend || 0)}`,
       options.currentCsvAllocation?.missingOrderIds.length ? `${options.currentCsvAllocation.missingOrderIds.length} selected Facebook orders have unresolved cost matches. Their costs are NOT assumed to be zero; profit is provisional.` : 'All selected Facebook waybills matched. Pending cost remains separate.',
       'Acquisition cost is an average across ALL unique leads in each original lead-date / ad-ID or form-code cohort. Commercial uses the same lead pool.',
     ];
@@ -242,7 +242,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     { label: 'PACKING', width: 24 }, { label: 'PROFIT*', width: 34 },
   ];
   const header = () => {
-    title(currentCsv ? 'Order details | Current paid / returned FB shares only. Pending shares are excluded.' : allocation ? allocation.waybillScoped ? 'Order details | After FB deducts item ads, FB loss share and Commercial share.' : 'Order details | After FB deducts item ads and Commercial; ad losses are in the summary.' : 'Order details | * Order profit is before advertising costs. All amounts are LKR.');
+    title(currentCsv ? 'Order details | Current final Fardar order FB shares only. Processing shares are excluded.' : allocation ? allocation.waybillScoped ? 'Order details | After FB deducts item ads, FB loss share and Commercial share.' : 'Order details | After FB deducts item ads and Commercial; ad losses are in the summary.' : 'Order details | * Order profit is before advertising costs. All amounts are LKR.');
     y = 35; doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5); doc.setFillColor(243, 244, 246); doc.rect(left, y - 4, width, 9, 'F');
     let x = left;
     columns.forEach(column => { doc.text(column.label, x + 2, y + 1); x += column.width; }); y += 9;
@@ -253,10 +253,10 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     const currentCost = row.orderId ? options.currentCsvAllocation?.orderCosts.get(row.orderId) : undefined;
     const fullFacebookCost = currentCsv ? row.source === 'Facebook' ? currentCost?.total ?? null : 0 : allocation ? facebookOrderAdvertisingCost(allocation, row.orderId) : null;
     const afterFacebook = fullFacebookCost !== null && row.profit !== null ? Math.round((row.profit - fullFacebookCost) * 100) / 100 : null;
-    const purchaseLines = row.outcome === 'returned' ? ['Rs.0 - returned items'] : row.items.flatMap(item => [money(item.purchasing), ...item.allocations.map(allocation => `${allocation.returnedStock ? 'Returned stock / ' : ''}${allocation.costBasis === 'latest-purchase' ? 'Latest price / ' : ''}${text(allocation.reference)}: ${allocation.quantity} x ${money(allocation.unitCost)}`)]);
-    const saleLines = row.outcome === 'returned' ? ['Returned parcel - no sale'] : row.items.map(item => `${item.quantity} x ${money(item.unitSale)} = ${money(item.sales)}`);
+    const purchaseLines = row.outcome === 'returned' ? ['Rs.0 - returned items'] : row.outcome === 'cancelled' ? ['Rs.0 - cancelled order'] : row.items.flatMap(item => [money(item.purchasing), ...item.allocations.map(allocation => `${allocation.returnedStock ? 'Returned stock / ' : ''}${allocation.costBasis === 'latest-purchase' ? 'Latest price / ' : ''}${text(allocation.reference)}: ${allocation.quantity} x ${money(allocation.unitCost)}`)]);
+    const saleLines = row.outcome === 'returned' ? ['Returned parcel - no sale'] : row.outcome === 'cancelled' ? ['Cancelled order - no sale'] : row.items.map(item => `${item.quantity} x ${money(item.unitSale)} = ${money(item.sales)}`);
     const cellValues = [
-      [text(row.waybill || 'Not assigned'), text(row.orderNumber || 'Not found'), text(row.source || ''), ...(row.outcome === 'returned' ? ['RETURN COMPLETE'] : row.reusedReturnPackaging ? ['RETURN PACKAGING REUSED - NO RS.100 CHARGE'] : []), row.issues.length ? 'NEEDS REVIEW' : row.estimatedPurchasing ? 'PURCHASING ESTIMATE' : 'COMPLETE'],
+      [text(row.waybill || 'Not assigned'), text(row.orderNumber || 'Not found'), text(row.source || ''), ...(row.outcome === 'returned' ? ['RETURN COMPLETE'] : row.outcome === 'cancelled' ? ['CANCELLED - AD COST ONLY'] : row.reusedReturnPackaging ? ['RETURN PACKAGING REUSED - NO RS.100 CHARGE'] : []), row.issues.length ? 'NEEDS REVIEW' : row.estimatedPurchasing ? 'PURCHASING ESTIMATE' : 'COMPLETE'],
       [row.systemDate || '-'],
       row.items.length ? row.items.flatMap(item => [text(item.name), `${text(item.sku)} | Qty ${item.quantity}`]) : ['No matched order'],
       [...saleLines, `Received: ${money(row.received)}`],
