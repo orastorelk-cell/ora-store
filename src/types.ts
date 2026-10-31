@@ -778,6 +778,9 @@ export interface ExchangeInvoiceRecord {
   created_by: string;
   refund_completed_at?: string;
   refund_completed_by?: string;
+  refund_slip_path?: string;
+  refund_slip_file_name?: string;
+  refund_slip_content_type?: string;
 }
 
 
