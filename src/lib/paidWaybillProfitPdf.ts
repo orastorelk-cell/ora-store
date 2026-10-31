@@ -47,7 +47,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     ['Purchasing cost from Purchase History', -report.totals.purchasing],
     ['Actual Fardar delivery cost', -report.totals.courier],
     ['Actual Fardar Return Fees (deducted once)', -report.totals.returnFees],
-    [`Packing (${report.totals.packing / PROFIT_PACKING_COST} sales x Rs. ${PROFIT_PACKING_COST})`, -report.totals.packing],
+    [`Packing (${report.totals.packing / PROFIT_PACKING_COST} delivered orders x Rs. ${PROFIT_PACKING_COST})`, -report.totals.packing],
     ['PROFIT BEFORE ADVERTISING', report.totals.beforeAds],
     ...(allocation ? [
       ['Facebook item-ad cost', -allocation.paidCost],
@@ -81,7 +81,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
     rangeY += Math.max(16, lines.length * 4 + 8);
   }
   doc.text(`COD amount basis: ${options.paymentBasis}`, cardX, rangeY);
-  doc.text(`Packing: Rs. ${PROFIT_PACKING_COST} per sale; Rs.0 per return`, cardX, rangeY + 6);
+  doc.text(`Packing: Rs. ${PROFIT_PACKING_COST} per delivered order; Rs.0 per return / undelivered order`, cardX, rangeY + 6);
   y += 5;
   const complete = advertising.netProfit !== null;
   const shownProfit = advertising.netProfit ?? advertising.recordedCostProfit;
@@ -92,7 +92,7 @@ export function createPaidWaybillProfitPdf(report: PaidWaybillProfitReport, opti
   doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.text(!complete && shownProfit !== null ? 'PROVISIONAL PROFIT - RECORDED COSTS' : allocation ? complete ? allocation.waybillScoped ? 'UPLOADED-WAYBILL PROFIT AFTER ADVERTISING' : 'PAID-ORDER PROFIT AFTER ADVERTISING' : 'PROFIT - PENDING REVIEW' : complete ? currentCsv ? 'ALLOCATED NET PROFIT - SELECTED WAYBILLS' : 'FINAL NET PROFIT' : 'FINAL NET PROFIT - PENDING REVIEW', left + 4, y + 4);
   doc.setFontSize(19); doc.text(money(shownProfit), left + width - 4, y + 6, { align: 'right' });
   doc.setFontSize(8); doc.setFont('helvetica', 'normal');
-  doc.text(currentCsv && shownProfit !== null ? complete ? 'Paid / returned lead shares deducted; pending and other lead shares held separately.' : 'Provisional: unresolved FB matches or TikTok cost must be reviewed before final profit.' : complete ? 'Sales: receipts - Purchasing - delivery - packing - FB. Returns: - Return Fee - FB only.' : options.advertisingError ? text(options.advertisingError).slice(0, 140) : shownProfit !== null ? `Not final: ${allocation?.missingOrderIds.length || 0} FB cost matches need review. Their unresolved costs are not yet deducted.` : allocation ? 'Review missing costs, lead matching or delivery confirmation. Pending / unmatched ad spend is shown separately.' : `${report.totals.review} order(s) need review. ${advertising.missing.length ? `Enter ${advertising.missing.join(' / ')} cost (0 if none).` : 'Review missing amounts before treating this as a final profit.'}`, left + 4, y + 14);
+  doc.text(currentCsv && shownProfit !== null ? complete ? 'Paid / returned lead shares deducted; pending and other lead shares held separately.' : 'Provisional: unresolved FB matches or TikTok cost must be reviewed before final profit.' : complete ? 'Sales: receipts - Purchasing - actual delivery fee - packing for delivered orders - FB. Returns: - Return Fee - FB only.' : options.advertisingError ? text(options.advertisingError).slice(0, 140) : shownProfit !== null ? `Not final: ${allocation?.missingOrderIds.length || 0} FB cost matches need review. Their unresolved costs are not yet deducted.` : allocation ? 'Review missing costs, lead matching or delivery confirmation. Pending / unmatched ad spend is shown separately.' : `${report.totals.review} order(s) need review. ${advertising.missing.length ? `Enter ${advertising.missing.join(' / ')} cost (0 if none).` : 'Review missing amounts before treating this as a final profit.'}`, left + 4, y + 14);
   doc.setTextColor(55, 65, 81); y += 31;
   const notes = [
     'Summary totals include report-ready orders. Latest-price estimates are identified in the order details.',
