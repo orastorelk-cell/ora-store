@@ -40,6 +40,10 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
   const requiredDates = useMemo(() => facebookRequiredCostDates(costOrders, report), [costOrders, report]);
   const allocation = useMemo(() => facebook ? allocateCurrentCsvCosts(facebook, costOrders, report) : null, [facebook, costOrders, report]);
   const summary = useMemo(() => currentCsvProfitSummary(report, facebook, tiktok, allocation), [report, facebook, tiktok, allocation]);
+  const missingFacebookLeads = useMemo(() => {
+    const selected = new Set(report.rows.filter(row => row.source === 'Facebook' && row.eligible && row.orderId).map(row => row.orderId));
+    return costOrders.filter(order => selected.has(order.id) && !/^\d{1,64}$/.test((order.platform_lead_id || '').trim()));
+  }, [costOrders, report.rows]);
   const filtered = report.rows.filter(row => !search.trim() || [row.waybill, row.orderNumber, ...row.items.map(item => item.sku + ' ' + item.name)].join(' ').toLowerCase().includes(search.trim().toLowerCase()));
   const pages = Math.max(1, Math.ceil(filtered.length / 10)), currentPage = Math.min(page, pages);
   const visible = filtered.slice((currentPage - 1) * 10, currentPage * 10);
@@ -47,7 +51,8 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
   // Do not publish an exact net-profit number or PDF while historic
   // purchasing cost/Fardar rows still require review.
   const canCalculate = ready && !error && waybills.length > 0 && facebookStatus === 'ready'
-    && Boolean(facebook) && !summary.invalid && !busy && report.totals.review===0;
+    && Boolean(facebook) && !summary.invalid && !summary.facebookMissing && !missingFacebookLeads.length
+    && !summary.tiktokMissing && !busy && report.totals.review===0;
   const freshReport = () => {
     fbSequence.current++; waybillSequence.current++; metaSequence.current++; setVerifiedLeads({});
     setWaybills([]); setWaybillFile(''); setFacebook(null); setFacebookStatus('missing'); setTiktok(''); setBasis('auto'); setCalculated(false); setMessage(''); setSearch(''); setPage(1);
@@ -110,8 +115,17 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
     finally { if (sequence === metaSequence.current) setBusy(''); }
   };
   const fetchFacebookFromMeta = async () => {
-    const selected = [...new Set(report.rows.filter(row => row.source === 'Facebook' && row.eligible && row.orderId).map(row => row.orderId!))];
-    if (!selected.length) { setMessage('මේ payment batches වල paid Facebook orders නැහැ; Facebook ad cost fetch කරන්න order එකක් නැහැ.'); return; }
+    const selectedIds = [...new Set(report.rows.filter(row => row.source === 'Facebook' && row.eligible && row.orderId).map(row => row.orderId!))];
+    const selectedOrders = costOrders.filter(order => selectedIds.includes(order.id));
+    const missingLeadOrders = selectedOrders.filter(order => !/^\d{1,64}$/.test((order.platform_lead_id || '').trim()));
+    const selected = selectedOrders.filter(order => /^\d{1,64}$/.test((order.platform_lead_id || '').trim())).map(order => order.id);
+    if (!selected.length) {
+      const ordersText = missingLeadOrders.slice(0, 5).map(order => order.order_number || order.id).join(', ');
+      setMessage(missingLeadOrders.length
+        ? `Meta වෙත යැවිය හැකි මුල් සංඛ්‍යාත්මක Lead ID එකක් නැහැ. ${missingLeadOrders.length} Facebook ඇණවුම්වල Lead ID අඩුයි${ordersText ? ` (${ordersText})` : ''}. ඒවා නිවැරදි කරන තුරු අවසන් ලාභය ගණනය කළ නොහැක.`
+        : 'මේ payment batches වල paid Facebook orders නැහැ; Facebook ad cost fetch කරන්න order එකක් නැහැ.');
+      return;
+    }
     const sequence = ++metaSequence.current;
     fbSequence.current++; setVerifiedLeads({}); setFacebook(null); setFacebookStatus('reading'); setCalculated(false); setBusy('facebook-api'); setMessage('Meta Ads account එකෙන් Lead ID, Ad ID සහ daily spend අරගන්නවා…');
     try {
@@ -131,7 +145,10 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
       }
       const selectedFacebook = currentFacebookInsights(data);
       setVerifiedLeads(matched); setFacebook(selectedFacebook); setFacebookStatus('ready');
-      setMessage(`Facebook API එකෙන් ${data.verified_leads} Lead ID → Ad ID verify කරලා ${profitMoney(selectedFacebook.totalSpend)} ad spend ගත්තා. Ad ID සහ ad-account date අනුව order cost allocate කරලා Calculate Profit කරන්න.`);
+      const missingText = missingLeadOrders.length
+        ? ` ${missingLeadOrders.length} Facebook ඇණවුම්වල මුල් සංඛ්‍යාත්මක Lead ID නැහැ${missingLeadOrders.slice(0, 5).map(order => order.order_number || order.id).join(', ') ? ` (${missingLeadOrders.slice(0, 5).map(order => order.order_number || order.id).join(', ')})` : ''}; ඒවායේ වියදම තහවුරු කළ නොහැකි නිසා අවසන් ලාභය අවහිර කර ඇත.`
+        : '';
+      setMessage(`Facebook API එකෙන් ${data.verified_leads} Lead ID → Ad ID verify කරලා ${profitMoney(selectedFacebook.totalSpend)} ad spend ගත්තා. Ad ID සහ ad-account date අනුව order cost allocate කරලා.${missingText}`);
     } catch (e: any) {
       if (sequence === metaSequence.current) { setFacebookStatus('failed'); setMessage(e.message || 'Meta Ads cost fetch අසාර්ථකයි. Meta ads_read permission සහ Ad Account ID පරීක්ෂා කරන්න.'); }
     } finally { if (sequence === metaSequence.current) setBusy(''); }
@@ -189,8 +206,17 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
       <label className="mt-4 block text-sm font-bold">TikTok Cost for this report (Rs.)<input aria-label="Current report TikTok cost" type="number" min="0" step="0.01" value={tiktok} onChange={event => { setTiktok(event.target.value); setCalculated(false); }} placeholder="Enter cost, or 0 if none" className="mt-2 block w-full max-w-sm rounded-lg border px-3 py-2.5 font-normal" /></label>
       <details className="mt-4 text-xs text-gray-500"><summary className="cursor-pointer font-bold">Payment amount settings</summary><label className="mt-3 block">Saved Fardar amount <select aria-label="Current report Fardar amount basis" value={basis} onChange={event => { setBasis(event.target.value as PaymentAmountBasis); setCalculated(false); }} className="rounded-lg border px-3 py-2"><option value="auto">Auto — reconcile saved amounts</option><option value="gross">Gross — before courier deduction</option><option value="net">Net — after courier deduction</option></select></label></details>
     </section>
-    <section className="rounded-2xl border bg-white p-5 shadow-sm"><h3 className="font-black">3. Calculate All Selected Waybills</h3><button type="button" disabled={!canCalculate} onClick={() => { setCalculated(true); setMessage('Profit calculated from current Meta Ads data. Pending lead cost is held separately.'); }} className="mt-4 rounded-xl bg-gray-900 px-5 py-3 text-sm font-bold text-white disabled:opacity-40">Calculate Profit</button>{!facebook && <p className="mt-3 text-sm text-gray-500">Fetch current Facebook Ads costs automatically or choose the CSV fallback to calculate.</p>}</section>
-    {calculated && facebook && allocation && <>
+    <section className="rounded-2xl border bg-white p-5 shadow-sm"><h3 className="font-black">3. Calculate All Selected Waybills</h3><button type="button" disabled={!canCalculate} onClick={() => { setCalculated(true); setMessage('Profit calculated from current Facebook data and the TikTok cost entered for this report. Pending Facebook lead cost is held separately.'); }} className="mt-4 rounded-xl bg-gray-900 px-5 py-3 text-sm font-bold text-white disabled:opacity-40">Calculate Profit</button>{!facebook && <p className="mt-3 text-sm text-gray-500">Fetch current Facebook Ads costs automatically or choose the CSV fallback to calculate.</p>}</section>
+    {summary.tiktokMissing && <p role="alert" className="rounded-xl border border-amber-400 bg-amber-50 p-4 text-sm font-semibold text-amber-950">
+      තෝරාගත් waybill අතර ගෙවීම් ලැබුණු TikTok ඇණවුම් {report.ranges.TikTok?.count || 0}ක් තියෙනවා. TikTok දැන්වීම් වියදම ඇතුළත් කරන්න; වියදමක් නොතිබුණා නම් 0 දාන්න. ඒ තුරු අවසන් ලාභය සහ PDF සකස් කරන්න බැහැ.
+    </p>}
+    {facebook && allocation && (summary.facebookMissing || missingFacebookLeads.length > 0) && <p role="alert" className="rounded-xl border border-amber-400 bg-amber-50 p-4 text-sm font-semibold text-amber-950">
+      {missingFacebookLeads.length > 0 && <span>{missingFacebookLeads.length} Facebook ඇණවුම්වල මුල් සංඛ්‍යාත්මක Lead ID නැහැ. </span>}
+      {allocation.missingOrderIds.length > 0 && <span>{allocation.missingOrderIds.length} Facebook ඇණවුම්වල වියදම තවම තහවුරු වී නැහැ. </span>}
+      {allocation.issues.length > 0 && <span>{allocation.issues[0]} </span>}
+      මේවා නිවැරදි කරන තුරු අවසන් ලාභය ගණනය කිරීම සහ PDF අපනයනය අවහිරයි.
+    </p>}
+    {calculated && facebook && allocation && canCalculate && <>
       <section className="rounded-2xl border bg-white p-5 shadow-sm"><div className="flex flex-wrap items-center justify-between gap-3"><h3 className="font-black">Profit for All {report.rows.length} Waybills</h3><button type="button" disabled={!canCalculate} onClick={download} className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-40"><Download className="h-4 w-4" />Download Summary PDF</button></div><dl className="mt-4 divide-y">{values.map(([label, value]) => <div key={label} className="flex items-center justify-between gap-4 py-3 text-sm"><dt className="text-gray-600">{label}</dt><dd className="whitespace-nowrap font-bold">{money(value)}</dd></div>)}</dl>
         <div className={`mt-4 rounded-xl p-5 ${summary.recordedCostProfit === null ? 'bg-amber-50 text-amber-900' : summary.recordedCostProfit >= 0 ? 'bg-emerald-50 text-emerald-900' : 'bg-red-50 text-red-900'}`}><p className="text-sm font-black">{summary.netProfit !== null ? 'Allocated Net Profit — Selected Payment Batches' : summary.facebookMissing ? 'Provisional Profit — Facebook Matches Need Review' : summary.tiktokMissing && summary.recordedCostProfit !== null ? 'Profit After FB — TikTok Cost Not Yet Deducted' : 'Profit — Financial Records Need Review'}</p><p className="mt-2 text-3xl font-black">{money(summary.recordedCostProfit)}</p>{summary.tiktokMissing && <p className="mt-3 text-sm">TikTok cost එක තවම දාලා නැහැ. සම්පූර්ණ net profit එකට ඒක දාන්න; නැත්නම් 0 දාන්න.</p>}{report.totals.review > 0 && <p className="mt-3 text-sm">{report.totals.review} waybill(s) need payment / cost review. Check the highlighted rows below.</p>}<p className="mt-3 text-xs">All receipts − Purchasing − delivery − Return Fees − sale packing − selected paid / returned Facebook shares − this report's TikTok cost. Pending FB shares are excluded.</p></div>
         <div aria-label="Facebook cost reconciliation" className="mt-4 rounded-xl bg-blue-50 p-4 text-sm text-blue-900"><p className="font-bold">{facebook.fileName.startsWith('Facebook API · ') ? 'Meta live ad/day spend · allocated cost per lead' : 'Current CSV ad/day spend · allocated cost per lead'}</p><p className="mt-2">Deducted for these paid / returned waybills: {profitMoney(allocation.assignedSpend)}</p><p className="mt-2">Pending leads — NOT deducted: {profitMoney(allocation.pendingSpend)}</p><p className="mt-2">Other orders outside this waybill list — NOT deducted: {profitMoney(allocation.otherSpend)}</p><p className="mt-2">Unmatched / zero-lead spend — NOT deducted: {profitMoney(allocation.unmatchedSpend)}</p><p className="mt-2">Total Facebook account spend: {profitMoney(allocation.totalSpend)}</p><p className="mt-2 text-xs">Lead ID identifies its ad. Meta provides ad/day spend, so each order receives its share of that ad’s cost per lead; it does not provide a separate spend amount per order ID.</p></div>
