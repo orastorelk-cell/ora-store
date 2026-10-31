@@ -69,6 +69,19 @@ export function allocateCurrentCsvCosts(input: CurrentFacebookCsv, orders: Order
     else groups.set(key, { row, spend: cents(row.spend), leads: row.leads, orders: [], denominator: 0 });
   }
   const cohorts = [...groups.values()], known = [...new Set(cohorts.map(group => group.row.code).filter((code): code is string => Boolean(code)))];
+  // When several ads use the same product code in the same account-date period,
+  // orders without a saved Ad ID share that code/date pool. Exact Ad ID matches
+  // stay with their own ad; only the remaining spend is shared by the fallback orders.
+  const groupsByCodePeriod = new Map<string, typeof cohorts>();
+  for (const group of cohorts) if (group.row.code) {
+    const key = `${group.row.code}|${group.row.from}|${group.row.to}`;
+    groupsByCodePeriod.set(key, [...(groupsByCodePeriod.get(key) || []), group]);
+  }
+  const codePools = new Map<string, { code: string; from: string; to: string; groups: typeof cohorts; orders: Order[] }>();
+  for (const [key, groups] of groupsByCodePeriod) if (groups.length > 1) {
+    const row = groups[0].row;
+    codePools.set(key, { code: row.code!, from: row.from, to: row.to, groups, orders: [] });
+  }
   const unique = new Map<string, Order[]>();
   for (const order of orders) {
     if (!isFacebook(order) || order.is_test_order || order.is_replacement_order) continue;
@@ -97,9 +110,16 @@ export function allocateCurrentCsvCosts(input: CurrentFacebookCsv, orders: Order
     const exact = inPeriod.filter(group => group.row.entityId && entity(order, group.row.level) === group.row.entityId);
     const matches = exact.length ? exact : inPeriod.filter(group => group.row.code && group.row.code === code
       && !(group.row.entityId && entity(order, group.row.level) && entity(order, group.row.level) !== group.row.entityId));
-    if (matches.length !== 1) continue;
-    const group = matches[0]; group.orders.push(order);
-    allCosts.set(order.id, { item: 0, commercial: 0, total: 0, match: exact.length ? `${group.row.level} ID` : 'form / item code estimate', leadId: order.platform_lead_id || '' });
+    if (matches.length === 1) {
+      const group = matches[0]; group.orders.push(order);
+      allCosts.set(order.id, { item: 0, commercial: 0, total: 0, match: exact.length ? `${group.row.level} ID` : 'product code / ad-account date', leadId: order.platform_lead_id || '' });
+    } else if (matches.length > 1 && code) {
+      const pool = codePools.get(`${code}|${matches[0].row.from}|${matches[0].row.to}`);
+      if (pool && matches.length === pool.groups.length && matches.every(group => pool.groups.includes(group))) {
+        pool.orders.push(order);
+        allCosts.set(order.id, { item: 0, commercial: 0, total: 0, match: 'product code / ad-account date pool', leadId: order.platform_lead_id || '' });
+      }
+    }
   }
   // Meta Results can differ from saved unique leads because of attribution.
   // Never divide by selected paid orders alone, or allocate more than the spend.
@@ -113,6 +133,18 @@ export function allocateCurrentCsvCosts(input: CurrentFacebookCsv, orders: Order
     group.denominator = Math.max(group.leads, group.orders.length);
     if (group.orders.length > group.leads) warnings.push(`${group.row.code || `Ad ${group.row.entityId}`} (${group.row.from} to ${group.row.to}): ${group.leads} Meta results, ${group.orders.length} unique system leads; spend is shared across ${group.denominator} leads.`);
     split(group.spend, group.denominator, group.orders, group.row.code ? 'item' : 'commercial');
+  }
+  for (const pool of codePools.values()) {
+    if (!pool.orders.length) continue;
+    const spend = pool.groups.reduce((sum, group) => sum + group.spend, 0);
+    const leads = pool.groups.reduce((sum, group) => sum + group.leads, 0);
+    const alreadyAllocated = pool.groups.flatMap(group => group.orders)
+      .reduce((sum, order) => sum + (allCosts.get(order.id)?.item || 0), 0);
+    const alreadyMatched = pool.groups.reduce((sum, group) => sum + group.orders.length, 0);
+    const remainingSpend = Math.max(0, spend - alreadyAllocated);
+    const denominator = Math.max(Math.max(0, leads - alreadyMatched), pool.orders.length);
+    split(remainingSpend, denominator, pool.orders, 'item');
+    warnings.push(`${pool.code} (${pool.from} to ${pool.to}): ${pool.groups.length} ads combined for orders without a saved Ad ID; exact Ad ID costs stay assigned to their matching ads.`);
   }
   const promotions = new Map<string, { spend: number; from: string; to: string }>();
   for (const row of input.rows.filter(row => !row.code && !(row.level === 'ad' && row.entityId))) {
