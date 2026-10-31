@@ -65,7 +65,7 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
   const uploadWaybills = async (file?: File) => {
     if (!file) return;
     const sequence = ++waybillSequence.current;
-    fbSequence.current++; metaSequence.current++; setVerifiedLeads({}); setFacebook(null); setFacebookStatus('missing'); setCalculated(false); setWaybills([]); setWaybillFile(''); setTiktok(''); setBasis('auto'); setBusy('waybills'); setMessage('');
+    fbSequence.current++; metaSequence.current++; setVerifiedLeads({}); setFacebook(null); setFacebookStatus('missing'); setCalculated(false); setWaybills([]); setWaybillFile(''); setBasis('auto'); setBusy('waybills'); setMessage('');
     try {
       if (file.size > 2_000_000) throw new Error('Choose a waybill CSV smaller than 2 MB.');
       const selected = parseProfitWaybillUpload(await file.text(), orders.map(order => order.waybill_number || ''));
