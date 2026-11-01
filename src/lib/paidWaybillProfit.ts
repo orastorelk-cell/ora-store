@@ -8,8 +8,8 @@ export type ProfitSource = 'Facebook' | 'TikTok' | 'Other';
 export type ProfitPaymentFilter = 'all' | 'cod' | 'online';
 export interface PaidProfitSelection { paymentFilter?: ProfitPaymentFilter; fromDate?: string; toDate?: string; }
 /** Catalog metadata identifies items and saved combo components; uncovered units may use Reference Shop / Seen Price. */
-export type ProfitCatalogProduct = Pick<Product, 'id' | 'sku' | 'name_en' | 'product_type' | 'bundle_components' | 'source_shop_name' | 'source_shop_price'> & {
-  variants?: Array<Pick<ProductVariant, 'id' | 'sku'>>;
+export type ProfitCatalogProduct = Pick<Product, 'id' | 'sku' | 'name_en' | 'images' | 'product_type' | 'bundle_components' | 'source_shop_name' | 'source_shop_price'> & {
+  variants?: Array<Pick<ProductVariant, 'id' | 'sku' | 'image'>>;
 };
 export interface PurchaseAllocation {
   purchaseId: string;
