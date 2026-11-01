@@ -7,6 +7,7 @@ import type { Order, PurchaseOrder, ReturnRecord } from '../../types';
 import { buildPaidWaybillProfitReport, parseProfitWaybillUpload, profitMoney, profitSystemDay, type PaymentAmountBasis, type ProfitCatalogProduct, aggregateProfitByItemCode, normalizeProfitWaybill } from '../../lib/paidWaybillProfit';
 import { allocateCurrentCsvCosts, currentFacebookCsv, currentFacebookInsights, currentCsvProfitSummary, type CurrentFacebookCsv } from '../../lib/currentCsvProfit';
 import { createPaidWaybillProfitPdf } from '../../lib/paidWaybillProfitPdf';
+import { createItemProfitPdf } from '../../lib/itemProfitPdf';
 
 export interface CurrentCsvProfitReportProps {
   orders: Order[]; purchases: PurchaseOrder[]; products: ProfitCatalogProduct[]; returns: ReturnRecord[];
@@ -26,6 +27,8 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
   const [fromDate, setFromDate] = useState(''), [toDate, setToDate] = useState('');
   const [busy, setBusy] = useState(''), [message, setMessage] = useState(''), [calculated, setCalculated] = useState(false);
   const [pdfDownload, setPdfDownload] = useState<{ url: string; filename: string } | null>(null);
+  const [itemProfitPdf, setItemProfitPdf] = useState<{ url: string; filename: string } | null>(null);
+  const [itemPdfBusy, setItemPdfBusy] = useState(false), [itemPdfMessage, setItemPdfMessage] = useState('');
   const [sharedSetLoaded, setSharedSetLoaded] = useState(false), [hasSavedSet, setHasSavedSet] = useState(false);
   const sharedLoadStarted = useRef(false);
   const [search, setSearch] = useState(''), [page, setPage] = useState(1);
@@ -35,6 +38,7 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
   const [verifiedLeads, setVerifiedLeads] = useState<Record<string, { lead_id: string; created_at: string; ad_id: string; adset_id: string; campaign_id: string; ad_day?: string }>>({});
   useEffect(() => () => { metaSequence.current++; }, []);
   useEffect(() => () => { if (pdfDownload?.url) URL.revokeObjectURL(pdfDownload.url); }, [pdfDownload]);
+  useEffect(() => () => { if (itemProfitPdf?.url) URL.revokeObjectURL(itemProfitPdf.url); }, [itemProfitPdf]);
   useEffect(() => {
     if (!ready || sharedLoadStarted.current) return;
     sharedLoadStarted.current = true;
@@ -97,6 +101,17 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
   const accountNetProfit = !fromDate && !toDate ? summary.accountNetProfit : null;
   const itemCodeSummary = useMemo(() => aggregateProfitByItemCode(report, allocation?.orderCosts ? new Map<string, number>(Array.from(allocation.orderCosts, ([id, cost]) => [id, cost.total] as [string, number])) : new Map<string, number>(), Number(summary.tiktok || 0))
     .sort((a, b) => b.profit - a.profit || a.sku.localeCompare(b.sku)), [report, allocation, summary.tiktok]);
+  const itemImageBySku = useMemo(() => {
+    const images = new Map<string, string[]>();
+    products.forEach(product => {
+      const productImages = (product.images || []).filter(Boolean);
+      if (product.sku) images.set(product.sku, productImages);
+      (product.variants || []).forEach(variant => {
+        images.set(variant.sku, [...new Set([variant.image, ...productImages].filter((image): image is string => Boolean(image)))]);
+      });
+    });
+    return images;
+  }, [products]);
   const maxPositiveItemProfit = Math.max(1, ...itemCodeSummary.map(item => Math.max(0, item.profit)));
   const maxNegativeItemProfit = Math.max(1, ...itemCodeSummary.map(item => Math.max(0, -item.profit)));
   const estimatedPurchasingRows = report.rows.filter(row => row.estimatedPurchasing).length;
@@ -301,6 +316,23 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
     } catch (e: any) { setMessage(e.message || 'PDF could not be created.'); }
     finally { setBusy(''); }
   };
+  const downloadItemProfitPdf = async () => {
+    if (!canCalculate || !itemCodeSummary.length || itemPdfBusy) return;
+    setItemPdfBusy(true); setItemPdfMessage('');
+    try {
+      const dateLabel = `Date range: ${fromDate || 'All dates'} to ${toDate || 'All dates'} | Source: ${waybillFile}`;
+      const { doc, missingImages } = await createItemProfitPdf(itemCodeSummary.map(item => ({ ...item, imageUrl: (itemImageBySku.get(item.sku) || [])[0] })), dateLabel);
+      const blob = doc.output('blob');
+      if (!(blob instanceof Blob) || !blob.size) throw new Error('The item profit PDF was empty.');
+      const filename = `O-RA_Item_Profit_${profitSystemDay(new Date().toISOString())}.pdf`;
+      const url = URL.createObjectURL(blob);
+      setItemProfitPdf({ url, filename });
+      const link = document.createElement('a'); link.href = url; link.download = filename; link.style.display = 'none';
+      document.body.appendChild(link); link.click(); link.remove();
+      setItemPdfMessage(`PDF created: ${filename}.${missingImages ? ` ${missingImages} item image(s) could not be loaded; the item details are included.` : ''} If it did not download, use the link below.`);
+    } catch (e: any) { setItemPdfMessage(e?.message || 'Item profit PDF could not be created.'); }
+    finally { setItemPdfBusy(false); }
+  };
   const values: Array<[string, number | null]> = [
     ['Recorded gross revenue', report.totals.received], ['Purchasing Cost', -report.totals.purchasing], ['Fardar Delivery Cost', -report.totals.courier],
     ['Return Fees — once per return', -report.totals.returnFees], ['Packing — Rs.100 per delivered order; waived for returned-stock repacks', -report.totals.packing],
@@ -382,12 +414,15 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
         {allocation.issues.length > 0 && <div role="alert" className="mt-4 rounded-xl bg-amber-50 p-4 text-sm text-amber-900"><p className="font-bold">{allocation.missingOrderIds.length} Facebook orders need a matching current Ad ID / cost period. The amount above is provisional; unresolved costs are not deducted.</p>{allocation.issues.map(issue => <p key={issue} className="mt-2">{issue}</p>)}</div>}
         {allocation.warnings.length > 0 && <details className="mt-4 text-xs text-gray-500"><summary>Lead count / attribution notes</summary>{allocation.warnings.map(warning => <p key={warning} className="mt-2">{warning}</p>)}</details>}
       </section>
-        <section className="mx-auto w-full max-w-7xl overflow-hidden rounded-2xl border bg-white shadow-sm">
+        <section className="w-full max-w-none overflow-hidden rounded-2xl border bg-white shadow-sm">
           <div className="border-b bg-gradient-to-r from-slate-50 via-white to-emerald-50 px-5 py-5 text-center">
             <h3 className="text-lg font-black">Profit, delivery & returns by Item Code</h3>
             <p className="mx-auto mt-1 max-w-3xl text-xs text-gray-500">වැඩිම ලාභයෙන් අඩුම ලාභයට පෙළගස්වා ඇත. Unit buying price යනු delivered units සඳහා weighted Purchasing cost එකයි. Processing සහ cancelled orders delivery/return rate වලට ඇතුළත් නොවේ.</p>
+            <button type="button" onClick={() => void downloadItemProfitPdf()} disabled={itemPdfBusy || !canCalculate} className="mt-3 inline-flex items-center gap-2 rounded-lg bg-emerald-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50"><Download className="h-4 w-4" />{itemPdfBusy ? 'Preparing item PDF…' : 'Download Item Profit PDF'}</button>
+            {itemPdfMessage && <p role="status" className="mx-auto mt-2 max-w-4xl text-xs font-semibold text-slate-700">{itemPdfMessage}</p>}
+            {itemProfitPdf && <a href={itemProfitPdf.url} download={itemProfitPdf.filename} className="mt-2 inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-white px-3 py-2 text-xs font-bold text-emerald-900"><Download className="h-3.5 w-3.5" />Download PDF file</a>}
           </div>
-          <div aria-label="Profit, delivery and returns ranked by item code" className="mx-auto grid w-full max-w-6xl gap-3 p-4 sm:p-5">
+          <div aria-label="Profit, delivery and returns ranked by item code" className="grid w-full max-w-none gap-3 p-4 sm:p-5">
             {itemCodeSummary.map((item, index) => {
               const barWidth = item.profit >= 0
                 ? Math.max(0, Math.min(50, item.profit / maxPositiveItemProfit * 50))
@@ -396,21 +431,24 @@ export const CurrentCsvProfitReport: React.FC<CurrentCsvProfitReportProps> = ({ 
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="flex min-w-0 items-start gap-3">
                     <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-black text-slate-600">{index + 1}</span>
+                    <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                      {(itemImageBySku.get(item.sku) || [])[0] ? <img src={(itemImageBySku.get(item.sku) || [])[0]} alt={item.name} loading="lazy" referrerPolicy="no-referrer" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-[10px] font-bold text-slate-400">No image</div>}
+                    </div>
                     <div className="min-w-0"><p className="font-mono text-xs font-bold text-slate-500">{item.sku}</p><h4 className="mt-0.5 break-words font-bold text-slate-900">{item.name}</h4></div>
                   </div>
                   <div className={`shrink-0 text-right ${item.profit >= 0 ? 'text-emerald-800' : 'text-red-700'}`}><p className="text-[10px] font-bold uppercase tracking-wide">Item profit</p><p className="text-lg font-black">{money(item.profit)}</p></div>
                 </div>
-                <div aria-label={`Profit comparison for ${item.sku}`} className="relative mx-auto mt-3 h-2.5 max-w-4xl overflow-hidden rounded-full bg-slate-100">
+                <div aria-label={`Profit comparison for ${item.sku}`} className="relative mx-auto mt-3 h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
                   <span className="absolute left-1/2 top-0 h-full w-px bg-slate-400" />
                   {item.profit >= 0
-                    ? <span className="absolute left-1/2 top-0 h-full rounded-r-full bg-emerald-500" style={{ width: String(barWidth) + '%' }} />
-                    : <span className="absolute right-1/2 top-0 h-full rounded-l-full bg-red-500" style={{ width: String(barWidth) + '%' }} />}
+                    ? <span className="absolute left-1/2 top-0 h-full rounded-r-full bg-emerald-500" style={{ width: `${barWidth}%` }} />
+                    : <span className="absolute right-1/2 top-0 h-full rounded-l-full bg-red-500" style={{ width: `${barWidth}%` }} />}
                 </div>
                 <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t pt-3 text-xs sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-7">
                   {[
                     ['Qty', String(item.quantity)], ['Unit buy', item.deliveredUnits ? money(item.unitBuyingPrice) : '—'],
                     ['Delivered', String(item.deliveredOrders)], ['Returns', String(item.returnOrders)],
-                    ['Delivery rate', String(item.deliveryRate.toFixed(1)) + '%'], ['Return rate', String(item.returnRate.toFixed(1)) + '%'],
+                    ['Delivery rate', `${item.deliveryRate.toFixed(1)}%`], ['Return rate', `${item.returnRate.toFixed(1)}%`],
                     ['Received', money(item.received)], ['Purchasing', money(item.purchasing)],
                     ['Delivery fee', money(item.delivery)], ['Return fee', money(item.returnFee)],
                     ['Packing', money(item.packing)], ['Ads', money(item.advertising)],
