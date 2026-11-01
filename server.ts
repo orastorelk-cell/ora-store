@@ -1680,6 +1680,57 @@ const exchangeWaybillRows = async () => {
   if(error) throw error;
   return data||[];
 };
+const CURRENT_PROFIT_SET_KEY='current-profit-set-v1';
+app.get('/api/admin/current-profit-set',requireStaffPermission('profit_report'),async(_req,res)=>{
+  try{
+    const rows=await readDataTable(undefined,'admin_data_store');
+    const record=rows.find((row:any)=>row.key===CURRENT_PROFIT_SET_KEY);
+    return res.json({ok:true,report:record?.payload||null});
+  }catch(error:any){return res.status(error?.status||503).json({error:error?.message||'Saved profit set could not be loaded.'});}
+});
+app.put('/api/admin/current-profit-set',requireSuperAdmin,async(req,res)=>{
+  try{
+    const body=req.body||{};
+    const waybills=Array.isArray(body.waybills)?Array.from(new Set(body.waybills.map((value:any)=>String(value||'').trim()).filter(Boolean))).slice(0,10000):[];
+    const facebook=body.facebook;
+    if(!waybills.length||!facebook||!Array.isArray(facebook.rows)||!facebook.rows.length||facebook.rows.length>20000||!Array.isArray(facebook.periods))
+      return res.status(400).json({error:'A complete waybill set and Facebook cost source are required before saving.'});
+    if(!['auto','gross','net'].includes(String(body.paymentBasis||'')))return res.status(400).json({error:'Payment amount basis is invalid.'});
+    const inputBytes=Buffer.byteLength(JSON.stringify({waybills,facebook,verifiedLeads:body.verifiedLeads||{}}),'utf8');
+    if(inputBytes>2_000_000)return res.status(413).json({error:'Saved profit set is too large.'});
+    const actor=(req as any).staffSessionUser as ServerStaffAccount|undefined;
+    const saved={
+      version:1,
+      waybills,
+      waybillFileName:String(body.waybillFileName||'').slice(0,200),
+      facebook,
+      paymentBasis:String(body.paymentBasis),
+      fromDate:/^\d{4}-\d{2}-\d{2}$/.test(String(body.fromDate||''))?String(body.fromDate):'',
+      toDate:/^\d{4}-\d{2}-\d{2}$/.test(String(body.toDate||''))?String(body.toDate):'',
+      verifiedLeads:body.verifiedLeads&&typeof body.verifiedLeads==='object'&&!Array.isArray(body.verifiedLeads)?body.verifiedLeads:{},
+      savedAt:new Date().toISOString(),
+      savedBy:String(actor?.display_name||actor?.username||'Super Admin').slice(0,100),
+    };
+    const outcome=await replaceDataTable<any>(undefined,'admin_data_store',current=>{
+      const record={key:CURRENT_PROFIT_SET_KEY,payload:saved,updated_at:saved.savedAt,updated_by:saved.savedBy};
+      const exists=current.some((row:any)=>row.key===CURRENT_PROFIT_SET_KEY);
+      return {rows:exists?current.map((row:any)=>row.key===CURRENT_PROFIT_SET_KEY?record:row):[...current,record],result:record};
+    });
+    if(outcome?.error)return res.status(503).json({error:outcome.error});
+    return res.json({ok:true,report:saved});
+  }catch(error:any){return res.status(error?.status||503).json({error:error?.message||'Saved profit set could not be stored.'});}
+});
+app.delete('/api/admin/current-profit-set',requireSuperAdmin,async(_req,res)=>{
+  try{
+    const outcome=await replaceDataTable<any>(undefined,'admin_data_store',current=>{
+      const exists=current.some((row:any)=>row.key===CURRENT_PROFIT_SET_KEY);
+      return {rows:current.filter((row:any)=>row.key!==CURRENT_PROFIT_SET_KEY),result:{cleared:exists}};
+    });
+    if(outcome?.error)return res.status(503).json({error:outcome.error});
+    return res.json({ok:true,cleared:Boolean(outcome?.result?.cleared)});
+  }catch(error:any){return res.status(error?.status||503).json({error:error?.message||'Saved profit set could not be cleared.'});}
+});
+
 app.get('/api/exchange-invoices',requireStaffPermission('exchange_parcels'),async(_req,res)=>{
   try{
     const records=(await exchangeWaybillRows()).filter((row:any)=>row.exchange_invoice).map((row:any)=>({...row.exchange_invoice,waybill_status:row.status}));
@@ -1722,23 +1773,82 @@ app.post('/api/orders/:id/exchange-invoices',requireStaffPermission('exchange_pa
     return res.json({ok:true,exchange:outcome.exchange});
   }catch(error:any){return res.status(error?.status||503).json({error:error?.message||'Exchange invoice could not be created.'});}
 });
+app.get('/api/exchange-invoices/:id/refund-slip',requireStaffPermission('exchange_parcels'),async(req,res)=>{
+  const exchangeId=String(req.params.id||'').trim();
+  try{
+    const rows=await exchangeWaybillRows();
+    const exchange=rows.find((row:any)=>row.exchange_invoice?.id===exchangeId)?.exchange_invoice;
+    const slipPath=String(exchange?.refund_slip_path||'');
+    if(!exchange||!slipPath)return res.status(404).json({error:'Refund slip was not found.'});
+    const safeId=exchangeId.replace(/[^a-z0-9._-]/gi,'_');
+    if(!slipPath.startsWith(`exchange-refund/${safeId}/`))return res.status(404).json({error:'Refund slip was not found.'});
+    const sb=getSupabaseAdmin();
+    if(!sb)return res.status(503).json({error:'Refund slip storage is unavailable.'});
+    const {data,error}=await sb.storage.from('ora-refund-proofs').download(slipPath);
+    if(error||!data)return res.status(404).json({error:'Refund slip could not be loaded.'});
+    const allowedTypes=['image/jpeg','image/png','image/webp','application/pdf'];
+    const contentType=allowedTypes.includes(String(exchange.refund_slip_content_type||''))?String(exchange.refund_slip_content_type):'application/octet-stream';
+    const fileName=String(exchange.refund_slip_file_name||'refund-slip').replace(/[^a-z0-9._-]/gi,'_');
+    res.setHeader('Content-Type',contentType);
+    res.setHeader('Content-Disposition',`inline; filename="${fileName}"`);
+    res.setHeader('Cache-Control','private, no-store');
+    res.setHeader('X-Content-Type-Options','nosniff');
+    return res.send(Buffer.from(await data.arrayBuffer()));
+  }catch(error:any){return res.status(error?.status||503).json({error:error?.message||'Refund slip could not be loaded.'});}
+});
 app.post('/api/exchange-invoices/:id/refund-complete',requireStaffPermission('exchange_parcels'),async(req,res)=>{
   const exchangeId=String(req.params.id||'').trim();
+  let uploadedPath='';
+  let supabase:any=null;
   try{
     const rows=await exchangeWaybillRows();
     const owner=rows.find((row:any)=>row.exchange_invoice?.id===exchangeId);
     if(!owner)return res.status(404).json({error:'Exchange invoice was not found.'});
     const exchange=owner.exchange_invoice;
+    if(exchange.status!=='Pending Refund')return res.status(409).json({error:'This refund is already complete.'});
+
+    const dataUrl=String(req.body?.slipDataUrl||'');
+    const match=dataUrl.match(/^data:(image\/(?:jpeg|png|webp)|application\/pdf);base64,([A-Za-z0-9+/=]+)$/i);
+    if(!match)return res.status(400).json({error:'Upload a JPG, PNG, WEBP image or PDF payment slip before completing this refund.'});
+    const contentType=String(match[1]).toLowerCase();
+    const buffer=Buffer.from(match[2],'base64');
+    const isPdf=contentType==='application/pdf';
+    if(!buffer.length||buffer.length>(isPdf?5*1024*1024:750_000))return res.status(413).json({error:isPdf?'PDF payment slip must be 5 MB or smaller.':'Image payment slip must be 750 KB or smaller.'});
+
+    supabase=getSupabaseAdmin();
+    if(!supabase)return res.status(503).json({error:'Refund proof storage is unavailable. No refund status was changed.'});
+    const bucket='ora-refund-proofs';
+    const safeId=exchangeId.replace(/[^a-z0-9._-]/gi,'_');
+    const extension=contentType==='application/pdf'?'pdf':contentType==='image/png'?'png':contentType==='image/webp'?'webp':'jpg';
+    const slipPath=`exchange-refund/${safeId}/${Date.now()}-${crypto.randomBytes(8).toString('hex')}.${extension}`;
+    const uploaded=await supabase.storage.from(bucket).upload(slipPath,buffer,{contentType,cacheControl:'0',upsert:false});
+    if(uploaded.error){
+      if(!/bucket/i.test(uploaded.error.message||''))throw uploaded.error;
+      const created=await supabase.storage.createBucket(bucket,{public:false,fileSizeLimit:5*1024*1024,allowedMimeTypes:['image/jpeg','image/png','image/webp','application/pdf']});
+      if(created.error&&!/already exists/i.test(created.error.message||''))throw created.error;
+      const retried=await supabase.storage.from(bucket).upload(slipPath,buffer,{contentType,cacheControl:'0',upsert:false});
+      if(retried.error)throw retried.error;
+    }
+    uploadedPath=slipPath;
     const actor=(req as any).staffSessionUser as ServerStaffAccount|undefined;
-    const completed={...exchange,status:'Refund Complete',refund_completed_at:exchange.refund_completed_at||new Date().toISOString(),refund_completed_by:exchange.refund_completed_by||String(actor?.display_name||actor?.username||'Admin')};
-    await replaceDataTable<any>(undefined,'courier_waybills',current=>{
-      const row=current.find((candidate:any)=>candidate.exchange_invoice?.id===exchangeId);if(!row)return {rows:current,result:null};
+    const safeName=String(req.body?.slipFileName||`refund-slip.${extension}`).replace(/[^a-z0-9._-]/gi,'_').slice(0,120)||`refund-slip.${extension}`;
+    const completed={...exchange,status:'Refund Complete',refund_completed_at:new Date().toISOString(),refund_completed_by:String(actor?.display_name||actor?.username||'Admin'),
+      refund_slip_path:slipPath,refund_slip_file_name:safeName,refund_slip_content_type:contentType};
+    const update=await replaceDataTable<any>(undefined,'courier_waybills',current=>{
+      const row=current.find((candidate:any)=>candidate.exchange_invoice?.id===exchangeId);
+      if(!row)return {rows:current,result:null};
       const next={...row,exchange_invoice:completed};return {rows:current.map(candidate=>candidate===row?next:candidate),result:next};
     });
+    if(update?.error)throw new Error(update.error);
+    if(!update?.result)return res.status(409).json({error:'Exchange refund changed while the slip was uploading. The refund remains pending.'});
+    uploadedPath='';
     const order=(await getOrderSnapshots()).find((candidate:any)=>candidate.id===exchange.original_order_id);
     if(order&&order.order_status!=='Exchange Refund')await saveOrderSnapshot({...order,order_status:'Exchange Refund',payment_status:'Refunded',exchange_refund_invoice_id:exchangeId,exchange_refund_amount:exchange.refund_amount,exchange_refund_completed_at:completed.refund_completed_at});
     return res.json({ok:true,exchange:completed,original_order:order?{...order,order_status:'Exchange Refund',payment_status:'Refunded'}:null});
-  }catch(error:any){return res.status(error?.status||503).json({error:error?.message||'Refund completion could not be saved.'});}
+  }catch(error:any){
+    if(uploadedPath&&supabase)try{await supabase.storage.from('ora-refund-proofs').remove([uploadedPath]);}catch{}
+    return res.status(error?.status||503).json({error:error?.message||'Refund completion could not be saved. The refund remains pending unless the system confirms completion.'});
+  }
 });
 
 // -----------------------------------------------------------------------------
