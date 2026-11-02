@@ -216,6 +216,7 @@ interface StoreContextType {
   }) => Promise<Order>;
   createExchangeInvoice: (orderId:string,waybillNumber:string,exchangeType?:'Cash Refund'|'Item Exchange',items?:{item_index:number;quantity:number}[]) => Promise<{exchange:ExchangeInvoiceRecord}>;
   createItemExchangeReplacement: (input:{originalOrderId:string;items:{itemIndex:number;quantity:number}[];waybillNumber:string;exchangeId:string}) => Promise<Order>;
+  linkExchangeReplacementOrder: (exchangeId:string,replacement:Order) => Promise<ExchangeInvoiceRecord>;
   completeExchangeRefund: (exchangeId:string, proof: { slipDataUrl:string; slipFileName:string; slipContentType:string }) => Promise<{exchange:ExchangeInvoiceRecord;original_order?:Order|null}>;
   updateOrderStatus: (orderId: string, status: OrderStatus) => void;
   cancelOrderDirect: (orderId: string, reason: string, cancelledBy?: string) => Promise<{ success: boolean; message: string }>;
@@ -2077,6 +2078,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     logActivity({action:'Exchange Invoice Created',module:'Exchange Parcels',target_id:data.exchange.id,target_label:data.exchange.id,details:`Original ${data.exchange.original_order_number} / ${data.exchange.original_waybill} • New ${waybillNumber} • Pending refund Rs. ${data.exchange.refund_amount}`});
     return {exchange:data.exchange};
   };
+  const linkExchangeReplacementOrder=async(exchangeId:string,replacement:Order):Promise<ExchangeInvoiceRecord>=>{
+    const data=await sharedStaffRequest(`/api/exchange-invoices/${encodeURIComponent(exchangeId)}/replacement-order`,{method:'POST',body:JSON.stringify({replacement_order_id:replacement.id})});
+    if(!data?.exchange)throw new Error('The replacement MAN order was saved, but it could not be linked to the exchange record. Refresh before exporting the two-parcel CSV.');
+    setExchangeInvoices(prev=>prev.map(row=>row.id===exchangeId?data.exchange:row));
+    setWaybillRecords(prev=>prev.map(row=>row.exchange_invoice?.id===exchangeId?{...row,exchange_invoice:data.exchange}:row));
+    return data.exchange;
+  };
   const completeExchangeRefund=async(exchangeId:string,proof:{slipDataUrl:string;slipFileName:string;slipContentType:string})=>{
     const data=await sharedStaffRequest(`/api/exchange-invoices/${encodeURIComponent(exchangeId)}/refund-complete`,{method:'POST',body:JSON.stringify(proof)});
     if(!data?.exchange)throw new Error('Refund completion was not saved.');
@@ -3796,6 +3804,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         createMissingItemReplacement,
         createExchangeInvoice,
         createItemExchangeReplacement,
+        linkExchangeReplacementOrder,
         completeExchangeRefund,
         updateOrderStatus,
         cancelOrderDirect,
