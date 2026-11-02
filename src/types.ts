@@ -773,7 +773,11 @@ export interface ExchangeInvoiceRecord {
   order_total: number;
   delivery_fee: number;
   refund_amount: number;
-  status: 'Pending Refund' | 'Refund Complete';
+  exchange_type?: 'Cash Refund' | 'Item Exchange';
+  replacement_order_id?: string;
+  replacement_order_number?: string;
+  replacement_waybill?: string;
+  status: 'Pending Refund' | 'Refund Complete' | 'Item Exchange';
   created_at: string;
   created_by: string;
   refund_completed_at?: string;
