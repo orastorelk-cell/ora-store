@@ -1788,6 +1788,24 @@ app.post('/api/orders/:id/exchange-invoices',requireStaffPermission('exchange_pa
     return res.json({ok:true,exchange:outcome.exchange});
   }catch(error:any){return res.status(error?.status||503).json({error:error?.message||'Exchange invoice could not be created.'});}
 });
+app.post('/api/exchange-invoices/:id/replacement-order',requireStaffPermission('exchange_parcels'),async(req,res)=>{
+  const exchangeId=String(req.params.id||'').trim(),replacementId=String(req.body?.replacement_order_id||'').trim();
+  if(!exchangeId||!replacementId)return res.status(400).json({error:'An exchange invoice and MAN replacement order are required.'});
+  try{
+    const replacement=(await getOrderSnapshots()).find((order:any)=>String(order.id)===replacementId);
+    if(!replacement||!replacement.is_replacement_order||replacement.replacement_reason!=='Customer item exchange')return res.status(409).json({error:'The MAN order is not a saved item exchange replacement.'});
+    const update=await replaceDataTable<any>(undefined,'courier_waybills',current=>{
+      const row=current.find((candidate:any)=>candidate.exchange_invoice?.id===exchangeId);
+      if(!row||row.exchange_invoice?.status!=='Item Exchange'||replacement.replacement_of_order_id!==row.exchange_invoice.original_order_id)return {rows:current,result:null};
+      const exchange={...row.exchange_invoice,replacement_order_id:replacement.id,replacement_order_number:replacement.order_number,replacement_waybill:replacement.waybill_number};
+      const next={...row,exchange_invoice:exchange};
+      return {rows:current.map(candidate=>candidate===row?next:candidate),result:exchange};
+    });
+    if(update?.error)return res.status(503).json({error:update.error});
+    if(!update?.result)return res.status(409).json({error:'The item exchange record could not be linked to this MAN replacement order.'});
+    return res.json({ok:true,exchange:update.result});
+  }catch(error:any){return res.status(error?.status||503).json({error:error?.message||'The MAN replacement order could not be linked.'});}
+});
 app.get('/api/exchange-invoices/:id/refund-slip',requireStaffPermission('exchange_parcels'),async(req,res)=>{
   const exchangeId=String(req.params.id||'').trim();
   try{

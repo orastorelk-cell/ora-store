@@ -1,14 +1,14 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { compressImageFile } from '../../lib/imageUpload';
 import { CheckCircle2, Download, FileSpreadsheet, PackageCheck, Plus, RefreshCw, Search, WalletCards } from 'lucide-react';
 import { useStore } from '../../context/StoreContext';
-import { generateExchangeInvoicePDF } from '../../lib/pdfGenerator';
+import { generateExchangeInvoicePDF, generateOrderInvoicePDF } from '../../lib/pdfGenerator';
 import type { ExchangeInvoiceRecord, Order } from '../../types';
 
 const money=(value:number)=>`Rs. ${Math.max(0,Math.round(Number(value||0))).toLocaleString('en-US')}`;
 
 export const ExchangeParcelsPanel:React.FC=()=>{
-  const {orders,waybillRecords,exchangeInvoices,settings,createExchangeInvoice,createItemExchangeReplacement,completeExchangeRefund,refreshExchangeInvoices}=useStore();
+  const {orders,waybillRecords,exchangeInvoices,settings,createExchangeInvoice,createItemExchangeReplacement,linkExchangeReplacementOrder,completeExchangeRefund,refreshExchangeInvoices}=useStore();
   const [query,setQuery]=useState('');
   const [refundQuery,setRefundQuery]=useState('');
   const [selected,setSelected]=useState<Order|null>(null);
@@ -19,7 +19,18 @@ export const ExchangeParcelsPanel:React.FC=()=>{
   const [notice,setNotice]=useState('');
   const [refundFeedback,setRefundFeedback]=useState<Record<string,{kind:'info'|'success'|'error';message:string}>>({});
   const [refundUploadTarget,setRefundUploadTarget]=useState<ExchangeInvoiceRecord|null>(null);
+  const [pendingReplacementInvoices,setPendingReplacementInvoices]=useState<string[]>([]);
+  const downloadedReplacementInvoices=useRef(new Set<string>());
   const refundSlipInput=useRef<HTMLInputElement>(null);
+  useEffect(()=>{
+    for(const id of pendingReplacementInvoices){
+      const replacement=orders.find(order=>order.id===id);
+      if(!replacement?.invoice_locked||!replacement.stock_allocated||!replacement.waybill_number||downloadedReplacementInvoices.current.has(id))continue;
+      downloadedReplacementInvoices.current.add(id);
+      void generateOrderInvoicePDF(replacement,settings).catch((error:any)=>setNotice(error?.message||'The MAN invoice is ready, but its PDF could not be downloaded. Use the order invoice download to retry.'));
+      setPendingReplacementInvoices(previous=>previous.filter(value=>value!==id));
+    }
+  },[orders,pendingReplacementInvoices,settings]);
   const setRefundMessage=(exchangeId:string,message:string,kind:'info'|'success'|'error'='info')=>
     setRefundFeedback(previous=>({...previous,[exchangeId]:{kind,message}}));
   const delivered=useMemo(()=>orders.filter(order=>order.order_status==='Delivered'&&Boolean(order.waybill_number)&&!order.is_replacement_order)
@@ -29,6 +40,7 @@ export const ExchangeParcelsPanel:React.FC=()=>{
   const orderTotal=(order:Order)=>Math.max(0,Math.round(Number(order.total_amount||0)));
   const deliveryFee=(order:Order)=>Math.min(orderTotal(order),Math.max(0,Math.round(Number(order.delivery_fee||0))));
   const refundFor=(order:Order)=>Math.max(0,orderTotal(order)-deliveryFee(order));
+  const replacementFor=(row:ExchangeInvoiceRecord)=>orders.find(order=>order.id===row.replacement_order_id)||orders.find(order=>order.is_replacement_order&&order.replacement_of_order_id===row.original_order_id&&order.replacement_reason==='Customer item exchange'&&String(order.notes||'').includes('Exchange: '+row.id));
   const pending=exchangeInvoices.filter(row=>row.status==='Pending Refund');
   const completed=exchangeInvoices.filter(row=>row.status==='Refund Complete');
   const refundRows=useMemo(()=>exchangeInvoices
@@ -49,7 +61,9 @@ export const ExchangeParcelsPanel:React.FC=()=>{
       await generateExchangeInvoicePDF(result.exchange,settings);
       if(exchangeType==='Item Exchange'){
         const replacement=await createItemExchangeReplacement({originalOrderId:selected.id,items:picked.map(row=>({itemIndex:row.item_index,quantity:row.quantity})),waybillNumber:replacementWaybill,exchangeId:result.exchange.id});
-        setNotice(result.exchange.id+' return cover '+waybill+'; MAN order '+replacement.order_number+' waybill '+replacementWaybill+'; COD Rs. 0.');
+        await linkExchangeReplacementOrder(result.exchange.id,replacement);
+        setPendingReplacementInvoices(previous=>previous.includes(replacement.id)?previous:[...previous,replacement.id]);
+        setNotice(result.exchange.id+' return cover PDF downloaded. MAN '+replacement.order_number+' saved for '+replacementWaybill+' with COD Rs. 0; its A6 invoice PDF will download as soon as stock is allocated and the invoice is ready.');
       }else{setNotice(result.exchange.id+' created. Refund '+money(result.exchange.refund_amount)+' is Pending.');}
       setSelected(null);
     }catch(error:any){setNotice(error?.message||'Exchange could not be completed. Refresh the exchange list before retrying.');}
@@ -93,17 +107,23 @@ export const ExchangeParcelsPanel:React.FC=()=>{
   const downloadInvoice=(row:ExchangeInvoiceRecord)=>void generateExchangeInvoicePDF(row,settings).catch((error:any)=>setNotice(error?.message||'Exchange invoice PDF could not be downloaded.'));
   const downloadFardarCsv=(row:ExchangeInvoiceRecord)=>{
     const normalizePhone=(value:string)=>{let digits=String(value||'').replace(/\D/g,'');if(digits.startsWith('0094')&&digits.length>=13)digits=digits.slice(4);else if(digits.startsWith('94')&&digits.length===11)digits=digits.slice(2);else if(digits.length===10&&digits.startsWith('0'))digits=digits.slice(1);return digits;};
-    const description='Exchange: '+(row.items||[]).map(item=>`${item.sku||item.main_sku||'0'} ${item.product_name||''}${item.variant_name?` - ${item.variant_name}`:''} x${item.quantity}`).join(' | ')+' (Exchange Blank Cover)';
     const header=['Waybill ID','Order ID','Parcel Type','Parcel Description','Recipient Name','Recipient Mobile','Recipient Mobile','Recipient Address','Recipient City','COD Amount','Exchange (0 or 1)'];
-    const values=[row.new_waybill,row.id,1,description,row.customer_name,normalizePhone(row.phone),normalizePhone(row.whatsapp||row.phone),row.address,row.fardar_city||row.city,0,1];
     const escapeCsv=(value:unknown)=>{const text=String(value??'');return /[",\r\n]/.test(text)?`"${text.replace(/"/g,'""')}"`:text;};
-    const csv=[header,values].map(line=>line.map(escapeCsv).join(',')).join('\n');
+    const coverDescription='Exchange: '+(row.items||[]).map(item=>`${item.sku||item.main_sku||'0'} ${item.product_name||''}${item.variant_name?` - ${item.variant_name}`:''} x${item.quantity}`).join(' | ')+' (Exchange Blank Cover)';
+    const rows=[ [row.new_waybill,row.id,1,coverDescription,row.customer_name,normalizePhone(row.phone),normalizePhone(row.whatsapp||row.phone),row.address,row.fardar_city||row.city,0,1] ];
+    if(row.status==='Item Exchange'){
+      const replacement=replacementFor(row);
+      if(!replacement){setNotice('MAN replacement order is not linked to '+row.id+' yet. Refresh the exchange list after replacement creation.');return;}
+      const replacementDescription=(replacement.items||[]).map(item=>`${item.sku||item.main_sku||'0'} ${item.product_name||''}${item.variant_name?` - ${item.variant_name}`:''} x${item.quantity}`).join(' | ');
+      rows.push([replacement.waybill_number||row.replacement_waybill||'',replacement.order_number,1,replacementDescription,replacement.customer_name,normalizePhone(replacement.phone),normalizePhone(replacement.whatsapp||replacement.phone),replacement.address,replacement.fardar_city||replacement.city,0,0]);
+    }
+    const csv=[header,...rows].map(line=>line.map(escapeCsv).join(',')).join('\r\n');
     const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'}));
-    const link=document.createElement('a');link.href=url;link.download=`ora_fardar_ready_${row.id}.csv`;document.body.appendChild(link);link.click();link.remove();window.setTimeout(()=>URL.revokeObjectURL(url),1000);
+    const link=document.createElement('a');link.href=url;link.download=`ora_fardar_ready_${row.id}${row.status==='Item Exchange'?'_two_parcels':''}.csv`;document.body.appendChild(link);link.click();link.remove();window.setTimeout(()=>URL.revokeObjectURL(url),1000);
   };
   return <div className="space-y-5 p-4 md:p-6">
     <div className="flex flex-wrap items-start justify-between gap-3">
-      <div><div className="flex items-center gap-2"><PackageCheck className="h-6 w-6 text-teal-400"/><h2 className="text-xl font-black text-white">Exchange Parcels</h2></div><p className="mt-1 text-xs text-neutral-400">Create an A5 exchange invoice, track the original order refund, and keep stock unchanged until returned goods are received.</p></div>
+      <div><div className="flex items-center gap-2"><PackageCheck className="h-6 w-6 text-teal-400"/><h2 className="text-xl font-black text-white">Exchange Parcels</h2></div><p className="mt-1 text-xs text-neutral-400">Cash refunds create one return cover. Item exchanges create a return cover and a COD Rs. 0 MAN replacement invoice.</p></div>
       <button onClick={()=>void refreshExchangeInvoices().catch((error:any)=>setNotice(error?.message||'Refresh failed.'))} className="inline-flex items-center gap-2 rounded-lg border border-neutral-700 px-3 py-2 text-xs font-bold text-neutral-200"><RefreshCw className="h-3.5 w-3.5"/>Refresh</button>
     </div>
     {notice&&<div className="rounded-xl border border-teal-500/30 bg-teal-500/10 p-3 text-xs font-bold text-teal-100">{notice}</div>}
@@ -129,7 +149,7 @@ export const ExchangeParcelsPanel:React.FC=()=>{
       <div className="overflow-auto rounded-lg">
         <table className="w-full min-w-[830px] table-fixed text-left text-xs">
           <thead className="text-[10px] uppercase text-neutral-500"><tr><th className="w-[19%] p-2">Exchange / Original</th><th className="w-[17%] p-2">Customer</th><th className="w-[10%] p-2">Order total</th><th className="w-[11%] p-2">Delivery kept</th><th className="w-[10%] p-2">Refund</th><th className="w-[11%] p-2">Status</th><th className="w-[22%] p-2">Actions</th></tr></thead>
-          <tbody>{refundRows.map(row=><tr key={row.id} className="border-t border-neutral-800 align-top"><td className="break-words p-2 font-mono"><b className="text-teal-300">{row.id}</b><div className="text-[10px] text-neutral-400">{row.original_order_number} · {row.original_waybill}</div><div className="text-[10px] text-blue-300">New WB {row.new_waybill}</div></td><td className="break-words p-2">{row.customer_name}<div className="break-all text-[10px] text-neutral-500">{row.phone}</div></td><td className="p-2">{money(row.order_total)}</td><td className="p-2">{money(row.delivery_fee)}</td><td className="p-2 font-black text-emerald-300">{money(row.refund_amount)}</td><td className="p-2"><span className={`rounded-full px-2 py-1 text-[9px] font-black ${row.status==='Pending Refund'?'bg-amber-500/10 text-amber-300':row.status==='Item Exchange'?'bg-sky-500/10 text-sky-300':'bg-emerald-500/10 text-emerald-300'}`}>{row.status}</span></td><td className="p-2"><div className="flex flex-wrap gap-1.5"><button onClick={()=>downloadInvoice(row)} className="inline-flex items-center gap-1 rounded-lg border border-neutral-700 px-2 py-1.5 text-[9px] font-bold text-neutral-200"><Download className="h-3 w-3"/>A5 PDF</button><button onClick={()=>downloadFardarCsv(row)} className="inline-flex items-center gap-1 rounded-lg border border-violet-500/30 bg-violet-500/10 px-2 py-1.5 text-[9px] font-bold text-violet-200"><FileSpreadsheet className="h-3 w-3"/>Fardar CSV</button>{row.status==='Pending Refund'?<button disabled={busy===row.id} onClick={()=>chooseRefundSlip(row)} className="inline-flex items-center gap-1 rounded-lg bg-emerald-500 px-2 py-1.5 text-[9px] font-black text-neutral-950 disabled:opacity-40"><CheckCircle2 className="h-3 w-3"/>{busy===row.id?'Saving...':'Complete + Upload Slip'}</button>:<div className="flex flex-col gap-1 text-[10px] text-neutral-500">{row.refund_completed_at?new Date(row.refund_completed_at).toLocaleDateString():''}{row.refund_slip_path&&<button type="button" onClick={()=>void openRefundSlip(row)} className="text-left font-bold text-teal-300 underline">View payment slip</button>}</div>}</div>{refundFeedback[row.id]&&<p role="status" aria-live="polite" className={`mt-2 rounded-md px-2 py-1.5 text-[10px] font-bold ${refundFeedback[row.id].kind==='error'?'bg-red-500/10 text-red-200':refundFeedback[row.id].kind==='success'?'bg-emerald-500/10 text-emerald-200':'bg-sky-500/10 text-sky-200'}`}>{refundFeedback[row.id].message}</p>}</td></tr>)}{!refundRows.length&&<tr><td colSpan={7} className="p-6 text-center text-neutral-500">{refundQuery.trim()?'No refunds match this search.':'No exchange invoices or refunds yet.'}</td></tr>}</tbody>
+      <tbody>{refundRows.map(row=>{const replacement=replacementFor(row);return <tr key={row.id} className="border-t border-neutral-800 align-top"><td className="break-words p-2 font-mono"><b className="text-teal-300">{row.id}</b><div className="text-[10px] text-neutral-400">{row.original_order_number} · {row.original_waybill}</div><div className="text-[10px] text-blue-300">New WB {row.new_waybill}</div>{(row.replacement_order_number||replacement?.order_number)&&<div className="text-[10px] text-violet-300">MAN {row.replacement_order_number||replacement?.order_number} · WB {row.replacement_waybill||replacement?.waybill_number}</div>}</td><td className="break-words p-2">{row.customer_name}<div className="break-all text-[10px] text-neutral-500">{row.phone}</div></td><td className="p-2">{money(row.order_total)}</td><td className="p-2">{money(row.delivery_fee)}</td><td className="p-2 font-black text-emerald-300">{money(row.refund_amount)}</td><td className="p-2"><span className={`rounded-full px-2 py-1 text-[9px] font-black ${row.status==='Pending Refund'?'bg-amber-500/10 text-amber-300':row.status==='Item Exchange'?'bg-sky-500/10 text-sky-300':'bg-emerald-500/10 text-emerald-300'}`}>{row.status}</span></td><td className="p-2"><div className="flex flex-wrap gap-1.5"><button onClick={()=>downloadInvoice(row)} className="inline-flex items-center gap-1 rounded-lg border border-neutral-700 px-2 py-1.5 text-[9px] font-bold text-neutral-200"><Download className="h-3 w-3"/>A5 PDF</button>{row.status==='Item Exchange'&&replacement?.invoice_locked&&<button onClick={()=>void generateOrderInvoicePDF(replacement,settings)} className="inline-flex items-center gap-1 rounded-lg border border-teal-500/30 bg-teal-500/10 px-2 py-1.5 text-[9px] font-bold text-teal-200"><Download className="h-3 w-3"/>MAN A6 PDF</button>}<button onClick={()=>downloadFardarCsv(row)} className="inline-flex items-center gap-1 rounded-lg border border-violet-500/30 bg-violet-500/10 px-2 py-1.5 text-[9px] font-bold text-violet-200"><FileSpreadsheet className="h-3 w-3"/>{row.status==='Item Exchange'?'2-parcel CSV':'Fardar CSV'}</button>{row.status==='Pending Refund'?<button disabled={busy===row.id} onClick={()=>chooseRefundSlip(row)} className="inline-flex items-center gap-1 rounded-lg bg-emerald-500 px-2 py-1.5 text-[9px] font-black text-neutral-950 disabled:opacity-40"><CheckCircle2 className="h-3 w-3"/>{busy===row.id?'Saving...':'Complete + Upload Slip'}</button>:<div className="flex flex-col gap-1 text-[10px] text-neutral-500">{row.refund_completed_at?new Date(row.refund_completed_at).toLocaleDateString():''}{row.refund_slip_path&&<button type="button" onClick={()=>void openRefundSlip(row)} className="text-left font-bold text-teal-300 underline">View payment slip</button>}</div>}</div>{row.status==='Item Exchange'&&replacement&&!replacement.invoice_locked&&<p className="mt-2 text-[10px] text-amber-300">MAN invoice waiting for stock allocation.</p>}{refundFeedback[row.id]&&<p role="status" aria-live="polite" className={`mt-2 rounded-md px-2 py-1.5 text-[10px] font-bold ${refundFeedback[row.id].kind==='error'?'bg-red-500/10 text-red-200':refundFeedback[row.id].kind==='success'?'bg-emerald-500/10 text-emerald-200':'bg-sky-500/10 text-sky-200'}`}>{refundFeedback[row.id].message}</p>}</td></tr>})}{!refundRows.length&&<tr><td colSpan={7} className="p-6 text-center text-neutral-500">{refundQuery.trim()?'No refunds match this search.':'No exchange invoices or refunds yet.'}</td></tr>}</tbody>
         </table>
       </div>
     </div>
