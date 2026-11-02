@@ -1755,14 +1755,29 @@ app.post('/api/orders/:id/exchange-invoices',requireStaffPermission('exchange_pa
         const n=Number(String(row.exchange_invoice?.id||'').match(/^EX-(\d+)$/)?.[1]||0);return Math.max(max,n);
       },0);
       const id='EX-'+String(highest+1).padStart(6,'0');
+      const exchangeType=req.body?.exchange_type==='Item Exchange'?'Item Exchange':'Cash Refund';
+      const selectedRows=Array.isArray(req.body?.items)?req.body.items:[];
+      let exchangeItems=original.items;
+      if(exchangeType==='Item Exchange'){
+        if(!selectedRows.length)return {rows,result:{error:'Choose at least one item for item exchange.'}};
+        exchangeItems=[];
+        for(const selected of selectedRows){
+          const itemIndex=Math.floor(Number(selected?.item_index));
+          const quantity=Math.floor(Number(selected?.quantity));
+          const source=original.items?.[itemIndex];
+          if(!source||!Number.isSafeInteger(quantity)||quantity<1||quantity>Number(source.quantity||0))return {rows,result:{error:'Selected exchange item quantity is invalid.'}};
+          exchangeItems.push({...source,quantity,unit_price:0,subtotal:0});
+        }
+      }
       const orderTotal=Math.max(0,Math.round(Number(original.total_amount||0)));
       const deliveryFee=Math.min(orderTotal,Math.max(0,Math.round(Number(original.delivery_fee||0))));
-      const refundAmount=Math.max(0,orderTotal-deliveryFee);
+      const refundAmount=exchangeType==='Cash Refund'?Math.max(0,orderTotal-deliveryFee):0;
       const exchange={id,invoice_number:id,original_order_id:original.id,original_order_number:original.order_number,
         original_waybill:String(original.waybill_number),new_waybill:newWaybill,courier_name:String(poolRow.courier_name||original.courier_name||'Fardar'),
         customer_name:String(original.customer_name||''),phone:String(original.phone||''),whatsapp:String(original.whatsapp||original.phone||''),
-        address:String(original.address||''),city:String(original.city||''),fardar_city:String(original.fardar_city||''),district:String(original.district||''),items:original.items,
-        order_total:orderTotal,delivery_fee:deliveryFee,refund_amount:refundAmount,status:'Pending Refund',created_at:createdAt,
+        address:String(original.address||''),city:String(original.city||''),fardar_city:String(original.fardar_city||''),district:String(original.district||''),items:exchangeItems,
+        order_total:orderTotal,delivery_fee:deliveryFee,refund_amount:refundAmount,exchange_type:exchangeType,
+        status:exchangeType==='Item Exchange'?'Item Exchange':'Pending Refund',created_at:createdAt,
         created_by:String(actor?.display_name||actor?.username||'Admin')};
       const assigned={...poolRow,status:'Assigned',assigned_order_id:id,assigned_order_number:id,assigned_at:createdAt,exchange_invoice:exchange};
       return {rows:rows.map((row:any)=>row===poolRow?assigned:row),result:{exchange,waybill:assigned}};
