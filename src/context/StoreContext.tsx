@@ -214,7 +214,8 @@ interface StoreContextType {
     quantity: number;
     reason?: string;
   }) => Promise<Order>;
-  createExchangeInvoice: (orderId:string,waybillNumber:string) => Promise<{exchange:ExchangeInvoiceRecord}>;
+  createExchangeInvoice: (orderId:string,waybillNumber:string,exchangeType?:'Cash Refund'|'Item Exchange',items?:{item_index:number;quantity:number}[]) => Promise<{exchange:ExchangeInvoiceRecord}>;
+  createItemExchangeReplacement: (input:{originalOrderId:string;items:{itemIndex:number;quantity:number}[];waybillNumber:string;exchangeId:string}) => Promise<Order>;
   completeExchangeRefund: (exchangeId:string, proof: { slipDataUrl:string; slipFileName:string; slipContentType:string }) => Promise<{exchange:ExchangeInvoiceRecord;original_order?:Order|null}>;
   updateOrderStatus: (orderId: string, status: OrderStatus) => void;
   cancelOrderDirect: (orderId: string, reason: string, cancelledBy?: string) => Promise<{ success: boolean; message: string }>;
@@ -2014,6 +2015,53 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return savedOrder;
   };
 
+  const createItemExchangeReplacement=async(input:{originalOrderId:string;items:{itemIndex:number;quantity:number}[];waybillNumber:string;exchangeId:string}):Promise<Order>=>{
+    const original=orders.find(order=>order.id===input.originalOrderId);
+    if(!original)throw new Error('Original order was not found.');
+    if(original.order_status!=='Delivered'||!original.stock_allocated)throw new Error('Item exchange is available only for delivered orders with allocated stock.');
+    const selected=(input.items||[]).map(row=>{
+      const item=original.items?.[row.itemIndex],quantity=Math.floor(Number(row.quantity));
+      if(!item||!Number.isSafeInteger(quantity)||quantity<1||quantity>Number(item.quantity||0))throw new Error('Check the selected item quantities.');
+      return {...item,quantity,unit_price:0,subtotal:0};
+    });
+    if(!selected.length)throw new Error('Choose at least one item to exchange.');
+    const courier=original.courier_name||settings.courier_provider||'Fardar';
+    const waybill=waybillRecords.find(row=>row.waybill_number===input.waybillNumber&&row.status==='Available'&&row.courier_name===courier);
+    if(!waybill)throw new Error('The second waybill is no longer available. Refresh and try again.');
+    const needs=selected.flatMap(item=>inventoryRequirementsForOrderItem(item));
+    const required=new Map<string,InventoryRequirement>();
+    needs.forEach(row=>{const key=row.product_id+'::'+(row.variant_id||'base'),prev=required.get(key);required.set(key,prev?{...prev,quantity:prev.quantity+row.quantity}:row);});
+    required.forEach(req=>{const product=products.find(row=>row.id===req.product_id);if(!product||inventoryStock(product,req.variant_id)<req.quantity)throw new Error('Not enough stock for '+req.label+'. No replacement order was created.');});
+    const now=new Date().toISOString(),actor=adminUser?.name||'Admin';
+    const replacement:Order={
+      id:typeof crypto!=='undefined'&&typeof crypto.randomUUID==='function'?'ord-'+crypto.randomUUID():'ord-exchange-'+Date.now(),
+      order_number:nextSourceOrderNumber('Manual Admin'),customer_name:original.customer_name,phone:original.phone,whatsapp:original.whatsapp,
+      address:original.address,city:original.city,district:original.district,fardar_city:original.fardar_city,
+      payment_method:'COD',payment_status:'Paid',order_status:'Processing',items:selected,subtotal:0,delivery_fee:0,internal_delivery_fee:0,
+      delivery_included_in_item_price:false,special_offer_discount:0,delivery_rebalance_qty_offer:false,delivery_rebalance_qty_offer_amount:0,
+      delivery_rebalance_amount_snapshot:0,delivery_visible_fee_snapshot:0,gift_wrap_selected:false,gift_wrap_fee:0,total_amount:0,
+      is_advance_required:false,advance_amount:0,advance_confirmed:true,order_source:'Manual Admin',call_center_status:'Confirmed',
+      is_synced_google_sheets:true,courier_name:courier,waybill_number:waybill.waybill_number,tracking_status:'Waybill Assigned',
+      delivery_status:'Ready to Ship',shipment_mode:'manual',stock_status:'Waiting for Stock',stock_allocated:false,is_duplicate_order:false,
+      dispatch_status:'Not Scanned',is_replacement_order:true,replacement_of_order_id:original.id,
+      replacement_of_order_number:original.order_number,replacement_of_waybill:original.waybill_number,
+      replacement_item_sku:selected.map(item=>item.sku).join(', '),replacement_qty:selected.reduce((sum,item)=>sum+item.quantity,0),
+      replacement_reason:'Customer item exchange',replacement_created_by:actor,
+      notes:['ITEM EXCHANGE REPLACEMENT','Exchange: '+input.exchangeId,'Original Order: '+original.order_number,
+        original.waybill_number?'Original Waybill: '+original.waybill_number:'',
+        ...selected.map(item=>item.sku+' x'+item.quantity),'COD Rs. 0','Delivery Rs. 0',
+        'Replacement stock will be deducted by normal FIFO allocation.'].filter(Boolean).join(' | '),created_at:now,
+    };
+    const saved=await staffBulkOrderSaveAndSheetSync([replacement]);
+    const savedOrder=saved.orders?.[0];
+    if(!savedOrder)throw new Error('The MAN replacement order could not be saved.');
+    setOrders(prev=>[savedOrder,...prev.filter(order=>order.id!==savedOrder.id&&order.order_number!==savedOrder.order_number)]);
+    setWaybillRecords(prev=>prev.map(row=>row.id===waybill.id?{...row,status:'Assigned',assigned_order_id:savedOrder.id,assigned_order_number:savedOrder.order_number,assigned_at:now}:row));
+    logActivity({action:'Item Exchange Replacement Created',module:'Exchange Parcels',target_id:input.exchangeId,target_label:input.exchangeId,
+      details:'Original '+original.order_number+' • MAN '+savedOrder.order_number+' • '+waybill.waybill_number+' • COD Rs. 0'});
+    return savedOrder;
+  };
+
   const refreshExchangeInvoices=async()=>{
     const canUse=adminUser?.role==='admin'||(adminUser?.permissions||[]).some(permission=>permission==='exchange_parcels'||permission.startsWith('level:exchange_parcels:'));
     if(!canUse||!getStaffSessionToken())return;
@@ -2021,8 +2069,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if(Array.isArray(data?.invoices))setExchangeInvoices(data.invoices);
   };
   useEffect(()=>{void refreshExchangeInvoices().catch(error=>console.warn('Exchange invoice refresh failed:',error?.message||error));},[adminUser?.id]);
-  const createExchangeInvoice=async(orderId:string,waybillNumber:string)=>{
-    const data=await sharedStaffRequest(`/api/orders/${encodeURIComponent(orderId)}/exchange-invoices`,{method:'POST',body:JSON.stringify({waybill_number:waybillNumber})});
+  const createExchangeInvoice=async(orderId:string,waybillNumber:string,exchangeType:'Cash Refund'|'Item Exchange'='Cash Refund',items:{item_index:number;quantity:number}[]=[])=>{
+    const data=await sharedStaffRequest(`/api/orders/${encodeURIComponent(orderId)}/exchange-invoices`,{method:'POST',body:JSON.stringify({waybill_number:waybillNumber,exchange_type:exchangeType,items})});
     if(!data?.exchange)throw new Error('Exchange invoice was not saved.');
     setExchangeInvoices(prev=>[data.exchange,...prev]);
     setWaybillRecords(prev=>prev.map(row=>row.waybill_number===waybillNumber?{...row,status:'Assigned',assigned_order_id:data.exchange.id,assigned_order_number:data.exchange.id,assigned_at:data.exchange.created_at,exchange_invoice:data.exchange}:row));
@@ -3747,6 +3795,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         importBulkOrders,
         createMissingItemReplacement,
         createExchangeInvoice,
+        createItemExchangeReplacement,
         completeExchangeRefund,
         updateOrderStatus,
         cancelOrderDirect,
