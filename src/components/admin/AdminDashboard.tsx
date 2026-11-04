@@ -6372,7 +6372,7 @@ Suitable For:
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-cyan-500/20 bg-neutral-950 p-3">
                   <p className="text-[10px] text-neutral-400" aria-live="polite">
-                    {deliverySplitDraftDirty ? 'Unsaved changes — the website keeps the current saved delivery split until you save.' : deliverySplitSaved ? 'Delivery split saved.' : 'Press Save Delivery Split to apply these amounts.'}
+                    {deliverySplitDraftDirty ? 'Unsaved changes — the website keeps the current saved delivery split until you save.' : deliverySplitSaved ? 'Delivery split saved.' : 'Current saved delivery split.'}
                   </p>
                   <button type="button" onClick={saveDeliverySplitSettings} className="rounded-xl bg-cyan-400 px-4 py-2 text-xs font-black text-neutral-950 hover:bg-cyan-300">
                     Save Delivery Split
