@@ -374,6 +374,14 @@ export const AdminDashboard: React.FC = () => {
   });
   const [bankDetailsSavedFlash, setBankDetailsSavedFlash] = useState(false);
 
+  // Delivery split values stay local until the admin presses Save.
+  const [deliverySplitDraft, setDeliverySplitDraft] = useState({
+    baseFee: Number(settings.delivery_base_fee ?? settings.delivery_price_rebalance_original_fee ?? settings.delivery_fee ?? 0),
+    percent: Number(settings.delivery_rebalance_percent ?? 0),
+  });
+  const [deliverySplitDraftDirty, setDeliverySplitDraftDirty] = useState(false);
+  const [deliverySplitSaved, setDeliverySplitSaved] = useState(false);
+
   const [visitorAnalytics, setVisitorAnalytics] = useState({
     todayVisitors: 0,
     last7Visitors: 0,
@@ -419,6 +427,24 @@ export const AdminDashboard: React.FC = () => {
       bank_branch: settings.bank_branch || '',
     });
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'settings' || deliverySplitDraftDirty) return;
+    setDeliverySplitDraft({
+      baseFee: Number(settings.delivery_base_fee ?? settings.delivery_price_rebalance_original_fee ?? settings.delivery_fee ?? 0),
+      percent: Number(settings.delivery_rebalance_percent ?? 0),
+    });
+  }, [activeTab, settings.delivery_base_fee, settings.delivery_price_rebalance_original_fee, settings.delivery_fee, settings.delivery_rebalance_percent, deliverySplitDraftDirty]);
+
+  const saveDeliverySplitSettings = () => {
+    const baseFee = Math.max(0, Number(deliverySplitDraft.baseFee) || 0);
+    const percent = Math.max(0, Math.min(100, Number(deliverySplitDraft.percent) || 0));
+    updateSettings({ delivery_base_fee: baseFee, delivery_rebalance_percent: percent });
+    setDeliverySplitDraft({ baseFee, percent });
+    setDeliverySplitDraftDirty(false);
+    setDeliverySplitSaved(true);
+    window.setTimeout(() => setDeliverySplitSaved(false), 2500);
+  };
 
   const saveBankAccountDetails = () => {
     const cleaned = {
@@ -735,6 +761,10 @@ export const AdminDashboard: React.FC = () => {
   const [priceIncreaseMessage, setPriceIncreaseMessage] = useState('');
 
   const adminDeliverySplit = deliverySplitForSettings(settings);
+  const deliveryDraftBaseFee = Math.max(0, Number(deliverySplitDraft.baseFee) || 0);
+  const deliveryDraftPercent = Math.max(0, Math.min(100, Number(deliverySplitDraft.percent) || 0));
+  const deliveryDraftItemPart = Math.round(deliveryDraftBaseFee * deliveryDraftPercent) / 100;
+  const deliveryDraftVisibleFee = Math.round(Math.max(0, deliveryDraftBaseFee - deliveryDraftItemPart) * 100) / 100;
   const autoDeliveryReserve = adminDeliverySplit.embeddedAmount;
   const visibleDeliveryCharge = adminDeliverySplit.visibleDelivery;
   const profitForBuyingPrice = (buyingPrice: number) => oraProfitForBuyingPrice(buyingPrice);
@@ -6318,8 +6348,8 @@ Suitable For:
                     <input
                       type="number"
                       min="0"
-                      value={settings.delivery_base_fee ?? settings.delivery_price_rebalance_original_fee ?? settings.delivery_fee}
-                      onChange={(e)=>updateSettings({delivery_base_fee:Math.max(0,Number(e.target.value||0))})}
+                      value={deliverySplitDraft.baseFee}
+                      onChange={(e)=>{setDeliverySplitDraft((prev)=>({...prev,baseFee:Math.max(0,Number(e.target.value||0))}));setDeliverySplitDraftDirty(true);setDeliverySplitSaved(false);}}
                       className="mt-1 w-full rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-white"
                     />
                   </label>
@@ -6329,16 +6359,24 @@ Suitable For:
                       min="0"
                       max="100"
                       step="1"
-                      value={adminDeliverySplit.percent}
-                      onChange={(e)=>updateSettings({delivery_rebalance_percent:Math.max(0,Math.min(100,Number(e.target.value||0)))})}
+                      value={deliverySplitDraft.percent}
+                      onChange={(e)=>{setDeliverySplitDraft((prev)=>({...prev,percent:Math.max(0,Math.min(100,Number(e.target.value||0)))}));setDeliverySplitDraftDirty(true);setDeliverySplitSaved(false);}}
                       className="mt-1 w-full rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-white"
                     />
                   </label>
                 </div>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                  <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-3"><p className="text-[9px] font-black text-neutral-500">ITEM PRICE PART</p><p className="mt-1 text-lg font-black text-cyan-300">Rs. {autoDeliveryReserve.toLocaleString()}</p><p className="text-[9px] text-neutral-500">not profit</p></div>
-                  <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-3"><p className="text-[9px] font-black text-neutral-500">WEBSITE / BILL / SHEET DELIVERY</p><p className="mt-1 text-lg font-black text-emerald-300">Rs. {visibleDeliveryCharge.toLocaleString()}</p></div>
-                  <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-3"><p className="text-[9px] font-black text-neutral-500">AUTO QTY OFFER</p><p className="mt-1 text-sm font-black text-orange-300">{autoDeliveryReserve > 0 ? `Qty 2: Rs. ${autoDeliveryReserve.toLocaleString()} • Qty 3: Rs. ${(autoDeliveryReserve*2).toLocaleString()}` : 'OFF'}</p><p className="text-[9px] text-neutral-500">0% = no automatic delivery Qty Offer</p></div>
+                  <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-3"><p className="text-[9px] font-black text-neutral-500">ITEM PRICE PART</p><p className="mt-1 text-lg font-black text-cyan-300">Rs. {deliveryDraftItemPart.toLocaleString()}</p><p className="text-[9px] text-neutral-500">not profit</p></div>
+                  <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-3"><p className="text-[9px] font-black text-neutral-500">WEBSITE / BILL / SHEET DELIVERY</p><p className="mt-1 text-lg font-black text-emerald-300">Rs. {deliveryDraftVisibleFee.toLocaleString()}</p></div>
+                  <div className="rounded-xl border border-neutral-800 bg-neutral-950 p-3"><p className="text-[9px] font-black text-neutral-500">AUTO QTY OFFER</p><p className="mt-1 text-sm font-black text-orange-300">{deliveryDraftItemPart > 0 ? `Qty 2: Rs. ${deliveryDraftItemPart.toLocaleString()} • Qty 3: Rs. ${(deliveryDraftItemPart*2).toLocaleString()}` : 'OFF'}</p><p className="text-[9px] text-neutral-500">0% = no automatic delivery Qty Offer</p></div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-cyan-500/20 bg-neutral-950 p-3">
+                  <p className="text-[10px] text-neutral-400" aria-live="polite">
+                    {deliverySplitDraftDirty ? 'Unsaved changes — the website keeps the current saved delivery split until you save.' : deliverySplitSaved ? 'Delivery split saved.' : 'Press Save Delivery Split to apply these amounts.'}
+                  </p>
+                  <button type="button" onClick={saveDeliverySplitSettings} className="rounded-xl bg-cyan-400 px-4 py-2 text-xs font-black text-neutral-950 hover:bg-cyan-300">
+                    Save Delivery Split
+                  </button>
                 </div>
               </div>
 
