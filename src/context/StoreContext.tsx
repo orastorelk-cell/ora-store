@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 54071)
-Total output lines: 3861
-
 import { stockConsumedItems, stockItemQuantities } from '../lib/orderStockQuantities';
 import { normalizeOrderMissingStockVariants, hasConflictingVariantOrderItems } from '../lib/exactVariantStockResolution';
 import { creditReturnStock } from '../lib/returnSheets';
@@ -47,7 +44,7 @@ import { mergeInvoiceDownloadReceipt } from '../lib/invoiceDownloadStatus';
 import { saveFardarExportStatus } from '../lib/fardarExportStatus';
 import { storefrontSaveBody, rebaseStorefrontEdit, sameStorefrontValue } from '../lib/storefrontProductSave';
 
-// Browser caches are only a convenience; a full localStorage quota must not crash Admin.
+// Browser caches are a convenience; a full localStorage quota must not crash Admin.
 const writeLocalCache = (key: string, value: string) => {
   try { localStorage.setItem(key, value); }
   catch (error) { console.warn(`Local cache ${key} could not be written.`, error); }
@@ -825,7 +822,2353 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!state || typeof state !== 'object') return;
     if (includePrivateSettings && state.return_inventory) {
       setReturnPackingPending(state.return_inventory.packing_pending === true);
-      setReturnStockTransactionPending((…34071 tokens truncated…nst saved = new Map<string, Order>(result.orders.map((order: Order) => [String(order.id), order]));
+      setReturnStockTransactionPending((state.return_inventory.allocation_paused ?? state.return_inventory.packing_pending) === true);
+      setReturnPackingBatches(state.return_inventory.batches || []);
+      const sharedHistory: StockHistory[] = Array.isArray(state.return_inventory.stockHistory) ? state.return_inventory.stockHistory : [];
+      const sharedReturns: ReturnRecord[] = Array.isArray(state.return_inventory.returnRecords) ? state.return_inventory.returnRecords : [];
+      const ids = new Set(sharedHistory.map(row => row.id)), orderIds = new Set(sharedReturns.map(row => row.order_id));
+      setStockHistory(previous => {
+        const next = [...sharedHistory,...previous.filter(row => !row.id.startsWith('return-stock:') && !ids.has(row.id))];
+        return JSON.stringify(next) === JSON.stringify(previous) ? previous : next;
+      });
+      setReturnRecords(previous => {
+        const next = [...sharedReturns,...previous.filter(row => !row.id.startsWith('return-sheet-v1:') && !row.id.startsWith('return-record:') && !orderIds.has(row.order_id))];
+        return JSON.stringify(next) === JSON.stringify(previous) ? previous : next;
+      });
+    }
+    let savedProducts=products, savedCategories=categories;
+    if (Array.isArray(state.products)) {
+      const used = new Set<string>();
+      const normalized = state.products.map((raw:any, idx:number) => {
+        const fallback = `S${String(idx + 1).padStart(4, '0')}`;
+        let sku = String(raw?.sku || fallback).trim().toUpperCase().replace(/[^A-Z0-9-]/g, '');
+        if (!sku) sku = fallback;
+        while (used.has(sku)) sku = `${fallback}-${idx + 1}`;
+        used.add(sku);
+        return normalizeProductForStorage({ ...raw, sku } as Product);
+      });
+      savedProducts=normalized;
+      setProducts(normalized);
+    }
+    if (Array.isArray(state.categories)) {savedCategories=state.categories as Category[];setCategories(savedCategories);}
+    const savedSettings=state.settings && typeof state.settings === 'object' && !Array.isArray(state.settings)
+      ? {...settings,...state.settings} as StoreSettings : settings;
+    setSettings(savedSettings);
+    sharedStoreSnapshotRef.current={products:savedProducts,categories:savedCategories,settings:savedSettings};
+    const verifiedVersion = Number(state.version || 0);
+    sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, verifiedVersion);
+    try {
+      if (state.updated_at) localStorage.setItem('ora_storefront_updated_at', String(state.updated_at));
+      if (verifiedVersion) localStorage.setItem('ora_storefront_version', String(verifiedVersion));
+    } catch {}
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    setSharedStoreReady(false);
+    sharedStoreSnapshotRef.current=null;
+    const loadSharedStore = async () => {
+      try {
+        const hasStaffSession = Boolean(adminUser && getStaffSessionToken());
+        let data:any;
+        if (hasStaffSession) {
+          data = await confirmCsvRequestWithRetry(sharedStaffRequest,'/api/admin/storefront/state');
+        } else {
+          const cachedUpdatedAt = String(localStorage.getItem('ora_storefront_updated_at') || '');
+          const cachedVersion = Math.max(0, Number(localStorage.getItem('ora_storefront_version') || 0));
+          const hasUsableCache = cachedUpdatedAt && products.length > 0;
+
+          if (hasUsableCache) {
+            const versionData = await publicStorefrontRequest('/api/storefront/version').catch(() => null);
+            if (versionData?.initialized && String(versionData.updated_at || '') === cachedUpdatedAt) {
+              sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, cachedVersion);
+              data = { initialized:true, cache_verified:true };
+            }
+          }
+
+          if (!data?.cache_verified) {
+            data = await publicStorefrontRequest('/api/storefront/state');
+          }
+        }
+        if (cancelled) return;
+
+        if (data?.cache_verified) {
+          // The tiny server version check proved this browser cache is exactly the
+          // current live catalog, so the customer can see it without a full JSON wait.
+        } else if (data?.initialized && data?.state) {
+          applySharedStorefrontState(data.state, hasStaffSession);
+          if(hasStaffSession&&adminUser){
+            const draft=readStorefrontDraft(localStorage,adminUser.id),current=sharedStoreSnapshotRef.current!;
+            if(draft){
+              const recovered=rebaseStorefrontEdit(draft.base,draft.next,current);
+              if(recovered){
+                if(sameStorefrontValue(recovered,current))acknowledgeStorefrontDraft(localStorage,adminUser.id,draft.next,Number(data.state.version||0));
+                else{setProducts(recovered.products);setCategories(recovered.categories);setSettings(recovered.settings as StoreSettings);setStorefrontSyncMessage('Recovered your unsaved website edit. Saving it now…');}
+              }else{
+                archiveStorefrontDraft(localStorage,adminUser.id);
+                setStorefrontSyncMessage('An earlier unsaved edit is preserved in this browser. Newer server data conflicts with it; review the latest values and save your intended edit again.');
+              }
+            }
+          }
+        } else if (adminUser?.role === 'admin') {
+          // One-time migration: the current Super Admin browser owns the existing
+          // catalog. Authenticated live installs publish through the private API.
+          // Older localhost installs may have a legacy Admin session without a
+          // server token, so use the loopback-only bridge to preserve the real
+          // local products/logo/settings and make them visible to every Chrome.
+          const saved = hasStaffSession
+            ? await sharedStaffRequest('/api/admin/storefront/state', {
+                method:'PUT',
+                body:JSON.stringify({ products, categories, settings }),
+              })
+            : isLocalStorefrontHost()
+              ? await localStorefrontRequest({ products, categories, settings })
+              : null;
+          if (saved) {
+            sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, Number(saved?.version || 1));
+            sharedStoreSnapshotRef.current={products,categories,settings};
+          }
+        }
+      } catch (err:any) {
+        if (Number(err?.status || 0) === 401 && adminUser && !isLocalStorefrontHost()) {
+          localStorage.removeItem('ora_staff_session_token');
+          localStorage.removeItem('ora_admin_user');
+          if (!cancelled) setAdminUser(null);
+          console.warn('Admin session expired. Login again before editing the shared storefront.');
+        } else {
+          console.warn('Shared storefront load failed; using this browser cache temporarily:', err?.message || err);
+        }
+      } finally {
+        if (!cancelled) setSharedStoreReady(true);
+      }
+    };
+    loadSharedStore();
+    return () => { cancelled = true; };
+    // Deliberately reload when the staff identity changes. The current local catalog
+    // is used only for the one-time Super Admin migration when the server is empty.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adminUser?.id]);
+
+  // Publish catalog/category/store-setting edits from authenticated staff only.
+  // Full storefront saves are serialized and retried so rapid edits / short network
+  // hiccups cannot create false "Website sync failed" alerts or out-of-order writes.
+  useEffect(() => {
+    if (!sharedStoreReady || !adminUser) return;
+    const saved=sharedStoreSnapshotRef.current;
+    // A failed load must never publish stale cache; hydration is not a new edit.
+    if(!saved||(saved.products===products&&saved.categories===categories&&saved.settings===settings))return;
+
+    const draftPreserved=rememberStorefrontDraft(localStorage,adminUser.id,saved,{products,categories,settings},sharedStoreVersionRef.current);
+
+    const timer = window.setTimeout(() => {
+      const seq = ++storefrontPublishSeqRef.current;
+      const snapshot = { products, categories, settings };
+
+      storefrontPublishQueueRef.current = storefrontPublishQueueRef.current
+        .catch(() => {})
+        .then(async () => {
+          if (!adminUser || adminIdentityRef.current!==adminUser.id || seq !== storefrontPublishSeqRef.current) return;
+          setStorefrontSyncMessage('Saving website changes…');
+          storefrontRetryableRef.current=false;
+
+          const publishOnce = async () => {
+            if (isLocalStorefrontHost()) {
+              const token = getStaffSessionToken();
+              return token
+                ? sharedStaffRequest('/api/admin/storefront/state', {
+                    method:'PUT',
+                    body:JSON.stringify({...snapshot,expected_version:sharedStoreVersionRef.current}),
+                  })
+                : localStorefrontRequest(snapshot);
+            }
+
+            // Keep active Admin sessions fresh before a large storefront write.
+            // The refresh helper existed previously but this publish path never used it.
+            await refreshStaffSessionToken();
+            if (!getStaffSessionToken()) {
+              const authErr:any = new Error('Admin session is no longer active.');
+              authErr.status = 401;
+              throw authErr;
+            }
+            return sharedStaffRequest('/api/admin/storefront/state', {
+              method:'PUT',
+              body:JSON.stringify(storefrontSaveBody(sharedStoreSnapshotRef.current,snapshot,sharedStoreVersionRef.current)),
+            });
+          };
+
+          let lastError:any = null;
+          const retryDelays = [0, 1200, 3000];
+          for (let attempt=0; attempt<retryDelays.length; attempt++) {
+            if (adminIdentityRef.current!==adminUser.id || seq !== storefrontPublishSeqRef.current) return;
+            const delay=Math.min(15000,Math.max(retryDelays[attempt],Number(lastError?.retryAfterMs||0)));
+            if (delay > 0) {
+              await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
+            }
+            try {
+              const data = await publishOnce();
+              if(data?.ok!==true||!Number.isSafeInteger(data?.version)||data.version<1){const error:any=new Error('The server did not verify the website save.');error.status=503;throw error;}
+              if(adminIdentityRef.current!==adminUser.id)return;
+              sharedStoreVersionRef.current = Math.max(sharedStoreVersionRef.current, Number(data?.version || 0));
+              sharedStoreSnapshotRef.current=snapshot;
+              acknowledgeStorefrontDraft(localStorage,adminUser.id,snapshot,data.version);
+              if(seq===storefrontPublishSeqRef.current)setStorefrontSyncMessage('Website changes saved.');
+              return;
+            } catch (err:any) {
+              lastError = err;
+              if ([401,403,409].includes(Number(err?.status || 0))) break;
+            }
+          }
+
+          const status = Number(lastError?.status || 0);
+          if(adminIdentityRef.current!==adminUser.id)return;
+          if ((status === 401 || status === 403) && !isLocalStorefrontHost()) {
+            localStorage.removeItem('ora_staff_session_token');
+            localStorage.removeItem('ora_admin_user');
+            setAdminUser(null);
+            if (seq === storefrontPublishSeqRef.current) {
+              window.alert('Admin session expired. Please login again, then save once more.');
+            }
+            return;
+          }
+
+          // Ignore a failed stale save if a newer edit is already queued. The newer
+          // snapshot is the one that matters and will publish immediately after this.
+          if (seq !== storefrontPublishSeqRef.current) {
+            console.warn('Older storefront publish failed; a newer save is queued:', lastError?.message || lastError);
+            return;
+          }
+
+          console.warn('Shared storefront publish failed after retries:', lastError?.message || lastError);
+          storefrontRetryableRef.current=![400,401,403,409,413].includes(status);
+          const retained=draftPreserved?'Your edit is preserved.':'Keep this page open; the browser could not store a recovery copy.';
+          setStorefrontSyncMessage(status===409
+            ? `Newer server data conflicts with this edit. ${retained} ${draftPreserved?'Reload to review the latest values.':'Copy your edit before reloading to review the latest values.'}`
+            : `Website changes are not saved yet: ${String(lastError?.message||'Connection unavailable')}. ${retained} ${storefrontRetryableRef.current?'Retrying automatically.':'Review this edit before retrying.'}`);
+        });
+    }, 900);
+
+    return () => window.clearTimeout(timer);
+  }, [products, categories, settings, sharedStoreReady, adminUser?.id, storefrontRetry]);
+
+  useEffect(()=>{
+    if(!adminUser)return;
+    const retry=()=>{if(storefrontRetryableRef.current&&navigator.onLine!==false)retryStorefrontSave();};
+    const timer=window.setInterval(retry,30000);
+    window.addEventListener('online',retry);window.addEventListener('focus',retry);
+    return ()=>{window.clearInterval(timer);window.removeEventListener('online',retry);window.removeEventListener('focus',retry);};
+  },[adminUser?.id]);
+
+  // Public storefront freshness:
+  // Facebook/Instagram in-app browsers can restore an old page from memory/BFCache
+  // without remounting React. Re-read the authoritative shared catalog whenever
+  // the page is shown again or becomes visible, as well as on focus/interval.
+  useEffect(() => {
+    if (!sharedStoreReady || (adminUser && getStaffSessionToken())) return;
+    let cancelled = false;
+    const refreshPublicStore = async () => {
+      if (document.visibilityState === 'hidden') return;
+      try {
+        const cachedUpdatedAt = String(localStorage.getItem('ora_storefront_updated_at') || '');
+        if (cachedUpdatedAt) {
+          const versionData = await publicStorefrontRequest('/api/storefront/version');
+          if (cancelled || !versionData?.initialized) return;
+          if (String(versionData.updated_at || '') === cachedUpdatedAt) return;
+        }
+
+        const data = await publicStorefrontRequest('/api/storefront/state');
+        if (cancelled || !data?.initialized || !data?.state) return;
+        const version = Number(data.state.version || 0);
+        if (version && version <= sharedStoreVersionRef.current && String(data.state.updated_at || '') === cachedUpdatedAt) return;
+        applySharedStorefrontState(data.state, false);
+      } catch {}
+    };
+    const onPageShow = () => { void refreshPublicStore(); };
+    const onVisibility = () => { if (document.visibilityState === 'visible') void refreshPublicStore(); };
+    const timer = window.setInterval(refreshPublicStore, isLocalStorefrontHost() ? 5_000 : 30_000);
+    window.addEventListener('focus', refreshPublicStore);
+    window.addEventListener('pageshow', onPageShow);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refreshPublicStore);
+      window.removeEventListener('pageshow', onPageShow);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adminUser?.id, sharedStoreReady]);
+
+  const refreshReturnInventory = async () => {
+    if (!adminUser || !getStaffSessionToken()) return;
+    await storefrontPublishQueueRef.current.catch(() => {});
+    const data = await confirmCsvRequestWithRetry(sharedStaffRequest,'/api/admin/storefront/state');
+    if (!data?.initialized || !data?.state) throw new Error('Shared stock could not be refreshed.');
+    await refreshOrdersFromServer(true);
+    applySharedStorefrontState(data.state,true);
+  };
+
+  // Receiving at another location updates the shared catalog. A clean staff
+  // view refreshes that version without replacing an unsaved product edit.
+  useEffect(() => {
+    if (!adminUser || !getStaffSessionToken() || !sharedStoreReady) return;
+    let active = true, running = false;
+    const refresh = async () => {
+      const snapshot = sharedStoreSnapshotRef.current;
+      if (running || !snapshot || snapshot.products !== products || snapshot.categories !== categories || snapshot.settings !== settings || document.visibilityState !== 'visible') return;
+      running = true;
+      try {
+        const response = await fetch('/api/storefront/version', { cache: 'no-store' });
+        const version = await response.json();
+        if (!response.ok || !active || !version.initialized || String(version.updated_at) === String(localStorage.getItem('ora_storefront_updated_at') || '')) return;
+        const data = await confirmCsvRequestWithRetry(sharedStaffRequest,'/api/admin/storefront/state');
+        if (active && data?.state && sharedStoreSnapshotRef.current === snapshot) { await refreshOrdersFromServer(); if(active&&sharedStoreSnapshotRef.current===snapshot)applySharedStorefrontState(data.state,true); }
+      } catch (error: any) { console.warn('Shared return inventory refresh failed:',error.message); }
+      finally { running = false; }
+    };
+    const timer = window.setInterval(refresh,30000); window.addEventListener('focus',refresh);
+    return () => { active = false; window.clearInterval(timer); window.removeEventListener('focus',refresh); };
+  },[adminUser?.id,sharedStoreReady,products,categories,settings]);
+
+  // Super Admin account list comes from the shared server store. In local development
+  // the Express server uses one JSON file shared by every browser. When Supabase
+  // service-role configuration is present, the same API stores users in Supabase.
+  useEffect(() => {
+    if (adminUser?.role !== 'admin' || !getStaffSessionToken()) return;
+    let cancelled = false;
+    sharedStaffRequest('/api/staff/accounts')
+      .then((data) => {
+        if (!cancelled && Array.isArray(data?.users)) {
+          setStaffUsers(data.users.map((u: any) => ({ ...u, role: u.role === 'admin' ? 'admin' : 'staff' })));
+        }
+      })
+      .catch((err) => console.warn('Shared staff refresh failed:', err?.message || err));
+    return () => { cancelled = true; };
+  }, [adminUser?.id, adminUser?.role]);
+
+  const readOrderServerVersion = async () => {
+    const data = await sharedStaffRequest('/api/orders/version');
+    return data?.revision?String(data.revision):`${Math.max(0, Number(data?.count || 0))}|${String(data?.updated_at || '')}`;
+  };
+
+  const refreshOrdersFromServer = async (afterMutation=false) => {
+    if (!adminUser || !getStaffSessionToken()) return;
+    await staffMutationQueue.drain();
+    const user=adminUser.id;
+    if(orderRefreshRef.current?.user===user){
+      const previous=orderRefreshRef.current.promise;
+      if(!afterMutation)return previous;
+      await previous.catch(()=>{});
+      // A read already in flight before a mutation cannot verify its new stock
+      // or invoice state. Coalesce ordinary polls, then obtain a fresh snapshot.
+      return refreshOrdersFromServer();
+    }
+    const pending=(async()=>{
+    let data:any;
+    try{data=await confirmCsvRequestWithRetry(async(url,options)=>{
+      const result=await sharedStaffRequest(url,options);
+      const list=Array.isArray(result?.snapshots)?result.snapshots.map((row:any)=>row?.payload):result?.orders;
+      if(!Array.isArray(list)||list.some((order:any)=>!order?.id||!order.order_number||!Array.isArray(order.items))){const error:any=new Error('The server returned an incomplete order list.');error.status=503;throw error;}
+      return result;
+    },'/api/orders?format=snapshots');}
+    catch(error:any){if(adminIdentityRef.current===user)setOrderLoadError('Orders could not load from the server. Your previous list is kept. Automatic retry is active.');throw error;}
+    if(adminIdentityRef.current!==user||!getStaffSessionToken())return;
+    const serverOrders: Order[] = Array.isArray(data?.snapshots) ? data.snapshots.map((row:any)=>row?.payload) : data?.orders;
+    if(!Array.isArray(serverOrders)||serverOrders.some(order=>!order||!order.id||!order.order_number||!Array.isArray(order.items))){setOrderLoadError('The server returned an incomplete order list. Automatic retry is active.');throw new Error('Order loading did not finish. The previous order list has been kept; retrying the server.');}
+    const sortedServerOrders = [...serverOrders].sort((a,b)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime())
+      .map(order=>{const receipt=invoiceDownloadReceiptsRef.current.get(String(order.id));return receipt?mergeInvoiceDownloadReceipt(order,receipt):order;});
+
+    // Customer DB is derived from the same durable order snapshots for every
+    // authenticated Admin/Staff browser. Local browser demo data is never authoritative.
+    const phoneKey = (value: unknown) => {
+      let digits = String(value || '').replace(/\D/g, '');
+      if (digits.startsWith('94') && digits.length === 11) digits = '0' + digits.slice(2);
+      return digits;
+    };
+    const customerMap = new Map<string, Customer>();
+    [...sortedServerOrders]
+      .filter((order:any) =>
+        !order?.is_test_order &&
+        !/^(WEB-TEST-|TEST-FB-|TEST-TK-|ORA-DIAG-)/i.test(String(order?.order_number || ''))
+      )
+      .sort((a,b)=>new Date(a.created_at).getTime()-new Date(b.created_at).getTime())
+      .forEach((order) => {
+        const key = phoneKey(order.phone);
+        if (!key) return;
+        const previous = customerMap.get(key);
+        if (previous) {
+          customerMap.set(key, {
+            ...previous,
+            name: String(order.customer_name || previous.name),
+            phone: String(order.phone || previous.phone),
+            whatsapp: String(order.whatsapp || order.phone || previous.whatsapp || ''),
+            address: String(order.address || previous.address || ''),
+            city: String(order.city || previous.city || ''),
+            total_orders: Number(previous.total_orders || 0) + 1,
+            total_spent: Number(previous.total_spent || 0) + Number(order.total_amount || 0),
+          });
+          return;
+        }
+        customerMap.set(key, {
+          id: 'cust-order-' + key,
+          name: String(order.customer_name || 'Customer'),
+          phone: String(order.phone || ''),
+          whatsapp: String(order.whatsapp || order.phone || ''),
+          address: String(order.address || ''),
+          city: String(order.city || ''),
+          total_orders: 1,
+          total_spent: Number(order.total_amount || 0),
+          created_at: String(order.created_at || new Date().toISOString()),
+        });
+      });
+    const serverCustomers = Array.from(customerMap.values())
+      .sort((a,b)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime());
+
+    setOrders(sortedServerOrders);
+    setSharedOrdersReady(true);setOrderLoadError('');
+    setCustomers(serverCustomers);
+    try {
+      localStorage.setItem('ora_orders', JSON.stringify(sortedServerOrders));
+      writeLocalCache('ora_customers', JSON.stringify(serverCustomers));
+    } catch {}
+
+    try {
+      // Seed from the same snapshot. A separate newer version could hide orders
+      // that arrived while this list was loading.
+      orderServerVersionRef.current = data?.revision?String(data.revision):'';
+    } catch (err:any) {
+      console.warn('Order version seed failed:', err?.message || err);
+    }
+    })();
+    orderRefreshRef.current={user,promise:pending};
+    try{await pending;}finally{if(orderRefreshRef.current?.promise===pending)orderRefreshRef.current=null;}
+  };
+
+  // Server is the authoritative order mirror. On Admin login, replace the browser
+  // order cache with the durable server list instead of merging stale local orders back.
+  useEffect(() => {
+    setSharedOrdersReady(false);
+    orderServerVersionRef.current = '';
+    if (!adminUser || !getStaffSessionToken()) return;
+    refreshOrdersFromServer().catch(err=>console.warn('Order server refresh failed:',err?.message||err));
+  }, [adminUser?.id]);
+
+
+  // Keep admin payment/order queues fresh without downloading the full order
+  // snapshot list every minute. Poll only a tiny count/latest-updated stamp and
+  // download the full list when another device/process actually changed it.
+  useEffect(() => {
+    if (!adminUser || !getStaffSessionToken()) return;
+    let checking = false;
+
+    const refreshIfChanged = async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        const nextVersion = await readOrderServerVersion();
+        if (!orderServerVersionRef.current) {
+          await refreshOrdersFromServer();
+          return;
+        }
+        if (nextVersion !== orderServerVersionRef.current) {
+          await refreshOrdersFromServer();
+        }
+      } catch (err:any) {
+        // Keep the current browser cache visible during a Supabase restriction/outage.
+        console.warn('Background order version check failed:', err?.message || err);
+      } finally {
+        checking = false;
+      }
+    };
+
+    const timer = window.setInterval(() => { void refreshIfChanged(); }, orderLoadError?15_000:60_000);
+    return () => window.clearInterval(timer);
+  }, [adminUser?.id,!!orderLoadError]);
+
+  // Keep a visible Call Center product catalog current. Debounced to avoid spamming
+  // Apps Script during rapid edits.
+  useEffect(() => {
+    if (!adminUser || !settings.google_sheet_webhook_url) return;
+    const timer=window.setTimeout(()=>{
+      syncProductCatalogToGoogleSheets(products,settings.google_sheet_webhook_url,settings)
+        .catch(()=>undefined);
+    },800);
+    return ()=>window.clearTimeout(timer);
+  }, [products, settings.google_sheet_webhook_url, settings.free_delivery_enabled, settings.delivery_fee, settings.multi_buy_discount_enabled, settings.multi_buy_tier1_min, settings.multi_buy_tier1_max, settings.multi_buy_tier1_rate, settings.multi_buy_tier2_min, settings.multi_buy_tier2_max, settings.multi_buy_tier2_rate, settings.multi_buy_tier3_min, settings.multi_buy_tier3_max, settings.multi_buy_tier3_rate, adminUser?.id]);
+
+  const mirrorOrderUpdate = (order: Order) => {
+    if (!getStaffSessionToken()) return;
+    sharedStaffRequest(`/api/orders/${encodeURIComponent(order.id)}`, {
+      method:'PUT',
+      body:JSON.stringify({order}),
+    }).catch(err=>console.warn('Order mirror update failed:',err?.message||err));
+  };
+
+  const logActivity = (entry: { action: string; module: string; target_id?: string; target_label?: string; details?: string; actor?: AdminUser | null; actor_name?: string; actor_role?: ActivityLog['actor_role']; }) => {
+    const actor = entry.actor === undefined ? adminUser : entry.actor;
+    const log: ActivityLog = {
+      id: `act-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      actor_id: actor?.id,
+      actor_name: entry.actor_name || actor?.name || 'System',
+      actor_username: actor?.username,
+      actor_role: entry.actor_role || actor?.role || 'system',
+      action: entry.action,
+      module: entry.module,
+      target_id: entry.target_id,
+      target_label: entry.target_label,
+      details: entry.details,
+      created_at: new Date().toISOString(),
+    };
+    setActivityLogs((prev) => [log, ...prev].slice(0, 5000));
+  };
+
+  // Admin Auth Handlers
+  const loginAdmin = (user: AdminUser) => {
+    const sessionToken = String((user as any)._sessionToken || '');
+    if (sessionToken) localStorage.setItem('ora_staff_session_token', sessionToken);
+    const cleanUser = { ...user } as any;
+    delete cleanUser._sessionToken;
+    setAdminUser(cleanUser);
+    logActivity({ action: 'Login', module: 'Authentication', actor: cleanUser, target_id: cleanUser.id, target_label: cleanUser.name });
+  };
+
+  const logoutAdmin = () => {
+    if (adminUser) logActivity({ action: 'Logout', module: 'Authentication', actor: adminUser, target_id: adminUser.id, target_label: adminUser.name });
+    localStorage.removeItem('ora_staff_session_token');
+    setAdminUser(null);
+    window.history.replaceState({}, '', '/system');
+    setIsAdminView(true);
+  };
+
+  const updateAdminPassword = (userId: string, newPass: string): boolean => {
+    if (adminUser?.role === 'admin') {
+      sharedStaffRequest(`/api/staff/accounts/${encodeURIComponent(userId)}`, { method: 'PATCH', body: JSON.stringify({ password: newPass }) })
+        .catch((err) => alert(`Shared password update failed: ${err.message}`));
+    }
+    logActivity({ action: 'Password Changed', module: 'User Access', target_id: userId, target_label: staffUsers.find((u) => u.id === userId)?.name || userId });
+    return true;
+  };
+
+  const addStaffAccount = (accountData: Omit<AdminUser, 'id'>) => {
+    const tempId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const newUser: AdminUser = {
+      ...accountData,
+      username: accountData.username.trim().toLowerCase(),
+      password: accountData.password?.trim(),
+      name: accountData.name.trim(),
+      email: accountData.email?.trim() || '',
+      role: accountData.role === 'admin' ? 'admin' : 'staff',
+      permissions: accountData.role === 'admin' ? undefined : (accountData.permissions || []),
+      is_active: accountData.is_active !== false,
+      id: tempId,
+      created_at: new Date().toISOString(),
+    };
+    setStaffUsers((prev) => [...prev, newUser]);
+
+    sharedStaffRequest('/api/staff/accounts', {
+      method: 'POST',
+      body: JSON.stringify({
+        username: newUser.username, password: newUser.password, name: newUser.name, email: newUser.email,
+        role: newUser.role, permissions: newUser.permissions || [], is_active: newUser.is_active !== false,
+      }),
+    }).then((data) => {
+      if (!data?.user) return;
+      setStaffUsers((prev) => prev.map((u) => u.id === tempId ? data.user : u));
+    }).catch((err) => {
+      setStaffUsers((prev) => prev.filter((u) => u.id !== tempId));
+      alert(`Staff account was not created: ${err.message}`);
+    });
+    logActivity({ action: 'Staff Account Created', module: 'User Access', target_id: tempId, target_label: newUser.name, details: `Role: ${newUser.role}` });
+  };
+
+  const deleteStaffAccount = (userId: string) => {
+    const target = staffUsers.find((u) => u.id === userId);
+    const previous = staffUsers;
+    setStaffUsers((prev) => prev.filter((u) => u.id !== userId));
+    sharedStaffRequest(`/api/staff/accounts/${encodeURIComponent(userId)}`, { method: 'DELETE' })
+      .catch((err) => { setStaffUsers(previous); alert(`Shared account delete failed: ${err.message}`); });
+    logActivity({ action: 'Staff Account Deleted', module: 'User Access', target_id: userId, target_label: target?.name || userId });
+  };
+
+  const updateStaffAccount = (userId: string, updates: Partial<AdminUser>) => {
+    const target = staffUsers.find((u) => u.id === userId);
+    const cleanUpdates: Partial<AdminUser> = { ...updates };
+    if (cleanUpdates.username !== undefined) cleanUpdates.username = cleanUpdates.username.trim().toLowerCase();
+    setStaffUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, ...cleanUpdates } : u)));
+    if (adminUser?.id === userId) setAdminUser((prev) => (prev ? { ...prev, ...cleanUpdates } : null));
+    sharedStaffRequest(`/api/staff/accounts/${encodeURIComponent(userId)}`, { method: 'PATCH', body: JSON.stringify(cleanUpdates) })
+      .then((data) => {
+        if (data?.user) setStaffUsers((prev) => prev.map((u) => u.id === userId ? data.user : u));
+      })
+      .catch((err) => alert(`Shared account update failed: ${err.message}`));
+    logActivity({ action: 'Staff Account Updated', module: 'User Access', target_id: userId, target_label: target?.name || userId, details: Object.keys(cleanUpdates).join(', ') });
+  };
+
+  // SAFE RESET MODES
+  const clearOperationalTestData = async () => {
+    if (!adminUser || adminUser.role !== 'admin') throw new Error('Super Admin login required.');
+
+    const sheetWebhookForClear = settings.google_sheet_webhook_url;
+
+    const result = await sharedStaffRequest('/api/operational-test-data', { method:'DELETE' });
+    if (!result?.ok) throw new Error('Server did not confirm the clear operation.');
+
+    setOrders([]);
+    setCustomers([]);
+    setStockHistory([]);
+    setPurchaseOrders([]);
+    setWaybillRecords([]);
+    setReturnRecords([]);
+    setActivityLogs([]);
+    setCart([]);
+    setLastPlacedOrder(null);
+    [
+      'ora_orders','ora_customers','ora_stock_history','ora_purchase_orders',
+      'ora_waybill_records','ora_return_records','ora_activity_logs','ora_cart'
+    ].forEach((key)=>localStorage.setItem(key,'[]'));
+    localStorage.removeItem('ora_admin_last_seen_order_at');
+
+    const verify=await sharedStaffRequest('/api/orders');
+    const remaining:Order[]=Array.isArray(verify?.orders)?verify.orders:[];
+    setOrders(remaining);
+    if(remaining.length>0) throw new Error(`Clear failed: ${remaining.length} order(s) still remain on the server.`);
+    if (sheetWebhookForClear) {
+      flushPendingOrderSheetSyncs();
+      enqueueSheetTask('operational clear', async () => {
+        const sheetResult = await clearGoogleSheetTestData(sheetWebhookForClear);
+        if (!sheetResult.success) throw new Error(sheetResult.message);
+      });
+    }
+  };
+
+  // One-time/live-start reset: removes demo/business data but keeps login, staff accounts,
+  // Google Sheet URL, API connection settings, branding/settings and the sheet connection itself.
+  const fullLiveStartReset = async () => {
+    if (!adminUser || adminUser.role !== 'admin') throw new Error('Super Admin login required.');
+
+    if(settings.google_sheet_webhook_url){
+      flushPendingOrderSheetSyncs();
+      await sheetTaskChainRef.current;
+      const sheetResult=await clearGoogleSheetLiveStartData(settings.google_sheet_webhook_url);
+      if(!sheetResult.success) throw new Error(`Google Sheet was not cleared, so the system reset was stopped: ${sheetResult.message}`);
+    }
+
+    const result = await sharedStaffRequest('/api/live-start-reset', { method:'DELETE' });
+    if (!result?.ok) throw new Error('Server did not confirm FULL LIVE START RESET.');
+
+    setProducts([]);
+    setCategories([]);
+    setOrders([]);
+    setCustomers([]);
+    setStockHistory([]);
+    setPurchaseOrders([]);
+    setWaybillRecords([]);
+    setReturnRecords([]);
+    setBlockedCustomers([]);
+    setActivityLogs([]);
+    setCart([]);
+    setLastPlacedOrder(null);
+    setSelectedProduct(null);
+
+    // Clean demo/public business details for the real-store start, while preserving
+    // technical connections, login access, branding and invoice design settings.
+    setSettings((prev) => ({
+      ...prev,
+      bank_name: '', bank_account_holder: '', bank_account_number: '', bank_branch: '', bank_details_saved: false,
+      whatsapp_number: '', hotline_number: '', company_email: '', company_address: '', top_banner_phone: '',
+      business_registration_enabled: false, business_registration_name: '', business_registration_number: '', business_registration_copy_url: '',
+    }));
+
+    const emptyKeys = [
+      'ora_products','ora_categories','ora_orders','ora_customers','ora_stock_history',
+      'ora_purchase_orders','ora_waybill_records','ora_return_records','ora_blocked_customers',
+      'ora_activity_logs','ora_cart'
+    ];
+    emptyKeys.forEach((key)=>localStorage.setItem(key,'[]'));
+    localStorage.removeItem('ora_admin_last_seen_order_at');
+    localStorage.removeItem('ora_assistant_support_session');
+
+    // Never clear ora_settings / auth session / shared staff accounts here.
+    logActivity({ action:'Full Live Start Reset', module:'Settings', details:'Operational/demo data and public business contact/payment details cleared. Website Info & Policy text, login/staff access, Google Sheet connection, technical connections, branding and invoice design preserved.' });
+  };
+
+  // Legacy reset entry now points to the safe live-start reset so it can never restore demo data
+  // or erase the Google Sheet connection/login by accident.
+  const resetSystemData = () => {
+    void fullLiveStartReset().catch((err)=>alert(err?.message || 'Reset failed.'));
+  };
+
+
+  // Cart operations (variant-safe)
+  const cartLineId = (product: Product, variant?: ProductVariant) => `${product.id}::${variant?.id || 'base'}`;
+
+  const addToCart = (product: Product, quantity = 1, variantId?: string) => {
+    const type = normalizedProductType(product);
+    const variant = type === 'variant' ? variantById(product, variantId) : undefined;
+    if (type === 'variant' && !variant) throw new Error(`Please select a color / option for ${product.name_en}.`);
+    if ((type === 'variant' ? Boolean(variant?.force_out_of_stock) : Boolean(product.force_out_of_stock))) {
+      throw new Error(`${product.name_en}${variant?.option_value ? ` - ${variant.option_value}` : ''} is currently out of stock.`);
+    }
+    const line_id = cartLineId(product, variant);
+    setCart((prev) => {
+      const existing = prev.find((item) => (item.line_id || cartLineId(item.product,item.variant)) === line_id);
+      if (existing) {
+        return prev.map((item) => (item.line_id || cartLineId(item.product,item.variant)) === line_id
+          ? { ...item, quantity: Math.min(999, item.quantity + quantity), line_id }
+          : item
+        );
+      }
+      return [...prev, { product, variant, line_id, quantity: Math.min(999, Math.max(1, quantity)) }];
+    });
+  };
+
+  const removeFromCart = (lineIdOrProductId: string) => {
+    setCart((prev) => prev.filter((item) => {
+      const key=item.line_id || cartLineId(item.product,item.variant);
+      return key !== lineIdOrProductId && item.product.id !== lineIdOrProductId;
+    }));
+  };
+
+  const updateCartQuantity = (lineIdOrProductId: string, quantity: number) => {
+    if (quantity <= 0) { removeFromCart(lineIdOrProductId); return; }
+    setCart((prev) => prev.map((item) => {
+      const key=item.line_id || cartLineId(item.product,item.variant);
+      if(key !== lineIdOrProductId && item.product.id !== lineIdOrProductId) return item;
+      return { ...item, quantity: Math.min(999, Math.max(1, quantity)), line_id:key };
+    }));
+  };
+
+  const clearCart = () => setCart([]);
+
+  const startBuyNow = (product: Product, quantity = 1, variantId?: string) => {
+    const type=normalizedProductType(product);
+    const variant=type==='variant'?variantById(product,variantId):undefined;
+    if(type==='variant' && !variant) throw new Error(`Please select a color / option for ${product.name_en}.`);
+    if ((type === 'variant' ? Boolean(variant?.force_out_of_stock) : Boolean(product.force_out_of_stock))) {
+      throw new Error(`${product.name_en}${variant?.option_value ? ` - ${variant.option_value}` : ''} is currently out of stock.`);
+    }
+    setBuyNowCartBackup(cart);
+    setCart([{ product, variant, line_id:cartLineId(product,variant), quantity: Math.min(999, Math.max(1, quantity)) }]);
+    setIsCartOpen(false);
+    setIsCheckoutOpen(true);
+  };
+
+  const closeCheckoutAndRestoreCart = () => {
+    setIsCheckoutOpen(false);
+    if (buyNowCartBackup !== null) { setCart(buyNowCartBackup); setBuyNowCartBackup(null); }
+  };
+
+  const cartSubtotal = cart.reduce((sum, item) => sum + displayUnitPrice(item.product,settings,item.variant) * item.quantity, 0);
+
+  const cartItemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+  const getMultiBuyDiscountRate = (qty: number) => {
+    if (settings.multi_buy_discount_enabled === false || qty <= 1) return 0;
+    const t1Min = Math.max(2, Number(settings.multi_buy_tier1_min ?? 2));
+    const t1Max = Math.max(t1Min, Number(settings.multi_buy_tier1_max ?? 3));
+    const t1Rate = Math.max(0, Math.min(100, Number(settings.multi_buy_tier1_rate ?? 5)));
+    const t2Min = Math.max(t1Max + 1, Number(settings.multi_buy_tier2_min ?? 4));
+    const t2Max = Math.max(t2Min, Number(settings.multi_buy_tier2_max ?? 5));
+    const t2Rate = Math.max(0, Math.min(100, Number(settings.multi_buy_tier2_rate ?? 7.5)));
+    const t3Min = Math.max(t2Max + 1, Number(settings.multi_buy_tier3_min ?? 6));
+    const t3Rate = Math.max(0, Math.min(100, Number(settings.multi_buy_tier3_rate ?? 10)));
+    if (qty >= t1Min && qty <= t1Max) return t1Rate;
+    if (qty >= t2Min && qty <= t2Max) return t2Rate;
+    if (qty >= t3Min) return t3Rate;
+    return 0;
+  };
+
+  const cartMultiBuyDiscountRate = getMultiBuyDiscountRate(cartItemCount);
+  const deliverySplit = deliverySplitForSettings(settings);
+  const deliveryPriceRebalanceAmount = deliverySplit.embeddedAmount;
+  // Manual percentage Qty Offer is calculated only on the real product-price part.
+  // The automatic delivery Qty Offer is a separate fixed amount so the two systems
+  // can never interfere with each other.
+  const cartLegacySubtotal = Math.max(0, cartSubtotal - deliveryPriceRebalanceAmount * cartItemCount);
+  const cartSpecialOfferDiscount = Math.round(cartLegacySubtotal * (cartMultiBuyDiscountRate / 100) * 100) / 100;
+  const cartDeliveryQtyOfferDiscount = deliveryPriceRebalanceAmount > 0
+    ? Math.round(deliveryPriceRebalanceAmount * Math.max(0, cartItemCount - 1) * 100) / 100
+    : 0;
+  const cartFinalProductsTotal = Math.max(0, cartSubtotal - cartSpecialOfferDiscount - cartDeliveryQtyOfferDiscount);
+
+
+  const normalizePhone = (value: string) => String(value || '').replace(/\D/g, '').replace(/^94(?=7\d{8}$)/, '0');
+  const isCustomerBlocked = (phone: string, whatsapp?: string) => {
+    const p = normalizePhone(phone);
+    const w = normalizePhone(whatsapp || '');
+    return blockedCustomers.some((b) => {
+      const bp = normalizePhone(b.phone);
+      const bw = normalizePhone(b.whatsapp || '');
+      return Boolean((p && bp === p) || (w && (bp === w || (bw && bw === w))));
+    });
+  };
+  const blockCustomer = (phone: string, reason: string, createdBy?: string) => {
+    const normalized = normalizePhone(phone);
+    if (!normalized) return;
+    const entry: BlockedCustomer = { id: `blk-${Date.now()}`, phone: normalized, reason: reason || 'Blocked by admin', created_at: new Date().toISOString(), created_by: createdBy };
+    setBlockedCustomers((prev) => prev.some((b) => normalizePhone(b.phone) === normalized) ? prev : [entry, ...prev]);
+    logActivity({ action: 'Customer Blocked', module: 'Customers', target_id: entry.id, target_label: normalized, details: entry.reason });
+  };
+  const unblockCustomer = (id: string) => {
+    const target = blockedCustomers.find((b) => b.id === id);
+    setBlockedCustomers((prev) => prev.filter((b) => b.id !== id));
+    logActivity({ action: 'Customer Unblocked', module: 'Customers', target_id: id, target_label: target?.phone || id });
+  };
+
+  const nextSourceOrderNumber = (source: OrderSource, extraOrders: Order[] = []) => {
+    const prefix = source === 'Website' ? 'WEB' : source === 'Facebook Ads' ? 'FB' : source === 'TikTok Ads' ? 'TK' : 'MAN';
+    const all = [...orders, ...extraOrders];
+    const max = all.reduce((m, o) => {
+      const match = String(o.order_number || '').match(new RegExp(`^${prefix}-(\\d+)$`, 'i'));
+      return match ? Math.max(m, Number(match[1])) : m;
+    }, 0);
+    return `${prefix}-${String(max + 1).padStart(6, '0')}`;
+  };
+
+  // Place Order Logic (Stock deduction, configurable advance rule, customer record, Order ID generation)
+  // V12.7: Google Sheet is a downstream mirror. Website orders return immediately,
+  // while FB/TikTok imports are collected and sent in large batches instead of
+  // one Apps Script request per order.
+  const sheetTaskChainRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingSheetOrdersRef = useRef<Order[]>([]);
+  const sheetBatchTimerRef = useRef<number | null>(null);
+  const SHEET_BATCH_SIZE = 250;
+
+  const enqueueSheetTask = (label: string, task: () => Promise<void>) => {
+    sheetTaskChainRef.current = sheetTaskChainRef.current
+      .then(task)
+      .catch((err:any) => console.warn(`[Google Sheet background] ${label}:`, err?.message || err));
+  };
+
+  const flushPendingOrderSheetSyncs = () => {
+    if (sheetBatchTimerRef.current !== null) {
+      window.clearTimeout(sheetBatchTimerRef.current);
+      sheetBatchTimerRef.current = null;
+    }
+    if (!pendingSheetOrdersRef.current.length || !settings.google_sheet_webhook_url) return;
+
+    // Dedupe by Order ID while preserving queue order.
+    const seen = new Set<string>();
+    const pending = pendingSheetOrdersRef.current.filter((order) => {
+      const key=String(order.order_number||'').trim().toUpperCase();
+      if(!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    pendingSheetOrdersRef.current = [];
+
+    for (let i=0;i<pending.length;i+=SHEET_BATCH_SIZE) {
+      const batch=pending.slice(i,i+SHEET_BATCH_SIZE);
+      enqueueSheetTask(`batch sync ${batch[0]?.order_number || ''} +${Math.max(0,batch.length-1)}`, async () => {
+        let lastError='Google Sheet batch sync failed.';
+        for(let attempt=1;attempt<=3;attempt++){
+          const res=await syncOrdersBatchToGoogleSheets(batch,settings.google_sheet_webhook_url,settings);
+          if(res.success){
+            const syncedAt=new Date().toISOString();
+            const ids=new Set(batch.map(o=>o.id));
+            setOrders(prev=>prev.map(o=>ids.has(o.id)?{...o,is_synced_google_sheets:true,synced_at:syncedAt}:o));
+            return;
+          }
+          lastError=res.message;
+          if(attempt<3) await new Promise(resolve=>window.setTimeout(resolve,700*attempt));
+        }
+        throw new Error(lastError);
+      });
+    }
+  };
+
+  const queueOrderSheetSync = (order: Order) => {
+    // Server (server.ts) already syncs orders to Google Sheets on creation.
+    // Client posting is disabled to prevent duplicate rows.
+    return;
+    const holdWebsiteBankPayment = order.order_source === 'Website' && order.payment_method === 'Bank Payment' && order.payment_verification_status !== 'Approved';
+    if (holdWebsiteBankPayment) return;
+
+    pendingSheetOrdersRef.current = [
+      ...pendingSheetOrdersRef.current.filter(o=>o.order_number!==order.order_number),
+      order,
+    ];
+    if(sheetBatchTimerRef.current!==null) window.clearTimeout(sheetBatchTimerRef.current);
+    const sheetDelay = 3;
+    sheetBatchTimerRef.current=window.setTimeout(()=>{
+      sheetBatchTimerRef.current=null;
+      flushPendingOrderSheetSyncs();
+    },sheetDelay);
+  };
+
+  const placeOrder = async (formData: {
+    customer_name: string;
+    phone: string;
+    whatsapp: string;
+    address: string;
+    city: string;
+    district?: string;
+    payment_method: PaymentMethod;
+    notes?: string;
+    order_source?: OrderSource;
+    bank_receipt_url?: string;
+    payment_verification_status?: PaymentVerificationStatus;
+    payment_detected_bank?: string;
+    payment_detected_amount?: number;
+    payment_reference?: string;
+    payment_account_match?: boolean;
+    payment_amount_match?: boolean;
+    payment_receipt_like?: boolean;
+    payment_ocr_confidence?: number;
+    payment_check_notes?: string;
+    gift_wrap_selected?: boolean;
+    customer_access_token?: string;
+  }): Promise<Order> => {
+    if (cart.length === 0) {
+      throw new Error('Cart is empty.');
+    }
+    const manuallyUnavailable = cart.find((item) => {
+      const currentProduct = products.find((product) => product.id === item.product.id) || item.product;
+      const currentType = normalizedProductType(currentProduct);
+      if (currentType === 'variant') {
+        const currentVariant = variantById(currentProduct, item.variant?.id) || item.variant;
+        return Boolean(currentVariant?.force_out_of_stock);
+      }
+      return Boolean(currentProduct.force_out_of_stock);
+    });
+    if (manuallyUnavailable) {
+      throw new Error(`${manuallyUnavailable.product.name_en} is currently out of stock. Please remove it from the cart before ordering.`);
+    }
+    if (isCustomerBlocked(formData.phone, formData.whatsapp)) {
+      throw new Error('This phone number is blocked from placing orders. Please contact O-RA support.');
+    }
+    const normalizedPhone = normalizePhone(formData.phone);
+    const cartFingerprint = cart.map((i) => `${i.product.id}:${i.variant?.id || 'base'}:${i.quantity}`).sort().join('|');
+    const duplicateCutoff = Date.now() - 10 * 60 * 1000;
+    const duplicate = orders.some((o) => normalizePhone(o.phone) === normalizedPhone && new Date(o.created_at).getTime() >= duplicateCutoff && o.order_status !== 'Cancelled' && o.items.map((i) => `${i.product_id}:${i.variant_id || 'base'}:${i.quantity}`).sort().join('|') === cartFingerprint);
+    // Repeat purchases are saved for staff review; a failed request can safely retry.
+    const priorFingerprint = makeOrderFingerprint(formData.phone, cart.map((i) => ({ product_id: i.product.id, variant_id:i.variant?.id, quantity: i.quantity })));
+    const duplicateDayCutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const priorDuplicate = orders.find((o) => o.order_status !== 'Cancelled' && new Date(o.created_at).getTime() >= duplicateDayCutoff && (o.duplicate_fingerprint || makeOrderFingerprint(o.phone, o.items)) === priorFingerprint);
+
+    const orderSource = formData.order_source || 'Website';
+    const nextOrderNum = nextSourceOrderNumber(orderSource);
+    const totalQuantity = cart.reduce((sum, item) => sum + item.quantity, 0);
+    const subtotal = cartSubtotal;
+    const special_offer_discount = cartSpecialOfferDiscount;
+    const delivery_rebalance_qty_offer_amount = cartDeliveryQtyOfferDiscount;
+    const delivery_rebalance_qty_offer = deliveryPriceRebalanceAmount > 0;
+    const delivery_rebalance_amount_snapshot = deliveryPriceRebalanceAmount;
+    const internal_delivery_fee = deliverySplit.visibleDelivery;
+    const delivery_fee = settings.free_delivery_enabled ? 0 : internal_delivery_fee;
+    const gift_wrap_selected = Boolean(settings.gift_wrap_enabled && formData.gift_wrap_selected);
+    const gift_wrap_fee = gift_wrap_selected ? Math.max(0, Number(settings.gift_wrap_fee || 0)) : 0;
+    const total_amount = Math.max(0, subtotal - special_offer_discount - delivery_rebalance_qty_offer_amount + delivery_fee + gift_wrap_fee);
+
+    // Configurable Advance Payment Rule (Main Admin controls threshold and percentage)
+    const advanceQtyThreshold = Math.max(0, Number(settings.advance_qty_threshold ?? 4));
+    const advancePercentage = Math.min(100, Math.max(1, Number(settings.advance_percentage ?? 50)));
+    const is_advance_required = totalQuantity > advanceQtyThreshold;
+    const advance_amount = is_advance_required ? Math.round(total_amount * (advancePercentage / 100)) : 0;
+
+    const newOrder: Order = {
+      id: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? `ord-${crypto.randomUUID()}`
+        : `ord-${Date.now()}-${Math.random().toString(36).slice(2,10)}`,
+      order_number: nextOrderNum,
+      customer_name: formData.customer_name,
+      phone: formData.phone,
+      whatsapp: formData.whatsapp,
+      address: formData.address,
+      city: formData.city,
+      district: String(formData.district || '').trim(),
+      payment_method: formData.payment_method,
+      payment_status: 'Pending',
+      order_status: formData.payment_method === 'Bank Payment' ? 'Pending Payment' : 'New Orders',
+      items: cart.map((item) => buildOrderItemSnapshot(item.product,item.quantity,settings,item.variant,products)),
+      subtotal,
+      delivery_fee,
+      internal_delivery_fee,
+      delivery_included_in_item_price: Boolean(settings.free_delivery_enabled),
+      special_offer_discount,
+      delivery_rebalance_qty_offer,
+      delivery_rebalance_qty_offer_amount,
+      delivery_rebalance_amount_snapshot,
+      delivery_visible_fee_snapshot: internal_delivery_fee,
+      gift_wrap_selected,
+      gift_wrap_fee,
+      total_amount,
+      is_advance_required,
+      advance_amount,
+      advance_confirmed: false,
+      order_source: orderSource,
+      call_center_status: 'Pending',
+      is_synced_google_sheets: false,
+      bank_receipt_url: formData.bank_receipt_url,
+      payment_verification_status: formData.payment_method === 'Bank Payment'
+        ? (formData.payment_verification_status || 'Awaiting Receipt')
+        : 'Not Required',
+      payment_detected_bank: formData.payment_detected_bank,
+      payment_detected_amount: formData.payment_detected_amount,
+      payment_reference: formData.payment_reference,
+      payment_account_match: formData.payment_account_match,
+      payment_amount_match: formData.payment_amount_match,
+      payment_receipt_like: formData.payment_receipt_like,
+      payment_ocr_confidence: formData.payment_ocr_confidence,
+      payment_check_notes: formData.payment_check_notes,
+      courier_name: settings.courier_provider || 'Fardar',
+      tracking_status: 'Not Shipped',
+      delivery_status: 'Pending',
+      stock_status: 'Waiting for Stock',
+      stock_allocated: false,
+      is_duplicate_order: Boolean(priorDuplicate),
+      duplicate_of_order_id: priorDuplicate?.id,
+      duplicate_fingerprint: priorFingerprint,
+      dispatch_status: 'Not Scanned',
+      notes: formData.notes,
+      created_at: new Date().toISOString(),
+    };
+
+    // Stock is NOT deducted when the order is created.
+    // A FIFO allocator below deducts it only when every item in the order is physically available.
+
+    // 2. Update Customer Database
+    setCustomers((prevCustomers) => {
+      const existing = prevCustomers.find((c) => c.phone === formData.phone);
+      if (existing) {
+        return prevCustomers.map((c) =>
+          c.phone === formData.phone
+            ? {
+                ...c,
+                name: formData.customer_name,
+                whatsapp: formData.whatsapp,
+                address: formData.address,
+                city: formData.city,
+                total_orders: c.total_orders + 1,
+                total_spent: c.total_spent + total_amount,
+              }
+            : c
+        );
+      }
+      return [
+        ...prevCustomers,
+        {
+          id: `cust-${Date.now()}`,
+          name: formData.customer_name,
+          phone: formData.phone,
+          whatsapp: formData.whatsapp,
+          address: formData.address,
+          city: formData.city,
+          total_orders: 1,
+          total_spent: total_amount,
+          created_at: new Date().toISOString(),
+        },
+      ];
+    });
+
+    // 3. Save to the server FIRST. This is the durable checkpoint.
+    // If this fails, do NOT send the order to Google Sheets and do NOT tell the customer it succeeded.
+    const savedOrder = await publicOrderSave(newOrder, formData.customer_access_token);
+
+    setOrders((prev) => {
+      const next = [{...prev.find(order=>order.id===savedOrder.id),...savedOrder}, ...prev.filter(o => o.id !== savedOrder.id && o.order_number !== savedOrder.order_number)]
+        .sort((a,b)=>new Date(b.created_at).getTime()-new Date(a.created_at).getTime());
+      return next;
+    });
+    setLastPlacedOrder(savedOrder);
+
+    logActivity({
+      action: 'Order Created',
+      module: 'Orders',
+      target_id: savedOrder.id,
+      target_label: savedOrder.order_number,
+      details: `${savedOrder.order_source} • ${savedOrder.customer_name} • Rs. ${savedOrder.total_amount.toFixed(2)}`,
+      actor: savedOrder.order_source === 'Manual Admin' ? adminUser : null,
+      actor_name: savedOrder.order_source === 'Manual Admin' ? undefined : `${savedOrder.customer_name} (Customer)`,
+      actor_role: savedOrder.order_source === 'Manual Admin' ? undefined : 'customer',
+    });
+
+    // 4. Google Sheet mirroring now happens on the SERVER inside /api/orders.
+    // This keeps fresh browsers/devices independent from private webhook settings
+    // and means the Admin PC does not need to be open after the site is deployed.
+    clearCart();
+    return savedOrder;
+  };
+
+  const createMissingItemReplacement = async (input: {
+    originalOrderId: string;
+    itemIndex: number;
+    quantity: number;
+    reason?: string;
+  }): Promise<Order> => {
+    const original = orders.find((order) => order.id === input.originalOrderId);
+    if (!original) throw new Error('Original order was not found.');
+    if (original.is_replacement_order) throw new Error('Create a replacement from the original customer order, not from another replacement.');
+    if (!original.stock_allocated) throw new Error('The original order has no allocated-stock record. Use this flow only for an item that was already deducted from stock.');
+    if (!(original.order_status === 'Delivered' || original.order_status === 'Shipped' || original.dispatch_status === 'Handed Over')) {
+      throw new Error('Missing Item Re-delivery is available only after the original parcel was shipped / handed over / delivered.');
+    }
+
+    const itemIndex = Math.max(0, Math.floor(Number(input.itemIndex || 0)));
+    const sourceItem = original.items?.[itemIndex];
+    if (!sourceItem) throw new Error('Select the missing item.');
+    const orderedQty = Math.max(1, Math.floor(Number(sourceItem.quantity || 1)));
+    const quantity = Math.max(1, Math.floor(Number(input.quantity || 1)));
+    if (quantity > orderedQty) throw new Error(`Replacement quantity cannot be more than the original quantity (${orderedQty}).`);
+
+    const sameSku = String(sourceItem.sku || '').trim().toUpperCase();
+    const existingReplacement = orders.find((order) =>
+      order.is_replacement_order === true &&
+      order.order_status !== 'Cancelled' &&
+      order.replacement_of_order_id === original.id &&
+      String(order.replacement_item_sku || '').trim().toUpperCase() === sameSku
+    );
+    if (existingReplacement) {
+      throw new Error(`A replacement for this item already exists: ${existingReplacement.order_number}.`);
+    }
+
+    const needsAllocation = Boolean(original.stock_quantity_correction);
+    if (needsAllocation && quantity > orderedQty - stockItemQuantities(original)[itemIndex]) throw new Error('Replacement quantity exceeds the warehouse-left quantity.');
+    const now = new Date().toISOString();
+    const actor = adminUser?.name || 'Admin';
+    const reason = String(input.reason || 'Packing shortage - item missing from original parcel').trim();
+    if (!reason) throw new Error('Replacement reason is required.');
+
+    // Reuse the original allocation unless a quantity correction released it.
+    // Released units must be allocated once through the normal FIFO flow.
+    const replacementItem: Order['items'][number] = {
+      ...sourceItem,
+      quantity,
+      unit_price: 0,
+      subtotal: 0,
+    };
+
+    const replacement: Order = {
+      id: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? `ord-${crypto.randomUUID()}`
+        : `ord-repl-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+      order_number: nextSourceOrderNumber('Manual Admin'),
+      customer_name: original.customer_name,
+      phone: original.phone,
+      whatsapp: original.whatsapp,
+      address: original.address,
+      city: original.city,
+      district: original.district,
+      fardar_city: original.fardar_city,
+      city_verified: original.city_verified,
+      city_mapping_source: original.city_mapping_source,
+      payment_method: 'COD',
+      payment_status: 'Paid',
+      order_status: 'Processing',
+      items: [replacementItem],
+      subtotal: 0,
+      delivery_fee: 0,
+      internal_delivery_fee: 0,
+      delivery_included_in_item_price: false,
+      special_offer_discount: 0,
+      delivery_rebalance_qty_offer: false,
+      delivery_rebalance_qty_offer_amount: 0,
+      delivery_rebalance_amount_snapshot: 0,
+      delivery_visible_fee_snapshot: 0,
+      gift_wrap_selected: false,
+      gift_wrap_fee: 0,
+      total_amount: 0,
+      is_advance_required: false,
+      advance_amount: 0,
+      advance_confirmed: true,
+      order_source: 'Manual Admin',
+      call_center_status: 'Confirmed',
+      is_synced_google_sheets: true,
+      courier_name: original.courier_name || settings.courier_provider || 'Fardar',
+      tracking_status: 'Not Shipped',
+      delivery_status: 'Pending',
+      stock_status: needsAllocation ? 'Waiting for Stock' : 'Allocated',
+      stock_allocated: !needsAllocation,
+      stock_allocated_at: needsAllocation ? undefined : now,
+      stock_allocated_by: needsAllocation ? undefined : `Missing-item replacement • ${actor}`,
+      is_duplicate_order: false,
+      dispatch_status: 'Not Scanned',
+      is_replacement_order: true,
+      replacement_of_order_id: original.id,
+      replacement_of_order_number: original.order_number,
+      replacement_of_waybill: original.waybill_number,
+      replacement_item_sku: sourceItem.sku,
+      replacement_qty: quantity,
+      replacement_reason: reason,
+      replacement_created_by: actor,
+      notes: [
+        'MISSING ITEM RE-DELIVERY',
+        `Original Order: ${original.order_number}`,
+        original.waybill_number ? `Original Waybill: ${original.waybill_number}` : '',
+        `${sourceItem.sku} x${quantity}`,
+        'COD Rs. 0',
+        'Delivery Rs. 0',
+        needsAllocation ? 'Original unused stock was released; deduct this replacement through normal allocation' : 'Stock already deducted by original order - no additional stock movement',
+        reason,
+      ].filter(Boolean).join(' | '),
+      created_at: now,
+    };
+
+    const saved = await staffBulkOrderSaveAndSheetSync([replacement]);
+    const savedOrder = saved.orders?.[0];
+    if (!savedOrder) throw new Error('Replacement order could not be saved on the server.');
+
+    setOrders((prev) => [
+      savedOrder,
+      ...prev.filter((order) => order.id !== savedOrder.id && order.order_number !== savedOrder.order_number),
+    ]);
+
+    logActivity({
+      action: 'Missing Item Re-delivery Created',
+      module: 'Orders',
+      target_id: savedOrder.id,
+      target_label: savedOrder.order_number,
+      details: `Original ${original.order_number}${original.waybill_number ? ` / WB ${original.waybill_number}` : ''} • ${sourceItem.sku} x${quantity} • COD Rs. 0 • ${needsAllocation ? 'normal stock allocation required' : 'stock unchanged'}`,
+    });
+
+    return savedOrder;
+  };
+
+  const createItemExchangeReplacement=async(input:{originalOrderId:string;items:{itemIndex:number;quantity:number}[];waybillNumber:string;exchangeId:string}):Promise<Order>=>{
+    const original=orders.find(order=>order.id===input.originalOrderId);
+    if(!original)throw new Error('Original order was not found.');
+    if(original.order_status!=='Delivered'||!original.stock_allocated)throw new Error('Item exchange is available only for delivered orders with allocated stock.');
+    const selected=(input.items||[]).map(row=>{
+      const item=original.items?.[row.itemIndex],quantity=Math.floor(Number(row.quantity));
+      if(!item||!Number.isSafeInteger(quantity)||quantity<1||quantity>Number(item.quantity||0))throw new Error('Check the selected item quantities.');
+      return {...item,quantity,unit_price:0,subtotal:0};
+    });
+    if(!selected.length)throw new Error('Choose at least one item to exchange.');
+    const courier=original.courier_name||settings.courier_provider||'Fardar';
+    const waybill=waybillRecords.find(row=>row.waybill_number===input.waybillNumber&&row.status==='Available'&&row.courier_name===courier);
+    if(!waybill)throw new Error('The second waybill is no longer available. Refresh and try again.');
+    const needs=selected.flatMap(item=>inventoryRequirementsForOrderItem(item));
+    const required=new Map<string,InventoryRequirement>();
+    needs.forEach(row=>{const key=row.product_id+'::'+(row.variant_id||'base'),prev=required.get(key);required.set(key,prev?{...prev,quantity:prev.quantity+row.quantity}:row);});
+    required.forEach(req=>{const product=products.find(row=>row.id===req.product_id);if(!product||inventoryStock(product,req.variant_id)<req.quantity)throw new Error('Not enough stock for '+req.label+'. No replacement order was created.');});
+    const now=new Date().toISOString(),actor=adminUser?.name||'Admin';
+    const replacement:Order={
+      id:typeof crypto!=='undefined'&&typeof crypto.randomUUID==='function'?'ord-'+crypto.randomUUID():'ord-exchange-'+Date.now(),
+      order_number:nextSourceOrderNumber('Manual Admin'),customer_name:original.customer_name,phone:original.phone,whatsapp:original.whatsapp,
+      address:original.address,city:original.city,district:original.district,fardar_city:original.fardar_city,
+      payment_method:'COD',payment_status:'Paid',order_status:'Processing',items:selected,subtotal:0,delivery_fee:0,internal_delivery_fee:0,
+      delivery_included_in_item_price:false,special_offer_discount:0,delivery_rebalance_qty_offer:false,delivery_rebalance_qty_offer_amount:0,
+      delivery_rebalance_amount_snapshot:0,delivery_visible_fee_snapshot:0,gift_wrap_selected:false,gift_wrap_fee:0,total_amount:0,
+      is_advance_required:false,advance_amount:0,advance_confirmed:true,order_source:'Manual Admin',call_center_status:'Confirmed',
+      is_synced_google_sheets:true,courier_name:courier,waybill_number:waybill.waybill_number,tracking_status:'Waybill Assigned',
+      delivery_status:'Ready to Ship',shipment_mode:'manual',stock_status:'Waiting for Stock',stock_allocated:false,is_duplicate_order:false,
+      dispatch_status:'Not Scanned',is_replacement_order:true,replacement_of_order_id:original.id,
+      replacement_of_order_number:original.order_number,replacement_of_waybill:original.waybill_number,
+      replacement_item_sku:selected.map(item=>item.sku).join(', '),replacement_qty:selected.reduce((sum,item)=>sum+item.quantity,0),
+      replacement_reason:'Customer item exchange',replacement_created_by:actor,
+      notes:['ITEM EXCHANGE REPLACEMENT','Exchange: '+input.exchangeId,'Original Order: '+original.order_number,
+        original.waybill_number?'Original Waybill: '+original.waybill_number:'',
+        ...selected.map(item=>item.sku+' x'+item.quantity),'COD Rs. 0','Delivery Rs. 0',
+        'Replacement stock will be deducted by normal FIFO allocation.'].filter(Boolean).join(' | '),created_at:now,
+    };
+    const saved=await staffBulkOrderSaveAndSheetSync([replacement]);
+    const savedOrder=saved.orders?.[0];
+    if(!savedOrder)throw new Error('The MAN replacement order could not be saved.');
+    setOrders(prev=>[savedOrder,...prev.filter(order=>order.id!==savedOrder.id&&order.order_number!==savedOrder.order_number)]);
+    setWaybillRecords(prev=>prev.map(row=>row.id===waybill.id?{...row,status:'Assigned',assigned_order_id:savedOrder.id,assigned_order_number:savedOrder.order_number,assigned_at:now}:row));
+    logActivity({action:'Item Exchange Replacement Created',module:'Exchange Parcels',target_id:input.exchangeId,target_label:input.exchangeId,
+      details:'Original '+original.order_number+' • MAN '+savedOrder.order_number+' • '+waybill.waybill_number+' • COD Rs. 0'});
+    return savedOrder;
+  };
+
+  const refreshExchangeInvoices=async()=>{
+    const canUse=adminUser?.role==='admin'||(adminUser?.permissions||[]).some(permission=>permission==='exchange_parcels'||permission.startsWith('level:exchange_parcels:'));
+    if(!canUse||!getStaffSessionToken())return;
+    const data=await sharedStaffRequest('/api/exchange-invoices');
+    if(Array.isArray(data?.invoices))setExchangeInvoices(data.invoices);
+  };
+  useEffect(()=>{void refreshExchangeInvoices().catch(error=>console.warn('Exchange invoice refresh failed:',error?.message||error));},[adminUser?.id]);
+  const createExchangeInvoice=async(orderId:string,waybillNumber:string,exchangeType:'Cash Refund'|'Item Exchange'='Cash Refund',items:{item_index:number;quantity:number}[]=[])=>{
+    const data=await sharedStaffRequest(`/api/orders/${encodeURIComponent(orderId)}/exchange-invoices`,{method:'POST',body:JSON.stringify({waybill_number:waybillNumber,exchange_type:exchangeType,items})});
+    if(!data?.exchange)throw new Error('Exchange invoice was not saved.');
+    setExchangeInvoices(prev=>[data.exchange,...prev]);
+    setWaybillRecords(prev=>prev.map(row=>row.waybill_number===waybillNumber?{...row,status:'Assigned',assigned_order_id:data.exchange.id,assigned_order_number:data.exchange.id,assigned_at:data.exchange.created_at,exchange_invoice:data.exchange}:row));
+    logActivity({action:'Exchange Invoice Created',module:'Exchange Parcels',target_id:data.exchange.id,target_label:data.exchange.id,details:`Original ${data.exchange.original_order_number} / ${data.exchange.original_waybill} • New ${waybillNumber} • Pending refund Rs. ${data.exchange.refund_amount}`});
+    return {exchange:data.exchange};
+  };
+  const linkExchangeReplacementOrder=async(exchangeId:string,replacement:Order):Promise<ExchangeInvoiceRecord>=>{
+    const data=await sharedStaffRequest(`/api/exchange-invoices/${encodeURIComponent(exchangeId)}/replacement-order`,{method:'POST',body:JSON.stringify({replacement_order_id:replacement.id})});
+    if(!data?.exchange)throw new Error('The replacement MAN order was saved, but it could not be linked to the exchange record. Refresh before exporting the two-parcel CSV.');
+    setExchangeInvoices(prev=>prev.map(row=>row.id===exchangeId?data.exchange:row));
+    setWaybillRecords(prev=>prev.map(row=>row.exchange_invoice?.id===exchangeId?{...row,exchange_invoice:data.exchange}:row));
+    return data.exchange;
+  };
+  const completeExchangeRefund=async(exchangeId:string,proof:{slipDataUrl:string;slipFileName:string;slipContentType:string})=>{
+    const data=await sharedStaffRequest(`/api/exchange-invoices/${encodeURIComponent(exchangeId)}/refund-complete`,{method:'POST',body:JSON.stringify(proof)});
+    if(!data?.exchange)throw new Error('Refund completion was not saved.');
+    setExchangeInvoices(prev=>prev.map(row=>row.id===exchangeId?data.exchange:row));
+    setWaybillRecords(prev=>prev.map(row=>row.exchange_invoice?.id===exchangeId?{...row,exchange_invoice:data.exchange}:row));
+    if(data.original_order)setOrders(prev=>prev.map(order=>order.id===data.original_order.id?data.original_order:order));
+    logActivity({action:'Exchange Refund Completed',module:'Exchange Parcels',target_id:exchangeId,target_label:exchangeId,details:`Refund Rs. ${data.exchange.refund_amount} recorded against received money • Original ${data.exchange.original_order_number}`});
+    return data;
+  };
+
+  const importBulkOrders = async (
+    itemsList: BulkOrderItemInput[]
+  ): Promise<{ importedCount: number; failedCount: number; errors: string[]; importedOrderNumbers: string[]; ignoredCount:number }> => {
+    let importedCount = 0;
+    let failedCount = 0;
+    let ignoredCount = 0;
+    const errors: string[] = [];
+    const newOrdersList: Order[] = [];
+    let customerUpdates: Customer[] = [...customers];
+    let persistedOrders:Order[]=[];
+    try{ persistedOrders=JSON.parse(localStorage.getItem('ora_orders')||'[]'); }catch{}
+    const dedupeOrders=[...orders,...persistedOrders.filter(saved=>!orders.some(cur=>cur.id===saved.id))];
+
+    const leadKeyFor = (row:BulkOrderItemInput,source:OrderSource) => {
+      const lead=String(row.platform_lead_id || '').trim();
+      if(lead) return `${source}::LEAD::${lead}`.toLowerCase();
+      const phone=normalizePhone(row.phone || '');
+      const when=String(row.lead_created_at || '').trim();
+      const code=String(row.item_code || '').trim().toUpperCase();
+      return `${source}::FALLBACK::${phone}::${when}::${code}`.toLowerCase();
+    };
+
+    // Platform Lead ID is the primary grouping/dedupe key. If a prepared O-RA Order ID is present,
+    // rows with the same ID are one multi-item order.
+    const grouped = new Map<string, BulkOrderItemInput[]>();
+    itemsList.forEach((row, index) => {
+      const source: OrderSource = row.order_source || 'Facebook Ads';
+      const rawId = String(row.order_id || '').trim().toUpperCase();
+      const leadId=String(row.platform_lead_id || '').trim();
+      const key = rawId ? `${source}::ORDER::${rawId}` : leadId ? `${source}::LEAD::${leadId}` : `${source}::__ROW_${index}`;
+      grouped.set(key,[...(grouped.get(key)||[]),row]);
+    });
+
+    for (const [groupKey, rows] of grouped.entries()) {
+      const source: OrderSource = rows.find(r => r.order_source)?.order_source || 'Facebook Ads';
+      const sourcePrefix = source === 'Facebook Ads' ? 'FB' : source === 'TikTok Ads' ? 'TK' : source === 'Website' ? 'WEB' : 'MAN';
+      const requestedOrderId = String(rows.find(r => r.order_id)?.order_id || '').trim().toUpperCase();
+      const platformLeadId=String(rows.find(r=>r.platform_lead_id)?.platform_lead_id || '').trim();
+      const leadCreatedAt=String(rows.find(r=>r.lead_created_at)?.lead_created_at || '').trim();
+      const leadImportKey=leadKeyFor(rows[0],source);
+
+      const alreadyImported=[...dedupeOrders,...newOrdersList].some(o =>
+        (platformLeadId && o.order_source===source && String(o.platform_lead_id||'')===platformLeadId) ||
+        Boolean(o.lead_import_key && o.lead_import_key.toLowerCase()===leadImportKey)
+      );
+      if(alreadyImported){ ignoredCount++; continue; }
+
+      if (requestedOrderId) {
+        const validRequestedId = new RegExp(`^${sourcePrefix}-\\d{6}$`).test(requestedOrderId);
+        const duplicateRequestedId = [...dedupeOrders, ...newOrdersList].some(o => o.order_number.toUpperCase() === requestedOrderId);
+        if (!validRequestedId || duplicateRequestedId) {
+          failedCount++; errors.push(`Order ID "${requestedOrderId}" is invalid or already used for ${sourcePrefix}.`); continue;
+        }
+      }
+
+      const customer_name = String(rows.map(r=>r.customer_name).find(Boolean) || '').trim();
+      const phone = String(rows.map(r=>r.phone).find(Boolean) || '').trim();
+      const whatsapp = String(rows.map(r=>r.whatsapp).find(Boolean) || '').trim();
+      const address = String(rows.map(r=>r.address).find(Boolean) || '').trim();
+      const city = String(rows.map(r=>r.city).find(Boolean) || '').trim();
+      const payment_method = rows.map(r=>r.payment_method).find(Boolean) || 'COD';
+      const notes = String(rows.map(r=>r.notes).find(Boolean) || `${source} Lead CSV Import`).trim();
+      const isConfirmed = rows.some(r => r.is_confirmed);
+      if (!customer_name) { failedCount++; errors.push(`${requestedOrderId || groupKey}: Customer name is missing.`); continue; }
+      if (!phone) { failedCount++; errors.push(`${requestedOrderId || groupKey}: Phone number is missing.`); continue; }
+      if (!address) { failedCount++; errors.push(`${requestedOrderId || groupKey}: Address is missing.`); continue; }
+      if (!city) { failedCount++; errors.push(`${requestedOrderId || groupKey}: City is missing.`); continue; }
+
+      const orderItems: Order['items'] = [];
+      let invalidGroup = false;
+      for (let rowIndex=0; rowIndex<rows.length; rowIndex++) {
+        const row = rows[rowIndex];
+        const code=String(row.item_code||'').trim();
+        if(!code){ errors.push(`${requestedOrderId || groupKey}: Main Product Code missing on row ${rowIndex+1}.`); invalidGroup=true; break; }
+        const selection=findProductSelection(products,code,row.variant_value);
+        if(!selection){ errors.push(`${requestedOrderId || groupKey}: Product "${code}" not found.`); invalidGroup=true; break; }
+        if(isConfirmed && normalizedProductType(selection.product)==='variant' && !selection.variant){
+          errors.push(`${requestedOrderId || groupKey}: Select a Color / Variant for ${selection.product.name_en} before confirmation.`); invalidGroup=true; break;
+        }
+        const qty=Number(row.quantity);
+        if (!Number.isFinite(qty) || qty < 1) {
+          errors.push(`${requestedOrderId || groupKey}: Quantity is missing or invalid on row ${rowIndex+1}.`);
+          invalidGroup=true;
+          break;
+        }
+        if(!isConfirmed && normalizedProductType(selection.product)==='variant' && !selection.variant){
+          // Pending FB/TikTok lead: main code is enough. Exact variant is chosen by Call Center later.
+          const unitPrice=displayUnitPrice(selection.product,settings);
+          orderItems.push({
+            product_id:selection.product.id, product_name:selection.product.name_en,
+            sku:selection.product.sku, main_sku:selection.product.sku,
+            variant_name:String(row.variant_value||'').trim() || undefined,
+            product_type:'variant', buying_price:Number(selection.product.buying_price||0),
+            unit_price:unitPrice, quantity:qty, subtotal:unitPrice*qty, image:selection.product.images?.[0]
+          });
+        } else {
+          orderItems.push(buildOrderItemSnapshot(selection.product,qty,settings,selection.variant,products));
+        }
+      }
+      if(invalidGroup || !orderItems.length){ failedCount++; continue; }
+
+      const totalQty=orderItems.reduce((n,it)=>n+it.quantity,0);
+      const subtotal=orderItems.reduce((n,it)=>n+it.subtotal,0);
+      const importDeliverySplit=deliverySplitForSettings(settings);
+      const internal_delivery_fee=importDeliverySplit.visibleDelivery;
+      const delivery_fee=settings.free_delivery_enabled?0:internal_delivery_fee;
+      const rate=getMultiBuyDiscountRate(totalQty);
+      const importRebalanceAmount=importDeliverySplit.embeddedAmount;
+      const importLegacySubtotal=Math.max(0,subtotal-importRebalanceAmount*totalQty);
+      const special_offer_discount=Math.round(importLegacySubtotal*(rate/100)*100)/100;
+      const delivery_rebalance_qty_offer_amount=importRebalanceAmount>0?Math.round(importRebalanceAmount*Math.max(0,totalQty-1)*100)/100:0;
+      const delivery_rebalance_qty_offer=importRebalanceAmount>0;
+      const total_amount=Math.round(Math.max(0,subtotal-special_offer_discount-delivery_rebalance_qty_offer_amount+delivery_fee));
+      const nextOrderNum=requestedOrderId || nextSourceOrderNumber(source,newOrdersList);
+      const fingerprint=makeOrderFingerprint(phone,orderItems);
+      const duplicateDayCutoff=Date.now()-24*60*60*1000;
+      const existingDuplicate=[...dedupeOrders,...newOrdersList].find(o => o.order_status!=='Cancelled' && new Date(o.created_at).getTime()>=duplicateDayCutoff && (o.duplicate_fingerprint||makeOrderFingerprint(o.phone,o.items))===fingerprint);
+      const threshold=Math.max(0,Number(settings.advance_qty_threshold??4));
+      const pct=Math.min(100,Math.max(1,Number(settings.advance_percentage??50)));
+      const now=new Date().toISOString();
+
+      let newOrder:Order={
+        id:`ord-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+        order_number:nextOrderNum, customer_name, phone, whatsapp, address, city,
+        payment_method, payment_status:'Pending', order_status:isConfirmed?'Processing':'New Orders',
+        items:orderItems, subtotal, delivery_fee, internal_delivery_fee,
+        delivery_included_in_item_price:Boolean(settings.free_delivery_enabled), special_offer_discount, delivery_rebalance_qty_offer,
+        delivery_rebalance_qty_offer_amount, delivery_rebalance_amount_snapshot:importRebalanceAmount, delivery_visible_fee_snapshot:internal_delivery_fee,
+        gift_wrap_selected:false,gift_wrap_fee:0,total_amount,
+        is_advance_required:totalQty>threshold, advance_amount:totalQty>threshold?Math.round(total_amount*pct/100):0,
+        advance_confirmed:false, order_source:source,
+        is_test_order: /^TEST-(FB|TK)-/i.test(platformLeadId) || /SYSTEM TEST LEAD/i.test(notes),
+        call_center_status:isConfirmed?'Confirmed':'Pending', is_synced_google_sheets:false,
+        stock_status:'Waiting for Stock',stock_allocated:false,
+        is_duplicate_order:Boolean(existingDuplicate),duplicate_of_order_id:existingDuplicate?.id,duplicate_fingerprint:fingerprint,
+        dispatch_status:'Not Scanned',notes,created_at:now,
+        platform_lead_id:platformLeadId || undefined, platform_lead_created_at:leadCreatedAt || undefined,
+        lead_import_key:leadImportKey, lead_imported_at:now,
+      };
+
+      // Build the whole import first. Saving one order at a time makes 100-500 row
+      // uploads unnecessarily slow. The server persists + Sheet-syncs the batch once.
+      newOrdersList.push(newOrder);
+
+      const existingCustIdx=customerUpdates.findIndex(c=>normalizePhone(c.phone)===normalizePhone(phone));
+      if(existingCustIdx>=0){
+        const c=customerUpdates[existingCustIdx];
+        customerUpdates[existingCustIdx]={...c,name:customer_name,whatsapp,address,city,total_orders:c.total_orders+1,total_spent:c.total_spent+total_amount};
+      } else customerUpdates.push({id:`cust-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,name:customer_name,phone,whatsapp,address,city,total_orders:1,total_spent:total_amount,created_at:now});
+      importedCount++;
+    }
+
+    let savedOrders:Order[] = [];
+    if(newOrdersList.length){
+      try{
+        const saved=await staffBulkOrderSaveAndSheetSync(newOrdersList);
+        savedOrders=saved.orders;
+        setCustomers(customerUpdates);
+        setOrders(prev=>[...savedOrders,...prev.filter(old=>!savedOrders.some(n=>n.id===old.id||n.order_number===old.order_number))]);
+        if(saved.sheetSync && saved.sheetSync.ok===false){
+          errors.push(`Orders saved, but Google Sheet sync is pending: ${saved.sheetSync.error || 'unknown Sheet error'}`);
+        }
+      }catch(e:any){
+        failedCount += newOrdersList.length;
+        importedCount = Math.max(0, importedCount - newOrdersList.length);
+        errors.push(`Bulk save / Sheet sync failed: ${e?.message||'unknown error'}`);
+        savedOrders=[];
+      }
+    }
+
+    logActivity({action:'Lead / Orders Imported',module:'Orders',details:`Imported ${savedOrders.length}; Already imported ${ignoredCount}; Failed ${failedCount}`});
+    return {importedCount:savedOrders.length,failedCount,ignoredCount,errors,importedOrderNumbers:savedOrders.map(o=>o.order_number)};
+  };
+
+  const fifoAllocatorSignatureRef = useRef<string>('');
+  const autoInvoiceReadyRef = useRef<Set<string>>(new Set());
+
+  type InventoryRequirement={product_id:string;variant_id?:string;quantity:number;label:string};
+  const inventoryRequirementsForOrderItem=(item:Order['items'][number]):InventoryRequirement[]=>{
+    if(item.product_type==='bundle' && item.bundle_components?.length){
+      return item.bundle_components.map(c=>({
+        product_id:c.product_id,variant_id:c.variant_id,
+        quantity:Math.max(1,Number(c.quantity_per_bundle||1))*Math.max(1,Number(item.quantity||1)),
+        label:`${c.product_name}${c.variant_name?` - ${c.variant_name}`:''}`
+      }));
+    }
+    return [{product_id:item.product_id,variant_id:item.variant_id,quantity:Math.max(1,Number(item.quantity||1)),label:`${item.product_name}${item.variant_name?` - ${item.variant_name}`:''}`}];
+  };
+
+  const cloneInventoryProducts=(rows:Product[])=>rows.map(p=>({...p,variants:(p.variants||[]).map(v=>({...v})),bundle_components:(p.bundle_components||[]).map(c=>({...c}))}));
+  const inventoryStock=(product:Product,variantId?:string)=>{
+    if(variantId) return Math.max(0,Number(variantById(product,variantId)?.stock_quantity||0));
+    if(normalizedProductType(product)==='variant') return -1; // variant must be explicit
+    return Math.max(0,Number(product.stock_quantity||0));
+  };
+
+  // FIFO stock + waybill allocator. Variants use their own stock. Bundles deduct real component stock.
+  useEffect(() => {
+    // Do not consume stale local inventory before shared catalog/orders hydration.
+    if(!adminUser || !sharedStoreReady || !sharedOrdersReady || returnStockTransactionPending)return;
+    const allocatorSignature=JSON.stringify({
+      orders:orders.map(o=>[o.id,o.order_status,o.call_center_status,o.stock_allocated,o.waybill_number,o.invoice_locked,(o.items||[]).map(i=>[i.product_id,i.variant_id,i.product_type,i.quantity])]),
+      products:products.map(p=>[p.id,p.stock_quantity,(p.variants||[]).map(v=>[v.id,v.stock_quantity,v.status])]),
+      waybills:waybillRecords.map(w=>[w.waybill_number,w.status]),
+    });
+    if(fifoAllocatorSignatureRef.current===allocatorSignature) return;
+    fifoAllocatorSignatureRef.current=allocatorSignature;
+
+    const confirmedActive=orders.filter(o=>o.order_status!=='Cancelled' && o.call_center_status==='Confirmed' && !o.is_duplicate_order && !o.is_test_order)
+      .sort((a,b)=>new Date(a.created_at).getTime()-new Date(b.created_at).getTime());
+    const waiting=confirmedActive.filter(o=>!o.stock_allocated);
+    const inventory=cloneInventoryProducts(products);
+    const productMap=new Map(inventory.map(p=>[p.id,p] as [string,Product]));
+    const allocatedIds=new Set<string>();
+    const allocationLogs:StockHistory[]=[];
+    const now=new Date().toISOString();
+
+    for(const order of waiting){
+      // Never deduct another colour when a historic order has contradictory
+      // product colour/SKU data; it needs manual item reconciliation first.
+      if(hasConflictingVariantOrderItems(order,products)){
+        console.warn('FIFO allocation held: conflicting variant ID and Item Code',order.order_number);
+        continue;
+      }
+      const groupedReq=new Map<string,InventoryRequirement>();
+      // Resolve historical order snapshots that retained R0008-GREY SKU but lost its
+      // variant_id. Exact, unique SKU/colour only; no guessing or price changes.
+      const stockOrder=normalizeOrderMissingStockVariants(order,products);
+      for(const item of stockConsumedItems(stockOrder)){
+        for(const req of inventoryRequirementsForOrderItem(item)){
+          const key=`${req.product_id}::${req.variant_id||'base'}`;
+          const prev=groupedReq.get(key);
+          groupedReq.set(key,prev?{...prev,quantity:prev.quantity+req.quantity}:req);
+        }
+      }
+      const requirements=[...groupedReq.values()];
+      const canAllocate=requirements.every(req=>{
+        const product=productMap.get(req.product_id);
+        return Boolean(product) && inventoryStock(product!,req.variant_id)>=req.quantity;
+      });
+      if(!canAllocate) continue;
+
+      for(const req of requirements){
+        const product=productMap.get(req.product_id)!;
+        if(req.variant_id){
+          const variants=(product.variants||[]).map(v=>{
+            if(v.id!==req.variant_id) return v;
+            const before=Number(v.stock_quantity||0);
+            const after=Math.max(0,before-req.quantity);
+            allocationLogs.push({id:`stk-alloc-${Date.now()}-${order.id}-${product.id}-${v.id}`,product_id:product.id,product_name:`${product.name_en} - ${v.option_value}`,change_type:'Order Deduction',quantity:req.quantity,previous_stock:before,new_stock:after,reason:`FIFO stock allocated to ${order.order_number}`,performed_by:'System FIFO Allocator',created_at:now});
+            return {...v,stock_quantity:after,status:(after<=0?'Out of Stock':'Active') as Product['status']};
+          });
+          product.variants=variants;
+          product.stock_quantity=variants.reduce((n,v)=>n+Math.max(0,Number(v.stock_quantity||0)),0);
+          product.status=product.stock_quantity<=0?'Out of Stock':'Active';
+        } else {
+          const before=Number(product.stock_quantity||0);
+          const after=Math.max(0,before-req.quantity);
+          product.stock_quantity=after;
+          product.status=after<=0?'Out of Stock':'Active';
+          allocationLogs.push({id:`stk-alloc-${Date.now()}-${order.id}-${product.id}`,product_id:product.id,product_name:req.label,change_type:'Order Deduction',quantity:req.quantity,previous_stock:before,new_stock:after,reason:`FIFO stock allocated to ${order.order_number}`,performed_by:'System FIFO Allocator',created_at:now});
+        }
+      }
+      allocatedIds.add(order.id);
+    }
+
+    if(allocatedIds.size){ setProducts(Array.from(productMap.values())); setStockHistory(prev=>[...allocationLogs,...prev]); }
+
+    const postStockOrders=confirmedActive.map(order=>allocatedIds.has(order.id)?{...order,stock_allocated:true,stock_status:'Allocated' as const,stock_allocated_at:now,stock_allocated_by:'System FIFO Allocator'}:order);
+    const readyWithoutWaybill=postStockOrders.filter(o=>o.stock_allocated && o.stock_status==='Allocated' && !o.waybill_number && !o.invoice_locked && o.order_status!=='Cancelled')
+      .sort((a,b)=>new Date(a.created_at).getTime()-new Date(b.created_at).getTime());
+    const availableWaybills=waybillRecords.filter(w=>w.status==='Available').sort((a,b)=>new Date(a.imported_at).getTime()-new Date(b.imported_at).getTime());
+    const autoAssignments=new Map<string,WaybillRecord>();
+    for(let i=0;i<Math.min(readyWithoutWaybill.length,availableWaybills.length);i++) autoAssignments.set(readyWithoutWaybill[i].id,availableWaybills[i]);
+    if(!allocatedIds.size && !autoAssignments.size) return;
+
+    setOrders(prev=>prev.map(o=>{
+      const newlyAllocated=allocatedIds.has(o.id); const wb=autoAssignments.get(o.id);
+      if(!newlyAllocated && !wb) return o;
+      const updated={...o,
+        ...(newlyAllocated?{stock_allocated:true,stock_status:'Allocated' as const,stock_allocated_at:now,stock_allocated_by:'System FIFO Allocator'}:{}),
+        ...(wb?{waybill_number:wb.waybill_number,courier_name:wb.courier_name,shipment_mode:'manual' as const,delivery_status:'Waybill Assigned',tracking_status:'Ready for Packing'}:{})
+      } as Order;
+      void mirrorOrderUpdate(updated);
+      return updated;
+    }));
+
+    if(autoAssignments.size){
+      const byWaybill=new Map(Array.from(autoAssignments.entries()).map(([orderId,wb])=>[wb.waybill_number,orderId]));
+      setWaybillRecords(prev=>prev.map(w=>{
+        const orderId=byWaybill.get(w.waybill_number); if(!orderId) return w;
+        const order=postStockOrders.find(o=>o.id===orderId);
+        return {...w,status:'Assigned',assigned_order_id:orderId,assigned_order_number:order?.order_number,assigned_at:now};
+      }));
+    }
+  }, [orders, products, waybillRecords, sharedStoreReady, sharedOrdersReady, adminUser?.id, returnStockTransactionPending]);
+
+
+  // AUTO INVOICE QUEUE:
+  // Once a Confirmed order has full stock + a waybill, create/lock its invoice record
+  // automatically so it appears in Packing Invoice Downloads. PDF download remains manual.
+  useEffect(() => {
+    if(!adminUser || !sharedStoreReady || !sharedOrdersReady || returnStockTransactionPending)return;
+    const ready = orders
+      .filter(o =>
+        o.order_status !== 'Cancelled' &&
+        o.call_center_status === 'Confirmed' &&
+        !o.is_duplicate_order &&
+        !o.is_test_order &&
+        o.stock_allocated &&
+        o.stock_status === 'Allocated' &&
+        Boolean(o.waybill_number) &&
+        !o.invoice_locked
+      )
+      .sort((a,b)=>new Date(a.created_at).getTime()-new Date(b.created_at).getTime());
+
+    if (!ready.length) return;
+
+    const unseen = ready.filter(o => !autoInvoiceReadyRef.current.has(o.id));
+    if (!unseen.length) return;
+
+    // Group max 50 newly-ready orders into one automatic packing batch.
+    const batch = unseen.slice(0,50);
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const batchId = `PACK-AUTO-${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}-${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`;
+    const ids = new Set(batch.map(o=>o.id));
+    batch.forEach(o=>autoInvoiceReadyRef.current.add(o.id));
+
+    const autoUpdated=batch.map(o=>({
+      ...o,
+      invoice_number:o.invoice_number || `INV-${o.order_number}`,
+      invoice_generated_at:o.invoice_generated_at || nowIso,
+      invoice_generated_by:o.invoice_generated_by || 'System Auto Invoice Queue',
+      invoice_locked:true,
+      invoice_pack_batch_id:o.invoice_pack_batch_id || batchId,
+      invoice_pack_downloaded_at:undefined,
+      invoice_pack_downloaded_by:undefined,
+      invoice_payment_label_snapshot:o.invoice_payment_label_snapshot || deriveInvoicePaymentLabel(o, settings),
+      invoice_advance_percentage_snapshot:o.invoice_advance_percentage_snapshot ?? Number(settings.advance_percentage ?? 50),
+    } as Order));
+    const autoMap=new Map(autoUpdated.map(o=>[o.id,o]));
+    setOrders(prev => prev.map(o => autoMap.get(o.id) || o));
+    autoUpdated.forEach(mirrorOrderUpdate);
+
+    logActivity({
+      action:'Auto Invoice Batch Ready',
+      module:'Invoices',
+      details:`${batch.length} invoice(s) moved to Packing Downloads • ${batchId}`
+    });
+  }, [orders, sharedStoreReady, sharedOrdersReady, adminUser?.id, returnStockTransactionPending]);
+
+
+  const updateOrderStatus = (orderId: string, status: OrderStatus) => {
+    const order = orders.find((o) => o.id === orderId);
+    setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, order_status: status } : o)));
+    logActivity({ action: 'Order Status Changed', module: 'Orders', target_id: orderId, target_label: order?.order_number || orderId, details: `Status: ${status}` });
+  };
+
+  const cancelOrderDirect = async (
+    orderId: string,
+    reason: string,
+    cancelledBy = adminUser?.name || 'Admin'
+  ): Promise<{ success: boolean; message: string }> => {
+    const order=orders.find((candidate)=>candidate.id===orderId);
+    if(!order) throw new Error('Order not found.');
+    if(order.order_status==='Cancelled') return { success:true, message:`${order.order_number} is already cancelled.` };
+
+    if(
+      order.stock_allocated ||
+      order.invoice_locked ||
+      order.dispatch_status==='Handed Over' ||
+      order.order_status==='Shipped' ||
+      order.order_status==='Delivered'
+    ){
+      throw new Error('This order is already stock / invoice / dispatch locked. Use the existing Admin correction / return flow instead.');
+    }
+
+    const cleanReason=String(reason || '').trim();
+    if(!cleanReason) throw new Error('Cancel reason is required.');
+
+    const now=new Date().toISOString();
+    const updated:Order={
+      ...order,
+      call_center_status:'Cancelled',
+      order_status:'Cancelled',
+      call_center_updated_at:now,
+      cancelled_at:now,
+      cancelled_by:cancelledBy,
+      cancel_reason:cleanReason,
+      notes:[order.notes,'Cancelled directly in O-RA',`Reason: ${cleanReason}`].filter(Boolean).join(' | '),
+    };
+
+    // Persist before changing local UI so refresh cannot restore the old status.
+    await sharedStaffRequest(`/api/orders/${encodeURIComponent(updated.id)}`,{
+      method:'PUT',
+      body:JSON.stringify({order:updated}),
+    });
+
+    setOrders((prev)=>{
+      const next=prev.map((candidate)=>candidate.id===updated.id?updated:candidate);
+      try{localStorage.setItem('ora_orders',JSON.stringify(next));}catch{}
+      return next;
+    });
+
+    logActivity({
+      action:'Order Cancelled Directly',
+      module:'Orders',
+      target_id:updated.id,
+      target_label:updated.order_number,
+      details:`${cleanReason} • ${cancelledBy}`,
+    });
+
+    return {
+      success:true,
+      message:`${updated.order_number} cancelled in O-RA. Confirm/Cancel CSV upload remains available for bulk decisions.`,
+    };
+  };
+
+
+  const updateOrderDeliveryDetails = async (
+    orderId: string,
+    details: { address: string; city: string; district?: string },
+  ): Promise<{ success: boolean; sheetSynced: boolean; message: string }> => {
+    const order=orders.find((o)=>o.id===orderId);
+    if(!order)throw new Error('Order not found.');
+    if(order.order_status==='Shipped' || order.order_status==='Delivered' || order.dispatch_status==='Handed Over'){
+      throw new Error('Shipped / delivered orders cannot have their delivery address changed from Orders.');
+    }
+
+    const address=String(details.address || '').trim();
+    const city=String(details.city || '').trim();
+    const district=String(details.district || '').trim();
+    if(!address)throw new Error('Address is required.');
+    if(!city)throw new Error('City is required.');
+
+    const normalizeDeliveryPlace=(value:string)=>String(value || '').trim().toLowerCase().replace(/\s+/g,' ');
+    const cityChanged=normalizeDeliveryPlace(city)!==normalizeDeliveryPlace(order.city || '');
+    const updated:Order={
+      ...order,
+      address,
+      city,
+      district:district || undefined,
+      ...(cityChanged ? { fardar_city:undefined, city_verified:false, city_mapping_source:undefined } : {}),
+    };
+
+    // After an order's FIRST Sheet sync, the Google Sheet delivery location is
+    // authoritative. Editing the System order must never overwrite a Call Center
+    // correction in Sheet. This save is intentionally O-RA-only.
+    await sharedStaffRequest(`/api/orders/${encodeURIComponent(order.id)}`,{
+      method:'PUT',
+      body:JSON.stringify({order:updated}),
+    });
+
+    setOrders((prev)=>prev.map((o)=>o.id===orderId?updated:o));
+    logActivity({
+      action:'Delivery Address Updated',
+      module:'Orders',
+      target_id:order.id,
+      target_label:order.order_number,
+      details:`${order.address}, ${order.city}${order.district?`, ${order.district}`:''} → ${address}, ${city}${district?`, ${district}`:''} • Google Sheet unchanged`,
+    });
+    return{success:true,sheetSynced:false,message:'Address saved in O-RA. Google Sheet address was not changed.'};
+  };
+
+  const updatePaymentStatus = (orderId: string, status: 'Pending' | 'Paid' | 'Refunded') => {
+    const order = orders.find((o) => o.id === orderId);
+    if (!order) return;
+    const updated: Order = {
+      ...order,
+      payment_status: status,
+      payment_paid_type: status === 'Paid' ? (order.payment_method === 'COD' ? 'COD' : 'Full') : undefined,
+    };
+    setOrders((prev) => prev.map((o) => (o.id === orderId ? updated : o)));
+    mirrorOrderUpdate(updated);
+    logActivity({ action: 'Payment Status Changed', module: 'Payments', target_id: orderId, target_label: order.order_number || orderId, details: `Status: ${status}` });
+  };
+
+  const confirmAdvancePayment = (orderId: string) => {
+    const order = orders.find((o) => o.id === orderId);
+    if (!order) return;
+    const updated: Order = { ...order, advance_confirmed: true, payment_status: 'Paid', payment_paid_type: 'Advance' };
+    setOrders((prev) => prev.map((o) => o.id === orderId ? updated : o));
+    mirrorOrderUpdate(updated);
+    logActivity({ action: 'Advance Payment Confirmed', module: 'Payments', target_id: orderId, target_label: order.order_number || orderId });
+  };
+
+  const reviewPayment = (orderId: string, decision: 'approve' | 'reject', reviewer = adminUser?.name || 'Admin', receivedAmount?: number) => {
+    const reviewedAt = new Date().toISOString();
+    const reviewedOrder = orders.find((o) => o.id === orderId);
+    if (!reviewedOrder) return;
+    let updated: Order;
+    if (decision === 'approve') {
+      const detected = Number(reviewedOrder.payment_detected_amount || 0);
+      const confirmedReceived = Number(receivedAmount || 0);
+      const paidAmount = confirmedReceived > 0 ? confirmedReceived : detected;
+      const total = Number(reviewedOrder.total_amount || 0);
+      const isFull = !reviewedOrder.is_advance_required || (paidAmount > 0 && total > 0 && paidAmount >= total * 0.98);
+      updated = {
+        ...reviewedOrder,
+        payment_status: 'Paid',
+        payment_received_amount: paidAmount > 0 ? paidAmount : undefined,
+        payment_paid_type: isFull ? 'Full' : 'Advance',
+        payment_verification_status: 'Approved',
+        payment_reviewed_by: reviewer,
+        payment_reviewed_at: reviewedAt,
+        advance_confirmed: isFull ? reviewedOrder.advance_confirmed : true,
+        order_status: reviewedOrder.order_status === 'Pending Payment' || reviewedOrder.order_status === 'New Orders' ? 'Processing' : reviewedOrder.order_status,
+      };
+    } else {
+      updated = {
+        ...reviewedOrder,
+        payment_status: 'Pending',
+        payment_paid_type: undefined,
+        payment_verification_status: 'Rejected',
+        payment_reviewed_by: reviewer,
+        payment_reviewed_at: reviewedAt,
+        order_status: 'Pending Payment',
+      };
+    }
+    setOrders((prev) => prev.map((o) => o.id === orderId ? updated : o));
+    mirrorOrderUpdate(updated);
+
+    // Bank-transfer website orders are intentionally kept OUT of the call-center Google Sheet
+    // until an admin confirms the money actually arrived. This prevents fake/slip-only orders
+    // from entering the normal fulfilment flow.
+    if (decision === 'approve' && updated.order_source === 'Website' && !updated.is_synced_google_sheets && settings.google_sheet_webhook_url) {
+      syncOrderToGoogleSheets(updated, settings.google_sheet_webhook_url, settings, products).then((result) => {
+        if (!result.success) {
+          console.warn(`Google Sheet sync failed after payment approval for ${updated.order_number}: ${result.message}`);
+          return;
+        }
+        const syncedAt = new Date().toISOString();
+        const syncedOrder = { ...updated, is_synced_google_sheets: true, synced_at: syncedAt };
+        setOrders((prev) => prev.map((o) => o.id === orderId ? syncedOrder : o));
+        mirrorOrderUpdate(syncedOrder);
+      }).catch((err) => console.warn('Google Sheet sync after payment approval failed:', err));
+    }
+
+    logActivity({ action: decision === 'approve' ? 'Payment Approved' : 'Payment Rejected', module: 'Payments', target_id: orderId, target_label: reviewedOrder.order_number || orderId, details: `Reviewer: ${reviewer}${decision === 'approve' && Number(receivedAmount || 0) > 0 ? ` • Confirmed received: Rs. ${Number(receivedAmount).toLocaleString()}` : ''}` });
+  };
+
+  const normalizeCity = (value: string) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9\u0D80-\u0DFF]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+  const refreshFardarCities = async () => {
+    if (!adminUser) return;
+    try {
+      const data = await sharedStaffRequest('/api/courier/fardar/cities');
+      setFardarCities(Array.isArray(data?.cities) ? data.cities : []);
+      setFardarCityMappings(Array.isArray(data?.mappings) ? data.mappings : []);
+    } catch (e) {
+      console.warn('Could not load Fardar city list:', e);
+    }
+  };
+
+  useEffect(() => {
+    if (adminUser) refreshFardarCities();
+    else { setFardarCities([]); setFardarCityMappings([]); }
+  }, [adminUser?.id]);
+
+  const importConfirmedOrdersCsv = async (csvText: string, source?: OrderSource) => {
+    const errors:string[]=[]; const orderNumbers:string[]=[]; let notFoundCount=0,ignoredCount=0;
+    const parse=(line:string)=>{const out:string[]=[];let cur='',q=false;for(let i=0;i<line.length;i++){const ch=line[i];if(ch==='"'){if(q&&line[i+1]==='"'){cur+='"';i++;}else q=!q;}else if(ch===','&&!q){out.push(cur.trim());cur='';}else cur+=ch;}out.push(cur.trim());return out;};
+    const lines=String(csvText||'').split(/\r?\n/).filter(l=>l.trim());
+    if(lines.length<2)return{confirmedCount:0,notFoundCount:0,ignoredCount:0,orderNumbers:[],errors:['CSV has no data rows.']};
+    const h=parse(lines[0]).map(v=>v.toLowerCase().trim().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,''));
+    const idx=(names:string[])=>h.findIndex(x=>names.includes(x));
+    const idI=idx(['order_id','order_number','order']);
+    const mainI=idx(['main_code','main_sku','product_code']);
+    const variantI=idx(['variant_color','variant','color','colour','option']);
+    const codeI=idx(['item_code','variant_code','actual_sku','sku']);
+    const qtyI=idx(['qty','quantity']);
+    const itemStatusI=idx(['item_status','item_action']);
+    const decisionI=idx(['decision','call_decision','final_decision','order_action']);
+    const callResultI=idx(['call_result','call_status','result']);
+    const reasonI=idx(['cancel_reason','reason','notes']);
+    const cancelledByI=idx(['cancelled_by','updated_by','call_center_by']);
+    const giftWrapI=idx(['gift_wrap','gift_wrapping','wrap']);
+    const wrappingCostI=idx(['wrapping_cost_rs','wrapping_cost','gift_wrap_fee','wrapping_fee_rs','wrapping_fee']);
+    const addressI=idx(['address','customer_address','delivery_address']);
+    const cityI=idx(['city','town','delivery_city']);
+    const districtI=idx(['district','delivery_district']);
+    if(idI<0||codeI<0||(decisionI<0&&callResultI<0))return{confirmedCount:0,notFoundCount:0,ignoredCount:0,orderNumbers:[],errors:['Required columns: Order ID, Item Code, and Order Action (CONFIRM ORDER / CANCEL ENTIRE ORDER). Older Decision/Call Result CSV files are still supported.']};
+
+    const wantedPrefix=source==='Facebook Ads'?'FB':source==='TikTok Ads'?'TK':source==='Website'?'WEB':'';
+    const groups=new Map<string,string[][]>();
+    lines.slice(1).forEach((line,rowNo)=>{const c=parse(line),id=String(c[idI]||'').trim().toUpperCase();if(!id||id.startsWith('DATE:')){ignoredCount++;return;}if(wantedPrefix&&!id.startsWith(`${wantedPrefix}-`)){ignoredCount++;errors.push(`Row ${rowNo+2}: ${id} is not a ${wantedPrefix} order.`);return;}if(!/^(WEB|FB|TK|MAN)-\d{6}$/.test(id)&&!/^WEB-TEST-\d{3}$/.test(id)){ignoredCount++;return;}groups.set(id,[...(groups.get(id)||[]),c]);});
+
+    let persisted:Order[]=[];try{persisted=JSON.parse(localStorage.getItem('ora_orders')||'[]');}catch{}
+    const merged=[...orders,...persisted.filter(saved=>!orders.some(cur=>cur.id===saved.id))];
+    const existing=new Map(merged.map(o=>[o.order_number.toUpperCase(),o] as [string,Order]));
+    const now=new Date().toISOString(); const updates=new Map<string,Partial<Order>>();
+
+    groups.forEach((rows,id)=>{
+      const order=existing.get(id); if(!order){notFoundCount++;return;}
+      if(source && order.order_source!==source){ignoredCount++;return;}
+      const decisionValues=decisionI>=0?rows.map(c=>String(c[decisionI]||'').trim()).filter(Boolean):[];
+      const decisionValue=decisionValues.find(v=>!['pending','blank'].includes(v.toLowerCase().replace(/[_-]+/g,' ').trim())) || decisionValues[0];
+      const rawCall=String(decisionValue || (callResultI>=0?rows.map(c=>c[callResultI]).find(v=>String(v||'').trim()):'') || '').trim().toLowerCase().replace(/[_-]+/g,' ').replace(/\s+/g,' ');
+      // Upload is intentionally Confirm + Cancel only. PENDING / NO ANSWER stay in Google Sheet for the next call.
+      if(!rawCall || ['pending','blank','no answer','noanswer','reschedule','rescheduled'].includes(rawCall)){ignoredCount++;return;}
+      let callResult:Order['call_center_status'];
+      if(['confirmed','confirm','confirm order'].includes(rawCall))callResult='Confirmed';else if(['cancelled','canceled','cancel','cancel entire order'].includes(rawCall))callResult='Cancelled';else{errors.push(`${id}: Order Action must be CONFIRM ORDER or CANCEL ENTIRE ORDER. PENDING / NO ANSWER are ignored by upload.`);return;}
+      const reason=reasonI>=0?String(rows.map(c=>c[reasonI]).find(Boolean)||'').trim():'';
+      if(order.order_status==='Cancelled'){
+        ignoredCount++;
+        return;
+      }
+
+      if(callResult==='Cancelled'){
+        if(order.stock_allocated || order.invoice_locked || ['Shipped','Delivered'].includes(order.order_status)){errors.push(`${id}: This order is already stock/invoice/dispatch locked. Use an Admin correction/return flow instead of Call Center cancellation.`);return;}
+        const cancelledBy=cancelledByI>=0?String(rows.map(c=>c[cancelledByI]).find(Boolean)||'Call Center').trim():'Call Center';
+        updates.set(id,{call_center_status:'Cancelled',order_status:'Cancelled',call_center_updated_at:now,cancelled_at:now,cancelled_by:cancelledBy,cancel_reason:reason||'Customer/Call Center cancellation',notes:[order.notes,'Cancelled by Call Center',reason?`Reason: ${reason}`:''].filter(Boolean).join(' | ')});orderNumbers.push(id);return;
+      }
+
+      if(order.stock_allocated || order.invoice_locked || ['Shipped','Delivered'].includes(order.order_status)){errors.push(`${id}: This order is already stock/invoice/dispatch locked. Qty/Product changes are blocked in Call Center upload.`);return;}
+      const itemAction=(c:string[])=>String(c[itemStatusI]||'').trim().toLowerCase().replace(/[_-]+/g,' ').replace(/\s+/g,' ');
+      const isCancelledItem=(c:string[])=>['cancelled','canceled','cancel','cancel item'].includes(itemAction(c));
+      const isKeptItem=(c:string[])=>['','confirmed','confirm','pending','keep','keep item'].includes(itemAction(c));
+      const confirmed=itemStatusI>=0?rows.filter(c=>!isCancelledItem(c)):rows;
+      const cancelled=itemStatusI>=0?rows.filter(c=>isCancelledItem(c)):[];
+      const invalid=itemStatusI>=0?rows.filter(c=>!isCancelledItem(c)&&!isKeptItem(c)):[];
+      if(invalid.length){errors.push(`${id}: Item Action must be KEEP ITEM or CANCEL ITEM.`);return;}
+      if(!confirmed.length){updates.set(id,{call_center_status:'Cancelled',order_status:'Cancelled',call_center_updated_at:now,cancelled_at:now,cancelled_by:'Call Center',cancel_reason:reason||'All items cancelled by Call Center',notes:[order.notes,'All items cancelled by Call Center'].filter(Boolean).join(' | ')});orderNumbers.push(id);return;}
+
+      const nextItems:Order['items']=[]; let bad=false;
+      confirmed.forEach((c,rowIndex)=>{
+        if(bad)return;
+        const actualCode=String(c[codeI]||'').trim().toUpperCase();
+        const mainCode=mainI>=0?String(c[mainI]||'').trim().toUpperCase():'';
+        const variantValue=variantI>=0?String(c[variantI]||'').trim():'';
+        const qty=Math.max(1,Number(qtyI>=0?c[qtyI]:1)||1);
+        if(qty>99){errors.push(`${id}: Qty ${qty} is too high.`);bad=true;return;}
+        const selection=findProductSelection(products,actualCode||mainCode,variantValue);
+        if(!selection){errors.push(`${id}: Item ${actualCode||mainCode} was not found in current Products.`);bad=true;return;}
+        if(normalizedProductType(selection.product)==='variant'&&!selection.variant){errors.push(`${id}: Select a Color / Variant for ${selection.product.name_en} on row ${rowIndex+1}.`);bad=true;return;}
+        try{nextItems.push(buildOrderItemSnapshot(selection.product,qty,settings,selection.variant,products));}catch(e:any){errors.push(`${id}: ${e?.message||'Invalid item selection.'}`);bad=true;}
+      });
+      if(bad)return;
+      const giftWrapRaw=giftWrapI>=0?String(rows.map(c=>c[giftWrapI]).find(v=>String(v||'').trim())||'').trim():'';
+      const gift_wrap_selected=giftWrapRaw
+        ? ['yes','true','1','on','add wrap','gift wrap'].includes(giftWrapRaw.toLowerCase())
+        : Boolean(order.gift_wrap_selected);
+      const sheetWrappingCost=wrappingCostI>=0?Number(String(rows.map(c=>c[wrappingCostI]).find(v=>String(v||'').trim())||0).replace(/[^0-9.-]/g,'')):0;
+      const gift_wrap_fee=gift_wrap_selected
+        ? Math.max(0,Number(sheetWrappingCost || order.gift_wrap_fee || settings.gift_wrap_fee || 0))
+        : 0;
+      const totalQty=nextItems.reduce((n,it)=>n+it.quantity,0);
+      const subtotal=nextItems.reduce((n,it)=>n+it.subtotal,0);
+      const rate=getMultiBuyDiscountRate(totalQty);
+      const useDeliveryQtyOffer=order.delivery_rebalance_qty_offer===true || Number(order.delivery_rebalance_amount_snapshot||0)>0;
+      const confirmRebalanceAmount=useDeliveryQtyOffer
+        ? Math.max(0,Number(order.delivery_rebalance_amount_snapshot ?? settings.delivery_price_rebalance_amount ?? 0))
+        : 0;
+      const legacySubtotal=Math.max(0,subtotal-confirmRebalanceAmount*totalQty);
+      const special_offer_discount=useDeliveryQtyOffer
+        ? Math.round(legacySubtotal*(rate/100)*100)/100
+        : Math.max(0,Number(order.special_offer_discount||0));
+      const delivery_rebalance_qty_offer_amount=useDeliveryQtyOffer
+        ? Math.round(confirmRebalanceAmount*Math.max(0,totalQty-1)*100)/100
+        : Math.max(0,Number(order.delivery_rebalance_qty_offer_amount||0));
+      const delivery_fee=useDeliveryQtyOffer
+        ? (settings.free_delivery_enabled?0:Math.max(0,Number(order.delivery_visible_fee_snapshot ?? settings.delivery_fee ?? 0)))
+        : Math.max(0,Number(order.delivery_fee||0));
+      const total_amount=Math.round(Math.max(0,subtotal-special_offer_discount-delivery_rebalance_qty_offer_amount+delivery_fee+gift_wrap_fee));
+      const threshold=Math.max(0,Number(settings.advance_qty_threshold??4)),adv=totalQty>threshold,pct=Math.min(100,Math.max(1,Number(settings.advance_percentage??50)));
+      const confirmedAddress=addressI>=0?String(rows.map(c=>c[addressI]).find(v=>String(v||'').trim())||'').trim():'';
+      const confirmedCity=cityI>=0?String(rows.map(c=>c[cityI]).find(v=>String(v||'').trim())||'').trim():'';
+      const confirmedDistrict=districtI>=0?String(rows.map(c=>c[districtI]).find(v=>String(v||'').trim())||'').trim():'';
+      const cityChanged=Boolean(confirmedCity && confirmedCity.trim().toLowerCase()!==String(order.city||'').trim().toLowerCase());
+      const oldShape=(order.items||[]).map(it=>({sku:it.sku,product_name:it.product_name,variant_name:it.variant_name,quantity:it.quantity,unit_price:it.unit_price}));
+      const newShape=nextItems.map(it=>({sku:it.sku,product_name:it.product_name,variant_name:it.variant_name,quantity:it.quantity,unit_price:it.unit_price}));
+      const changed=JSON.stringify(oldShape)!==JSON.stringify(newShape);
+      updates.set(id,{items:nextItems,subtotal,special_offer_discount,delivery_rebalance_qty_offer:useDeliveryQtyOffer,delivery_rebalance_qty_offer_amount,delivery_rebalance_amount_snapshot:order.delivery_rebalance_amount_snapshot,delivery_visible_fee_snapshot:order.delivery_visible_fee_snapshot,delivery_fee,gift_wrap_selected,gift_wrap_fee,total_amount,is_advance_required:adv,advance_amount:adv?Math.round(total_amount*pct/100):0,call_center_status:'Confirmed',order_status:'Processing',call_center_updated_at:now,stock_allocated:false,stock_status:'Waiting for Stock',...(confirmedAddress?{address:confirmedAddress}:{}),...(confirmedCity?{city:confirmedCity}:{}),...(confirmedDistrict?{district:confirmedDistrict}:{}),...(cityChanged?{fardar_city:undefined,city_verified:false,city_mapping_source:undefined}:{}),product_change_history:changed?[...(order.product_change_history||[]),{changed_at:now,changed_by:'Call Center Confirm Upload',old_items:oldShape,new_items:newShape,reason:reason||undefined}]:(order.product_change_history||[]),notes:[order.notes,cancelled.length?`Call Center cancelled ${cancelled.length} item row(s).`:'',reason?`Call Center: ${reason}`:''].filter(Boolean).join(' | ')});
+      orderNumbers.push(id);
+    });
+
+    // Persist every Confirm/Cancel decision BEFORE changing the browser state.
+    // Previously these writes were fire-and-forget, so a failed/late server write
+    // could be overwritten by the next authoritative server refresh.
+    const entries=[];
+    for(const [orderNumber,patch] of updates.entries()){
+      const original=existing.get(orderNumber);
+      if(!original) continue;
+      entries.push({id:String(original.id),order_number:orderNumber,expected:canonicalJson(original),patch,
+        clear_fields:['fardar_city','city_mapping_source'].filter(field=>Object.hasOwn(patch,field)&&(patch as any)[field]===undefined)});
+    }
+    const savedDecisions=await saveConfirmCsvDecisions(entries,sharedStaffRequest);
+    const durableUpdates=new Map(Array.from(savedDecisions.saved,([number,order])=>[number,order as Order]));
+    errors.push(...savedDecisions.errors);
+
+    // Confirm upload is one-way from Google Sheet -> O-RA. The Sheet may contain
+    // corrected Address / City / District, so never echo the System order back and
+    // risk overwriting those Call Center edits.
+    setOrders(prev=>{
+      const recovered=[...prev,...Array.from(durableUpdates.values()).filter(saved=>!prev.some(cur=>cur.id===saved.id))];
+      const next=recovered.map(o=>durableUpdates.get(o.order_number.toUpperCase()) || o);
+      try{localStorage.setItem('ora_orders',JSON.stringify(next));}catch{}
+      return next;
+    });
+    const savedOrderNumbers=Array.from(durableUpdates.keys());
+    return{confirmedCount:savedOrderNumbers.length,notFoundCount,ignoredCount,orderNumbers:savedOrderNumbers,errors};
+  };
+
+  const importWebsiteConfirmedCsv = async (csvText:string) => importConfirmedOrdersCsv(csvText,'Website');
+
+  const importCallCenterResultsCsv = (csvText: string) => {
+    const errors: string[] = [];
+    let updatedCount = 0;
+    let notFoundCount = 0;
+    const lines = String(csvText || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length < 2) return { updatedCount: 0, notFoundCount: 0, errors: ['CSV has no data rows.'] };
+    const parse = (line: string) => line.split(',').map(v => v.trim().replace(/^"|"$/g, ''));
+    const headers = parse(lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_'));
+    const idIdx = headers.findIndex(h => ['order_id','order_number','order'].includes(h));
+    const resultIdx = headers.findIndex(h => ['result','status','call_result','call_status'].includes(h));
+    if (idIdx < 0 || resultIdx < 0) return { updatedCount: 0, notFoundCount: 0, errors: ['Required columns: Order ID, Result'] };
+
+    const updates = new Map<string, { status: Order['call_center_status']; orderStatus: OrderStatus }>();
+    lines.slice(1).forEach((line, i) => {
+      const c = parse(line);
+      const orderNo = String(c[idIdx] || '').trim();
+      const raw = String(c[resultIdx] || '').trim().toLowerCase().replace(/[_-]+/g, ' ');
+      if (!orderNo) { errors.push(`Row ${i+2}: Order ID missing.`); return; }
+      let status: Order['call_center_status']; let orderStatus: OrderStatus;
+      if (['no answer','noanswer','pending','not answered'].includes(raw)) return;
+      if (['confirmed','confirm','yes','ok'].includes(raw)) { status='Confirmed'; orderStatus='Processing'; }
+      else if (['cancel','cancelled','canceled'].includes(raw)) { status='Cancelled'; orderStatus='Cancelled'; }
+      else { errors.push(`Row ${i+2}: Unknown result "${c[resultIdx]}". Upload processes Confirmed or Cancelled only.`); return; }
+      updates.set(orderNo.toUpperCase(), {status, orderStatus});
+    });
+
+    const existing = new Set(orders.map(o => o.order_number.toUpperCase()));
+    updates.forEach((_, id) => { if (!existing.has(id)) notFoundCount++; });
+    setOrders(prev => prev.map(o => {
+      const u = updates.get(o.order_number.toUpperCase());
+      if (!u) return o;
+      updatedCount++;
+      return {...o, call_center_status:u.status, order_status:u.orderStatus, call_center_updated_at:new Date().toISOString()};
+    }));
+    logActivity({ action:'Call Center CSV Imported', module:'Orders', details:`Updated ${updates.size - notFoundCount}; not found ${notFoundCount}` });
+    return { updatedCount: Math.max(0, updates.size - notFoundCount), notFoundCount, errors };
+  };
+
+  const importFardarCityList = async (csvText: string) => {
+    const lines = String(csvText || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    if (!lines.length) return { importedCount: 0 };
+    const parse = (line: string) => line.split(',').map(v => v.trim().replace(/^\"|\"$/g, ''));
+    const first = parse(lines[0]);
+    const lower = first.map(v => v.toLowerCase());
+    const nameAliases = ['city','city name','city_name','name','town','destination'];
+    const codeAliases = ['district', 'dist', 'district name', 'city code','city_code','code','id'];
+    let nameIdx = lower.findIndex(v => nameAliases.includes(v));
+    let codeIdx = lower.findIndex(v => codeAliases.includes(v));
+    const hasHeader = nameIdx >= 0 || codeIdx >= 0;
+    if (nameIdx < 0) nameIdx = 0;
+    const rows = (hasHeader ? lines.slice(1) : lines).map(parse).map(cols => ({
+      name: String(cols[nameIdx] || '').trim(),
+      district: codeIdx >= 0 ? String(cols[codeIdx] || '').trim() : (cols[1] || '').trim(),
+    })).filter(r => r.name);
+    const data = await sharedStaffRequest('/api/courier/fardar/cities/import', { method: 'POST', body: JSON.stringify({ cities: rows }) });
+    setFardarCities(Array.isArray(data?.cities) ? data.cities : rows);
+    logActivity({ action: 'Fardar City List Imported', module: 'Delivery', details: `${data?.count ?? rows.length} cities` });
+    return { importedCount: Number(data?.count ?? rows.length) };
+  };
+
+  const saveFardarCityMapping = async (inputCity: string, fardarCity: string) => {
+    const data = await sharedStaffRequest('/api/courier/fardar/city-mappings', { method: 'POST', body: JSON.stringify({ input_city: inputCity, fardar_city: fardarCity }) });
+    const mapping = data?.mapping || { input_city: inputCity, fardar_city: fardarCity };
+    setFardarCityMappings(prev => {
+      const key = normalizeCity(inputCity);
+      const next = prev.filter(m => normalizeCity(m.input_city) !== key);
+      return [...next, mapping];
+    });
+  };
+
+  const resolveFardarCity = (inputCity: string): { city?: string; source?: 'exact' | 'saved_mapping' } => {
+    const key = normalizeCity(inputCity);
+    if (!key) return {};
+    const exact = fardarCities.find(c => normalizeCity(c.name) === key);
+    if (exact) return { city: exact.name, source: 'exact' };
+    const mapping = fardarCityMappings.find(m => normalizeCity(m.input_city) === key);
+    if (mapping) {
+      const stillValid = !fardarCities.length || fardarCities.some(c => normalizeCity(c.name) === normalizeCity(mapping.fardar_city));
+      if (stillValid) return { city: mapping.fardar_city, source: 'saved_mapping' };
+    }
+    return {};
+  };
+
+  const setOrderFardarCity = async (orderId: string, fardarCity: string, saveMapping = true) => {
+    const order = orders.find(o => o.id === orderId);
+    if (!order) return;
+    const official = fardarCities.find(c => normalizeCity(c.name) === normalizeCity(fardarCity));
+    if (fardarCities.length && !official) throw new Error('Select a city from the uploaded Fardar city list.');
+    const officialName = official?.name || fardarCity;
+    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, fardar_city: officialName, city_verified: true, city_mapping_source: 'manual' } : o));
+    if (saveMapping && order.city) await saveFardarCityMapping(order.city, officialName);
+    logActivity({ action: 'Fardar City Verified', module: 'Delivery', target_id: order.id, target_label: order.order_number, details: `${order.city} → ${officialName}` });
+  };
+
+  const importWaybillCsv = (csvText: string, courierName = settings.courier_provider || 'Fardar') => {
+    const tokens = csvText
+      .split(/\r?\n/)
+      .flatMap((line) => line.split(','))
+      .map((v) => v.trim().replace(/^\"|\"$/g, ''))
+      .filter(Boolean);
+
+    const headerWords = new Set(['waybill', 'waybill_number', 'waybill no', 'tracking', 'tracking_number', 'awb', 'awb_number']);
+    const uniqueIncoming = Array.from(new Set(tokens.filter((t) => !headerWords.has(t.toLowerCase()))));
+    const existing = new Set(waybillRecords.map((w) => w.waybill_number.toLowerCase()));
+    const fresh = uniqueIncoming.filter((n) => !existing.has(n.toLowerCase()));
+    const now = new Date().toISOString();
+    const additions: WaybillRecord[] = fresh.map((waybill, idx) => ({
+      id: `wb-${Date.now()}-${idx}`,
+      waybill_number: waybill,
+      courier_name: courierName,
+      status: 'Available',
+      imported_at: now,
+    }));
+    if (additions.length) setWaybillRecords((prev) => [...prev, ...additions]);
+    logActivity({ action: 'Waybill CSV Imported', module: 'Delivery', target_label: courierName, details: `Imported ${additions.length}, skipped ${uniqueIncoming.length - additions.length} duplicates` });
+    return { importedCount: additions.length, duplicateCount: uniqueIncoming.length - additions.length };
+  };
+
+  const assignNextWaybill = (orderId: string, courierName = settings.courier_provider || 'Fardar'): string | null => {
+    const order = orders.find((o) => o.id === orderId);
+    if (!order) return null;
+    if (order.waybill_number) return order.waybill_number;
+    const resolvedCity = order.fardar_city || resolveFardarCity(order.city).city;
+    if (fardarCities.length > 0 && !resolvedCity) return null;
+    const next = waybillRecords.find((w) => w.status === 'Available' && w.courier_name === courierName);
+    if (!next) return null;
+    const now = new Date().toISOString();
+    setWaybillRecords((prev) => prev.map((w) => w.id === next.id ? { ...w, status: 'Assigned', assigned_order_id: order.id, assigned_order_number: order.order_number, assigned_at: now } : w));
+    setOrders((prev) => prev.map((o) => o.id === orderId ? { ...o, courier_name: courierName, waybill_number: next.waybill_number, fardar_city: resolvedCity || o.fardar_city, city_verified: fardarCities.length ? true : o.city_verified, shipment_mode: 'manual', tracking_status: 'Waybill Assigned', delivery_status: 'Ready to Ship' } : o));
+    logActivity({ action: 'Waybill Assigned', module: 'Delivery', target_id: orderId, target_label: order.order_number, details: `${next.waybill_number} (${courierName})` });
+    return next.waybill_number;
+  };
+
+  const unassignWaybill = (orderId: string) => {
+    const order = orders.find((o) => o.id === orderId);
+    if (!order?.waybill_number) return;
+    if (order.invoice_locked || order.dispatch_status === 'Handed Over') {
+      logActivity({ action: 'Waybill Unassign Blocked', module: 'Delivery', target_id: orderId, target_label: order.order_number, details: 'Invoice/dispatch lock protects the original barcode.' });
+      return;
+    }
+    setWaybillRecords((prev) => prev.map((w) => w.waybill_number === order.waybill_number ? { ...w, status: 'Available', assigned_order_id: undefined, assigned_order_number: undefined, assigned_at: undefined } : w));
+    setOrders((prev) => prev.map((o) => o.id === orderId ? { ...o, waybill_number: undefined, shipment_mode: undefined, tracking_status: 'Not Shipped', delivery_status: 'Pending' } : o));
+    logActivity({ action: 'Waybill Unassigned', module: 'Delivery', target_id: orderId, target_label: order.order_number, details: order.waybill_number });
+  };
+
+  const redispatchReturnedParcel = async (oldWaybillInput: string): Promise<{ success: boolean; message: string; order?: Order; oldWaybill?: string; newWaybill?: string }> => {
+    const oldWaybill=String(oldWaybillInput || '').trim();
+    if(!oldWaybill) return {success:false,message:'Enter the returned parcel old waybill.'};
+
+    const order=orders.find((o)=>String(o.waybill_number || '').trim()===oldWaybill);
+    if(!order) return {success:false,message:'No order found with waybill '+oldWaybill+'.'};
+
+    const provider=String(order.courier_name || settings.courier_provider || 'Fardar');
+    const alreadyOnOrders=new Set(orders.map((o)=>String(o.waybill_number || '').trim().toLowerCase()).filter(Boolean));
+    const candidate=waybillRecords
+      .filter((w)=>{
+        const key=String(w.waybill_number || '').trim().toLowerCase();
+        return Boolean(
+          key &&
+          w.status==='Available' &&
+          w.courier_name===provider &&
+          key!==oldWaybill.toLowerCase() &&
+          !alreadyOnOrders.has(key)
+        );
+      })
+      .sort((a,b)=>new Date(a.imported_at).getTime()-new Date(b.imported_at).getTime())[0];
+
+    if(!candidate) return {success:false,message:'No available '+provider+' waybill. Import a new waybill CSV first.'};
+
+    try{
+      const saved=await sharedStaffRequest('/api/orders/redispatch-waybill',{
+        method:'POST',
+        body:JSON.stringify({
+          order_id:order.id,
+          old_waybill:oldWaybill,
+          new_waybill:candidate.waybill_number,
+          reason:'Returned parcel re-dispatch',
+        }),
+      });
+      const updated=(saved?.order || null) as Order | null;
+      if(!updated) throw new Error('Server did not return the re-dispatched order.');
+
+      const now=new Date().toISOString();
+      setOrders((prev)=>prev.map((o)=>o.id===updated.id?updated:o));
+      setWaybillRecords((prev)=>{
+        let oldFound=false;
+        const next=prev.map((w)=>{
+          const number=String(w.waybill_number || '').trim();
+          if(number===oldWaybill){
+            oldFound=true;
+            return {
+              ...w,
+              status:'Used' as const,
+              assigned_order_id:updated.id,
+              assigned_order_number:updated.order_number,
+              assigned_at:w.assigned_at || now,
+            };
+          }
+          if(w.id===candidate.id || number===String(candidate.waybill_number || '').trim()){
+            return {
+              ...w,
+              status:'Assigned' as const,
+              assigned_order_id:updated.id,
+              assigned_order_number:updated.order_number,
+              assigned_at:now,
+            };
+          }
+          return w;
+        });
+        if(oldFound) return next;
+        return [...next,{
+          id:'wb-retired-'+Date.now(),
+          waybill_number:oldWaybill,
+          courier_name:provider,
+          status:'Used' as const,
+          assigned_order_id:updated.id,
+          assigned_order_number:updated.order_number,
+          imported_at:now,
+          assigned_at:now,
+        }];
+      });
+      logActivity({
+        action:'Returned Parcel Re-Dispatch',
+        module:'Delivery',
+        target_id:updated.id,
+        target_label:updated.order_number,
+        details:oldWaybill+' → '+String(updated.waybill_number || candidate.waybill_number)+' • old + new waybills locked',
+      });
+      return {
+        success:true,
+        message:String(updated.order_number)+' ready to re-dispatch.',
+        order:updated,
+        oldWaybill,
+        newWaybill:String(updated.waybill_number || candidate.waybill_number),
+      };
+    }catch(error:any){
+      return {success:false,message:String(error?.message || 'Returned parcel re-dispatch failed.')};
+    }
+  };
+  const markInvoicesGenerated = (orderIds: string[], generatedBy = adminUser?.name || 'Admin'): Order[] => {
+    const uniqueIds = Array.from(new Set(orderIds)).slice(0, 50);
+    const nowForBatch = new Date();
+    const batchId = `PACK-${nowForBatch.getFullYear()}${String(nowForBatch.getMonth()+1).padStart(2,'0')}${String(nowForBatch.getDate()).padStart(2,'0')}-${String(nowForBatch.getHours()).padStart(2,'0')}${String(nowForBatch.getMinutes()).padStart(2,'0')}${String(nowForBatch.getSeconds()).padStart(2,'0')}`;
+    const eligible = orders.filter((o) =>
+      uniqueIds.includes(o.id) &&
+      o.stock_allocated &&
+      o.stock_status === 'Allocated' &&
+      !o.is_duplicate_order &&
+      !o.invoice_locked &&
+      Boolean(o.waybill_number) &&
+      o.order_status !== 'Cancelled'
+    );
+    if (!eligible.length) return [];
+    const now = new Date().toISOString();
+    const updates = new Map<string, Partial<Order>>(eligible.map((o) => [o.id, {
+      invoice_number: o.invoice_number || `INV-${o.order_number.replace(/^ORA-/, '')}`,
+      invoice_generated_at: o.invoice_generated_at || now,
+      invoice_generated_by: o.invoice_generated_by || generatedBy,
+      invoice_locked: true,
+      invoice_pack_batch_id: o.invoice_pack_batch_id || batchId,
+      invoice_pack_downloaded_at: undefined,
+      invoice_pack_downloaded_by: undefined,
+      invoice_payment_label_snapshot: o.invoice_payment_label_snapshot || deriveInvoicePaymentLabel(o, settings),
+      invoice_advance_percentage_snapshot: o.invoice_advance_percentage_snapshot ?? Number(settings.advance_percentage ?? 50),
+    }] as [string, Partial<Order>]));
+    const generatedOrders = eligible.map((o) => ({ ...o, ...(updates.get(o.id) || {}) } as Order));
+    setOrders((prev) => prev.map((o) => updates.has(o.id) ? { ...o, ...(updates.get(o.id) || {}) } : o));
+    generatedOrders.forEach(mirrorOrderUpdate);
+    eligible.forEach((o) => logActivity({ action: 'Invoice Generated & Locked', module: 'Invoices', target_id: o.id, target_label: o.order_number, details: o.waybill_number }));
+    return generatedOrders;
+  };
+
+  const markInvoiceBatchDownloaded = async (
+    orderIds: string[],
+    downloadedBy = adminUser?.name || 'Packing Staff',
+    downloadSet?: { date: string; number: number },
+    downloadedInvoices?: Order[]
+  ): Promise<void> => {
+    const uniqueIds=Array.from(new Set(orderIds.map(String).filter(Boolean)));
+    if(!uniqueIds.length) return;
+
+    const queue=invoiceDownloadQueueRef.current;
+    if(!adminUser||!queue)throw new Error('Sign in again to save this PDF download status.');
+    const invoices=(downloadedInvoices||orders.filter(order=>uniqueIds.includes(order.id))).map(order=>({
+      id:order.id,invoiceNumber:String(order.invoice_number||''),batchId:String(order.invoice_pack_batch_id||''),waybill:String(order.waybill_number||'')
+    }));
+    queue.enqueue(uniqueIds,downloadedBy,downloadSet,invoices);
+    // The file is already on the user's device. Wait for the durable server
+    // receipt before reporting "Downloaded"; never silently claim success.
+    await queue.flush();
+    if(adminIdentityRef.current!==adminUser.id)
+      throw new Error('Staff session changed. Sign in again to retry the saved invoice download status.');
+    if(queue.hasPendingOrderIds(uniqueIds))
+      throw new Error('The PDF was downloaded, but its Downloaded status has not been confirmed by the server. Use Retry Status Save in Packing Invoice Downloads. Do not download the PDF again.');
+    logActivity({
+      action:'Packing Invoice Download Status Confirmed',
+      module:'Invoices',
+      details:`${uniqueIds.length} invoice(s) • ${downloadedBy} • Downloaded status confirmed by server`
+    });
+  };
+
+
+
+  const markFardarCsvExported = async (
+    orderIds: string[],
+    exportedBy = adminUser?.name || 'Admin'
+  ): Promise<void> => {
+    const uniqueIds=Array.from(new Set(orderIds.map(String).filter(Boolean)));
+    if(!uniqueIds.length) return;
+
+    const idSet=new Set(uniqueIds);
+    const now=new Date();
+    const batchId=`FARDAR-${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}-${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`;
+
+    const selectedOrders=orders.filter((order)=>idSet.has(String(order.id)));
+
+    if(selectedOrders.length!==uniqueIds.length){
+      const foundIds=new Set(selectedOrders.map((order)=>String(order.id)));
+      const missing=uniqueIds.filter((id)=>!foundIds.has(id));
+      throw new Error(`Could not find ${missing.length} Fardar order(s) in the current order list.`);
+    }
+
+    // Save only export metadata in retry-safe groups. Full order PUTs made a
+    // download rewrite each parcel and its courier locks, causing 503 failures.
+    const updatedOrders=await saveFardarExportStatus(selectedOrders,exportedBy,batchId,sharedStaffRequest) as Order[];
+
+    const updatedMap=new Map(updatedOrders.map((order)=>[String(order.id),order] as [string,Order]));
+    setOrders((prev)=>prev.map((order)=>updatedMap.get(String(order.id)) || order));
+
+    logActivity({
+      action:'Fardar Upload CSV Exported',
+      module:'Delivery',
+      details:`${updatedOrders.length} order(s) • ${batchId} • ${exportedBy}`,
+    });
+  };
+
+
+  const recordCodPayments = async (
+    entries: CodPaymentEntry[],
+    recordedBy = adminUser?.name || 'Admin'
+  ): Promise<{ updatedCount: number; unchangedCount: number; payments: number; returns: number; notFound: string[] }> => {
+    const normalize = (value: string) => String(value || '').replace(/\s+/g, '').toLowerCase();
+    const unique = new Map<string, typeof entries[number]>();
+    entries.forEach((entry) => {
+      const key = normalize(entry.waybill);
+      if (key) {
+        const previous = unique.get(key);
+        if (previous && JSON.stringify(previous) !== JSON.stringify(entry)) throw new Error(`Waybill ${entry.waybill} has conflicting CSV rows.`);
+        unique.set(key, entry);
+      }
+    });
+
+    const all = [...unique.values()];
+    const chunks = Array.from({ length: Math.ceil(all.length / 20) }, (_, index) => all.slice(index * 20, index * 20 + 20));
+    if (!chunks.length || chunks.some(chunk => !validCodPaymentEntries(chunk))) throw new Error('The CSV contains missing or invalid payment / return amounts.');
+    const summary = { updatedCount: 0, unchangedCount: 0, payments: 0, returns: 0, notFound: [] as string[] };
+    for (const chunk of chunks) {
+      const result = await sharedStaffRequest('/api/orders/courier-payments', { method: 'POST', body: JSON.stringify({ entries: chunk }) });
+      if (!result.ok || !Array.isArray(result.orders) || !Array.isArray(result.notFound)
+        || !['updatedCount', 'unchangedCount', 'payments', 'returns'].every(field => Number.isInteger(result[field]) && result[field] >= 0)
+        || result.orders.length + result.notFound.length !== chunk.length) throw new Error('Payment / return fee save was not confirmed. Retry this CSV.');
+      const saved = new Map<string, Order>(result.orders.map((order: Order) => [String(order.id), order]));
       setOrders(prev => prev.map(order => saved.get(String(order.id)) || order));
       summary.updatedCount += result.updatedCount; summary.unchangedCount += result.unchangedCount;
       summary.payments += result.payments; summary.returns += result.returns; summary.notFound.push(...result.notFound);
