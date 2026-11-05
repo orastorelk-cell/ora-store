@@ -35,6 +35,9 @@ export const restockPurchaseAtomicSafetyPatch = () => ({
 `;
         text = text.replace(settingsTypeMarker, batchType + settingsTypeMarker);
       }
+      const retryTypeMarker = "  }) => Promise<void>;\n  settings: StoreSettings;";
+      const retryType = "  retryPendingInventoryPurchase: () => Promise<void>;\n";
+      if (text.includes(retryTypeMarker) && !text.includes(retryType)) text = text.replace(retryTypeMarker, "  }) => Promise<void>;\n" + retryType + "  settings: StoreSettings;");
 
       if (!text.includes('const addPurchaseOrdersBatch=(rows:Array<{')) {
         // IMPORTANT: there is also a "// Category CRUD" comment inside the
@@ -50,12 +53,19 @@ export const restockPurchaseAtomicSafetyPatch = () => ({
   const addPurchaseOrdersBatch=async(rows:Array<{supplier_name:string;product_id:string;variant_id?:string;quantity_added:number;unit_buying_price:number;invoice_ref?:string;bill_image_url?:string;notes?:string;performed_by?:string;po_number?:string;}>)=>{
     await commitInventoryPurchaseBatch(rows);
   };
+  const retryPendingInventoryPurchase=async()=>{
+    if(!adminUser)throw new Error('Sign in before retrying the earlier Purchase.');
+    const key='ora_inventory_purchase_pending_v1:'+adminUser.id;
+    let pending:any=null;try{pending=JSON.parse(localStorage.getItem(key)||'null')}catch{}
+    if(!pending?.id||!Array.isArray(pending.items)||!pending.items.length)throw new Error('There is no saved earlier Purchase to retry.');
+    await commitInventoryPurchaseBatch(pending.items);
+  };
 `;
         text = text.slice(0, categoryImplementationAt) + batchFunction + text.slice(categoryImplementationAt);
       }
 
       const providerMarker = "        addPurchaseOrder,\n        settings,";
-      const providerWithBatch = "        addPurchaseOrder,\n        addPurchaseOrdersBatch,\n        settings,";
+      const providerWithBatch = "        addPurchaseOrder,\n        addPurchaseOrdersBatch,\n        retryPendingInventoryPurchase,\n        settings,";
       if (text.includes(providerMarker)) text = text.replace(providerMarker, providerWithBatch);
       else if (!text.includes(providerWithBatch)) throw new Error('[O-RA atomic purchase] StoreContext provider marker not found');
 
@@ -64,7 +74,7 @@ export const restockPurchaseAtomicSafetyPatch = () => ({
 
     if (id.endsWith('/src/components/admin/AdminDashboard.tsx')) {
       const destructureMarker = "    addPurchaseOrder,\n    settings,";
-      const destructureWithBatch = "    addPurchaseOrder,\n    addPurchaseOrdersBatch,\n    settings,";
+      const destructureWithBatch = "    addPurchaseOrder,\n    addPurchaseOrdersBatch,\n    retryPendingInventoryPurchase,\n    settings,";
       if (text.includes(destructureMarker)) text = text.replace(destructureMarker, destructureWithBatch);
       else if (!text.includes(destructureWithBatch)) throw new Error('[O-RA atomic purchase] Admin StoreContext destructure marker not found');
 
