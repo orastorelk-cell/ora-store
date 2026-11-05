@@ -43,6 +43,12 @@ import { createInvoiceDownloadQueue } from '../lib/invoiceDownloadQueue';
 import { mergeInvoiceDownloadReceipt } from '../lib/invoiceDownloadStatus';
 import { saveFardarExportStatus } from '../lib/fardarExportStatus';
 import { storefrontSaveBody, rebaseStorefrontEdit, sameStorefrontValue } from '../lib/storefrontProductSave';
+
+// Browser caches are a convenience; a full localStorage quota must not crash Admin.
+const writeLocalCache = (key: string, value: string) => {
+  try { localStorage.setItem(key, value); }
+  catch (error) { console.warn(`Local cache ${key} could not be written.`, error); }
+};
 import { readStorefrontDraft, rememberStorefrontDraft, acknowledgeStorefrontDraft, archiveStorefrontDraft } from '../lib/storefrontDraft';
 import { publicStorefrontRequest } from '../lib/publicStorefrontRequest';
 import { validCodPaymentEntries, type CodPaymentEntry } from '../lib/codPaymentImport';
@@ -651,19 +657,19 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Sync to localStorage
   useEffect(() => {
-    localStorage.setItem('ora_lang', language);
+    writeLocalCache('ora_lang', language);
   }, [language]);
 
   useEffect(() => {
-    localStorage.setItem('ora_products', JSON.stringify(products));
+    writeLocalCache('ora_products', JSON.stringify(products));
   }, [products]);
 
   useEffect(() => {
-    localStorage.setItem('ora_categories', JSON.stringify(categories));
+    writeLocalCache('ora_categories', JSON.stringify(categories));
   }, [categories]);
 
   useEffect(() => {
-    localStorage.setItem('ora_cart', JSON.stringify(cart));
+    writeLocalCache('ora_cart', JSON.stringify(cart));
   }, [cart]);
 
   useEffect(() => {
@@ -680,15 +686,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [orders]);
 
   useEffect(() => {
-    localStorage.setItem('ora_customers', JSON.stringify(customers));
+    writeLocalCache('ora_customers', JSON.stringify(customers));
   }, [customers]);
 
   useEffect(() => {
-    localStorage.setItem('ora_stock_history', JSON.stringify(stockHistory));
+    writeLocalCache('ora_stock_history', JSON.stringify(stockHistory));
   }, [stockHistory]);
 
   useEffect(() => {
-    localStorage.setItem('ora_purchase_orders', JSON.stringify(purchaseOrders));
+    writeLocalCache('ora_purchase_orders', JSON.stringify(purchaseOrders));
   }, [purchaseOrders]);
 
   // Inventory history is no longer browser-specific. The server is authoritative,
@@ -733,7 +739,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   },[adminUser?.id,sharedStoreReady]);
 
   useEffect(() => {
-    localStorage.setItem('ora_settings', JSON.stringify(settings));
+    writeLocalCache('ora_settings', JSON.stringify(settings));
   }, [settings]);
 
   useEffect(() => {
@@ -748,25 +754,25 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [settings.favicon_logo]);
 
   useEffect(() => {
-    localStorage.setItem('ora_waybill_records', JSON.stringify(waybillRecords));
+    writeLocalCache('ora_waybill_records', JSON.stringify(waybillRecords));
   }, [waybillRecords]);
 
   useEffect(() => {
-    localStorage.setItem('ora_return_records', JSON.stringify(returnRecords));
+    writeLocalCache('ora_return_records', JSON.stringify(returnRecords));
   }, [returnRecords]);
 
   useEffect(() => {
-    localStorage.setItem('ora_blocked_customers', JSON.stringify(blockedCustomers));
+    writeLocalCache('ora_blocked_customers', JSON.stringify(blockedCustomers));
   }, [blockedCustomers]);
 
   useEffect(() => {
-    localStorage.setItem('ora_activity_logs', JSON.stringify(activityLogs.slice(0, 5000)));
+    writeLocalCache('ora_activity_logs', JSON.stringify(activityLogs.slice(0, 5000)));
   }, [activityLogs]);
 
   useEffect(() => {
     if (adminUser) {
       const { password: _legacyPassword, ...safeAdminUser } = adminUser as any;
-      localStorage.setItem('ora_admin_user', JSON.stringify(safeAdminUser));
+      writeLocalCache('ora_admin_user', JSON.stringify(safeAdminUser));
     } else {
       localStorage.removeItem('ora_admin_user');
     }
@@ -774,7 +780,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   useEffect(() => {
     const safeUsers = staffUsers.map((user:any) => { const { password: _legacyPassword, ...safeUser } = user || {}; return safeUser; });
-    localStorage.setItem('ora_staff_accounts', JSON.stringify(safeUsers));
+    writeLocalCache('ora_staff_accounts', JSON.stringify(safeUsers));
   }, [staffUsers]);
 
   // Rolling Admin/Staff session refresh. Customer storefront/order APIs do not use
@@ -1222,7 +1228,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setCustomers(serverCustomers);
     try {
       localStorage.setItem('ora_orders', JSON.stringify(sortedServerOrders));
-      localStorage.setItem('ora_customers', JSON.stringify(serverCustomers));
+      writeLocalCache('ora_customers', JSON.stringify(serverCustomers));
     } catch {}
 
     try {
