@@ -63,15 +63,15 @@ export const purchaseHistoryCorrectionPatch = () => ({
         text = text.slice(0, at) + correctionFunction + text.slice(at);
       }
 
-      const providerOld = '        addPurchaseOrder,\n        addPurchaseOrdersBatch,\n        settings,';
-      const providerNew = '        addPurchaseOrder,\n        addPurchaseOrdersBatch,\n        applyPurchaseHistoryCorrections,\n        settings,';
+      const providerOld = '        addPurchaseOrder,\n        addPurchaseOrdersBatch,\n        retryPendingInventoryPurchase,\n        settings,';
+      const providerNew = '        addPurchaseOrder,\n        addPurchaseOrdersBatch,\n        retryPendingInventoryPurchase,\n        applyPurchaseHistoryCorrections,\n        settings,';
       text = replaceRequired(text, providerOld, providerNew, 'StoreContext provider');
       return { code: text, map: null };
     }
 
     if (id.endsWith('/src/components/admin/AdminDashboard.tsx')) {
-      const destructureOld = '    addPurchaseOrder,\n    addPurchaseOrdersBatch,\n    settings,';
-      const destructureNew = '    addPurchaseOrder,\n    addPurchaseOrdersBatch,\n    applyPurchaseHistoryCorrections,\n    settings,';
+      const destructureOld = '    addPurchaseOrder,\n    addPurchaseOrdersBatch,\n    retryPendingInventoryPurchase,\n    settings,';
+      const destructureNew = '    addPurchaseOrder,\n    addPurchaseOrdersBatch,\n    retryPendingInventoryPurchase,\n    applyPurchaseHistoryCorrections,\n    settings,';
       text = replaceRequired(text, destructureOld, destructureNew, 'Admin StoreContext destructure');
 
       if (!text.includes('purchaseCorrectionDrafts, setPurchaseCorrectionDrafts')) {
