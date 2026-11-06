@@ -1685,7 +1685,7 @@ Suitable For:
         String(order.fardar_csv_exported_waybill) === String(order.waybill_number || '')
       );
     const ready = includePreviouslyExported
-      ? eligible
+      ? (allowPackedBatchOrders ? eligible.filter(o => o.dispatch_status !== 'Handed Over') : eligible)
       : eligible.filter(o => o.dispatch_status !== 'Handed Over' && !alreadyExportedForCurrentWaybill(o));
 
     if (!ready.length) {
