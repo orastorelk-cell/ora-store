@@ -124,12 +124,12 @@ export const packingDownloadUxPatch = () => ({
       if (!text.includes(actionsMarker)) throw new Error('[O-RA packing download UX] packing action marker not found');
       const actionsReplacement = `                    <div className="flex flex-wrap xl:justify-end gap-2">
                       <button data-ora-action="packing_fardar_csv" type="button" disabled={packingFardarNewReady.length===0 || Boolean(packingDownloadBusy)}
-                        onClick={()=>void downloadFardarUploadCsv(batchOrders,batchId,false,true)}
+                        onClick={()=>void downloadFardarUploadCsv(batchOrders.map(o=>({...o,call_center_status:'Confirmed'})),batchId)}
                         className="rounded-xl border border-violet-500/40 bg-violet-500/10 px-3.5 py-2.5 text-xs font-black text-violet-300 disabled:opacity-40">
                         <Download className="mr-1 inline h-4 w-4"/> Fardar Upload CSV ({packingFardarNewReady.length} New)
                       </button>
                       <button data-ora-action="packing_fardar_full" type="button" disabled={packingFardarFullReady.length===0 || Boolean(packingDownloadBusy)}
-                        onClick={()=>void downloadFardarUploadCsv(batchOrders,batchId,true,true)}
+                        onClick={()=>void downloadFardarUploadCsv(batchOrders.filter(o=>o.dispatch_status!=='Handed Over').map(o=>({...o,call_center_status:'Confirmed'})),batchId,true)}
                         className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3.5 py-2.5 text-xs font-black text-amber-300 disabled:opacity-40">
                         <Download className="mr-1 inline h-4 w-4"/> Re-download Full Fardar CSV ({packingFardarFullReady.length})
                       </button>
