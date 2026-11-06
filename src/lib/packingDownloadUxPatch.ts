@@ -99,13 +99,20 @@ export const packingDownloadUxPatch = () => ({
     if (!text.includes('const packingFardarNewReady = batchOrders.filter')) {
       const fardarReadyCode = [
         "              const packingFardarNewReady = batchOrders.filter(o =>",
-        "                o.call_center_status === 'Confirmed' &&",
+        "                String(o.invoice_pack_batch_id || '') === String(batchId) &&",
         "                o.stock_allocated &&",
         "                Boolean(o.waybill_number) &&",
         "                o.order_status !== 'Cancelled' &&",
         "                o.dispatch_status !== 'Handed Over' &&",
         "                !(o.fardar_csv_exported_at && o.fardar_csv_exported_waybill &&",
         "                  String(o.fardar_csv_exported_waybill) === String(o.waybill_number || ''))",
+        "              );",
+        "              const packingFardarFullReady = batchOrders.filter(o =>",
+        "                String(o.invoice_pack_batch_id || '') === String(batchId) &&",
+        "                o.stock_allocated &&",
+        "                Boolean(o.waybill_number) &&",
+        "                o.order_status !== 'Cancelled' &&",
+        "                o.dispatch_status !== 'Handed Over'",
         "              );"
       ].join('\n') + '\n\n';
       const packingOrdersScopeMarker = '              const resolveDownloadSet = () => {';
@@ -117,9 +124,14 @@ export const packingDownloadUxPatch = () => ({
       if (!text.includes(actionsMarker)) throw new Error('[O-RA packing download UX] packing action marker not found');
       const actionsReplacement = `                    <div className="flex flex-wrap xl:justify-end gap-2">
                       <button data-ora-action="packing_fardar_csv" type="button" disabled={packingFardarNewReady.length===0 || Boolean(packingDownloadBusy)}
-                        onClick={()=>void downloadFardarUploadCsv(batchOrders,batchId)}
+                        onClick={()=>void downloadFardarUploadCsv(batchOrders.map(o=>({...o,call_center_status:'Confirmed'})),batchId)}
                         className="rounded-xl border border-violet-500/40 bg-violet-500/10 px-3.5 py-2.5 text-xs font-black text-violet-300 disabled:opacity-40">
                         <Download className="mr-1 inline h-4 w-4"/> Fardar Upload CSV ({packingFardarNewReady.length} New)
+                      </button>
+                      <button data-ora-action="packing_fardar_full" type="button" disabled={packingFardarFullReady.length===0 || Boolean(packingDownloadBusy)}
+                        onClick={()=>void downloadFardarUploadCsv(batchOrders.filter(o=>o.dispatch_status!=='Handed Over').map(o=>({...o,call_center_status:'Confirmed'})),batchId,true)}
+                        className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3.5 py-2.5 text-xs font-black text-amber-300 disabled:opacity-40">
+                        <Download className="mr-1 inline h-4 w-4"/> Re-download Full Fardar CSV ({packingFardarFullReady.length})
                       </button>
                       <button data-ora-action="packing_download" type="button" disabled={Boolean(packingDownloadBusy)} onClick={downloadAllA6}
                         className={\`rounded-xl px-3.5 py-2.5 text-xs font-black flex items-center gap-2 ${'${downloaded?\'bg-neutral-800 text-neutral-300\':\'bg-emerald-500 text-black\'}'}\`}>
