@@ -108,7 +108,8 @@ export const packingDownloadUxPatch = () => ({
         "                  String(o.fardar_csv_exported_waybill) === String(o.waybill_number || ''))",
         "              );"
       ].join('\n') + '\n\n';
-      text = text.replace('    const actionsMarker = ', fardarReadyCode + '    const actionsMarker = ');
+      const packingOrdersScopeMarker = '              const resolveDownloadSet = () => {';
+      text = text.replace(packingOrdersScopeMarker, fardarReadyCode + packingOrdersScopeMarker);
     }
     const actionsMarker = `                    <div className="flex flex-wrap xl:justify-end gap-2">
                       {singlePageOrders.length>0 && <>`;
