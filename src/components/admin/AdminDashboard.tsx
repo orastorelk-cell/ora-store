@@ -1669,10 +1669,11 @@ Suitable For:
   const downloadFardarUploadCsv = async (
     selectedOrders: Order[],
     fileLabel?: string,
-    includePreviouslyExported = false
+    includePreviouslyExported = false,
+    allowPackedBatchOrders = false
   ) => {
     const eligible = selectedOrders.filter(o =>
-      o.call_center_status === 'Confirmed' &&
+      (o.call_center_status === 'Confirmed' || (allowPackedBatchOrders && String(o.invoice_pack_batch_id || '') === String(fileLabel || ''))) &&
       o.stock_allocated &&
       Boolean(o.waybill_number) &&
       o.order_status !== 'Cancelled'
