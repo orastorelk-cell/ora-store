@@ -1669,11 +1669,10 @@ Suitable For:
   const downloadFardarUploadCsv = async (
     selectedOrders: Order[],
     fileLabel?: string,
-    includePreviouslyExported = false,
-    allowPackedBatchOrders = false
+    includePreviouslyExported = false
   ) => {
     const eligible = selectedOrders.filter(o =>
-      (o.call_center_status === 'Confirmed' || (allowPackedBatchOrders && String(o.invoice_pack_batch_id || '') === String(fileLabel || ''))) &&
+      o.call_center_status === 'Confirmed' &&
       o.stock_allocated &&
       Boolean(o.waybill_number) &&
       o.order_status !== 'Cancelled'
@@ -1685,7 +1684,7 @@ Suitable For:
         String(order.fardar_csv_exported_waybill) === String(order.waybill_number || '')
       );
     const ready = includePreviouslyExported
-      ? (allowPackedBatchOrders ? eligible.filter(o => o.dispatch_status !== 'Handed Over') : eligible)
+      ? eligible
       : eligible.filter(o => o.dispatch_status !== 'Handed Over' && !alreadyExportedForCurrentWaybill(o));
 
     if (!ready.length) {
